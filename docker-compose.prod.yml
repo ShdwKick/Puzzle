@@ -29,7 +29,7 @@ services:
       # Фронт и API на одном домене, CORS не нужен.
     ports:
       # Только на localhost — наружу отдаёт nginx на 443 (см. README.md).
-      - "127.0.0.1:8792:8792"
+      - "127.0.0.1:8792:8796"
     volumes:
       - puzzle-data:/app/data
 
