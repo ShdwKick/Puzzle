@@ -13,7 +13,7 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
     environment:
       HOST: 0.0.0.0
-      PORT: 8792
+      PORT: 8796
       # Общий auth-сервис. ОБЯЗАТЕЛЬНО и ровно тот адрес, что задан у auth в ISSUER:
       # он подписан внутрь токенов и сверяется побайтово. Без него сервис не стартует.
       AUTH_ISSUER: https://auth.burninghouse.ru
