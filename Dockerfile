@@ -31,7 +31,7 @@ RUN mkdir -p /app/data && chown -R node:node /app
 USER node
 
 ENV HOST=0.0.0.0
-ENV PORT=8792
+ENV PORT=8796
 ENV DATA_DIR=/app/data
 
 EXPOSE 8792
