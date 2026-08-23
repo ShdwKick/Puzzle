@@ -1,0 +1,28 @@
+name: bh-puzzle
+
+services:
+  puzzle:
+    build: .
+    image: shadowkick/puzzle:latest
+    container_name: puzzle
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8792
+      # Адрес общего auth-сервиса. Обязателен: без него сервер не стартует, потому что
+      # проверять токены нечем. Локально auth поднимается из своего репозитория
+      # (см. dev.mjs — тот же приём, что у остальных сервисов).
+      AUTH_ISSUER: http://localhost:8788
+      AUTH_CLIENT_ID: puzzle
+      # Общий секрет для Admin (/internal/*, см. admin-internal.js).
+      ADMIN_INTERNAL_KEY: dev-admin-key
+      # Если фронтенд когда-нибудь будет отдаваться с другого домена:
+      # ALLOWED_ORIGIN: https://puzzle.burninghouse.ru
+    ports:
+      # По умолчанию слушаем только localhost — наружу отдаёт nginx (см. README.md).
+      - "127.0.0.1:8792:8792"
+    volumes:
+      - puzzle-data:/app/data
+
+volumes:
+  puzzle-data:

@@ -1,0 +1,235 @@
+/* ===================== ВЕЩЕСТВО ===================== */
+/* Бор — зелёное пламя (BurningHouse/Design/services.md, таблица свободных).
+   Выбран из трёх свободных (бор/кальций/барий) как самый непохожий на уже
+   занятые: у остальных шести сервисов пламя тёплое (янтарь/золото/багрянец/
+   сирень/малиновый) или холодное сине-зелёное (бирюза у поездок) — уверенный
+   жёлто-зелёный не путается ни с одним из них даже на маленьком фавиконе.
+   Совпадение кстати: тот же зелёный уже нужен был интерфейсу как цвет
+   «совпадения» при сборке — деталь на своём месте вспыхивает этим оттенком
+   (см. .piece.placed ниже), так что вещество и обратная связь сборки говорят
+   одним цветом, а не двумя разными зелёными вперемешку. */
+:root{
+  --flame-base:#3f6212;
+  --flame-tip:#7ddf3c;
+  --night-1:#0a1408;
+  --night-2:#16260d;
+  --dawn-1:#f6fbea;
+  --dawn-2:#dcf2ad;
+}
+
+/* ===================== BASE ===================== */
+:root{color-scheme:light dark}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+/* Фон отдаём наружу под .bh-backdrop--page (assets/brand.css): сам он
+   position:fixed с z-index:-1 и красится поверх html, но ПОД любым
+   непрозрачным блоком страницы — если html/body остаются непрозрачными,
+   фон окажется не виден вовсе. */
+html{background:var(--dawn-1)}
+@media (prefers-color-scheme: dark){ html:not([data-theme="light"]){background:var(--night-1)} }
+html[data-theme="dark"]{background:var(--night-1)}
+body{background:transparent;font-family:var(--md-font);color:var(--md-sys-color-on-surface);overflow-x:hidden}
+
+button{font:inherit}
+img{display:block;max-width:100%}
+a{color:inherit}
+
+/* ===================== APPBAR ===================== */
+.appbar{position:sticky;top:0;z-index:10;backdrop-filter:blur(10px);
+  background:color-mix(in srgb, var(--md-sys-color-surface) 78%, transparent);
+  border-bottom:1px solid var(--md-sys-color-outline-variant)}
+.appbar-inner{max-width:76rem;margin:0 auto;padding:.7rem 1.1rem;display:flex;align-items:center;gap:1rem}
+.spacer{flex:1}
+.auth-area{display:flex;align-items:center;gap:.6rem}
+.auth-user{display:flex;align-items:center;gap:.5rem;font-size:.92rem}
+.auth-user-name{font-weight:600}
+
+/* ===================== BUTTONS ===================== */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:.4em;
+  border:0;border-radius:var(--md-sys-shape-corner-full);
+  padding:.6em 1.3em;font-weight:600;font-size:.92rem;cursor:pointer;
+  transition:transform .15s var(--ease-std),box-shadow .15s var(--ease-std),background-color .15s var(--ease-std);
+  white-space:nowrap;
+}
+.btn:active{transform:scale(.97)}
+.btn.filled{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);box-shadow:var(--e1)}
+.btn.filled:hover{box-shadow:var(--e2)}
+.btn.tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+.btn.outlined{background:transparent;color:var(--md-sys-color-primary);border:1px solid var(--md-sys-color-outline)}
+.btn.text{background:transparent;color:var(--md-sys-color-primary)}
+.btn.sm{padding:.42em 1em;font-size:.84rem}
+.btn.icon{padding:.5em;border-radius:50%}
+.btn:disabled{opacity:.5;cursor:default;pointer-events:none}
+
+/* ===================== CONTENT ===================== */
+.content{max-width:76rem;margin:0 auto;padding:1.4rem 1.1rem 4rem}
+
+/* ===================== ЗАГОЛОВОК БИБЛИОТЕКИ ===================== */
+.library-head{margin-bottom:1.4rem}
+.library-head h1{font-size:1.6rem;font-weight:650;letter-spacing:-.01em}
+.library-head p{color:var(--md-sys-color-on-surface-variant);margin-top:.3rem;max-width:40rem}
+
+/* ===================== КАРТОЧКИ ПАЗЛОВ ===================== */
+.puzzle-grid{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr))}
+.puzzle-card{
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
+  overflow:hidden;box-shadow:var(--e1);display:flex;flex-direction:column;
+}
+.puzzle-card-thumb{position:relative;aspect-ratio:4/3;background:var(--md-sys-color-surface-container-high);overflow:hidden}
+.puzzle-card-thumb img{width:100%;height:100%;object-fit:cover}
+.puzzle-card-badge{
+  position:absolute;top:.6rem;right:.6rem;background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 82%, transparent);
+  color:var(--md-sys-color-inverse-on-surface);font-size:.76rem;font-weight:700;padding:.28em .7em;border-radius:var(--md-sys-shape-corner-full);
+}
+.puzzle-card-badge.done{background:var(--md-ok);color:#fff}
+.puzzle-card-body{padding:.9rem 1rem 1.1rem;display:flex;flex-direction:column;gap:.5rem;flex:1}
+.puzzle-card-title{font-size:1.05rem;font-weight:650}
+.puzzle-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);flex:1}
+.puzzle-card-play{align-self:flex-start;margin-top:.2rem}
+
+/* ===================== ГОСТЕВАЯ ПОДСКАЗКА ===================== */
+.guest-note{
+  margin-bottom:1.2rem;padding:.8rem 1rem;border-radius:var(--md-sys-shape-corner-m);
+  background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container);
+  font-size:.9rem;display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;
+}
+
+/* ===================== СТОЛ ===================== */
+.table-screen{display:flex;flex-direction:column;gap:.8rem;height:calc(100dvh - 4.6rem);margin:-1.4rem -1.1rem -4rem}
+.table-toolbar{display:flex;align-items:center;gap:.8rem;padding:.7rem 1.1rem;flex-wrap:wrap}
+.table-toolbar .spacer{flex:1}
+.table-progress{font-size:.88rem;color:var(--md-sys-color-on-surface-variant)}
+.table-progress b{color:var(--md-sys-color-on-surface)}
+
+.table-stage{
+  position:relative;flex:1;overflow:hidden;touch-action:none;cursor:grab;
+  background:
+    radial-gradient(circle at 1px 1px, var(--md-sys-color-outline-variant) 1px, transparent 0) 0 0/22px 22px,
+    var(--md-sys-color-surface-container-lowest);
+  border-top:1px solid var(--md-sys-color-outline-variant);
+}
+.table-stage.panning{cursor:grabbing}
+.table-world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
+
+.board-outline{
+  position:absolute;left:0;top:0;border:2px dashed var(--md-sys-color-outline-variant);
+  border-radius:6px;pointer-events:none;
+}
+
+.piece{
+  position:absolute;left:0;top:0;touch-action:none;cursor:grab;
+  filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));
+}
+.piece svg{display:block;width:100%;height:100%}
+.piece.dragging{cursor:grabbing;filter:drop-shadow(0 6px 14px rgba(0,0,0,.35));z-index:1000}
+/* Собранная деталь больше не перетаскивается — снимаем pointer-events совсем,
+   а не только игнорируем pointerdown в JS: иначе её невидимый bounding box
+   (квадратный, шире самой фигурной детали — см. «Хит-тест» в плане) закрывал
+   бы жест панорамы фона под уже собранной частью пазла. */
+.piece.placed{cursor:default;filter:drop-shadow(0 1px 1px rgba(0,0,0,.18));pointer-events:none}
+/* Деталь встала на место — вспышка в цвет пламени сервиса, а не абстрактный
+   "успех"-зелёный: связывает подтверждение сборки с веществом на фоне. */
+@keyframes piece-snap{
+  0%  { filter:drop-shadow(0 1px 1px rgba(0,0,0,.18)) drop-shadow(0 0 0 transparent) }
+  35% { filter:drop-shadow(0 1px 1px rgba(0,0,0,.18)) drop-shadow(0 0 10px var(--flame-tip)) }
+  100%{ filter:drop-shadow(0 1px 1px rgba(0,0,0,.18)) drop-shadow(0 0 0 transparent) }
+}
+.piece.just-snapped{animation:piece-snap .55s var(--ease-emph-dec)}
+
+.zoom-controls{
+  position:absolute;right:.9rem;bottom:.9rem;display:flex;flex-direction:column;gap:.4rem;
+  background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
+  border-radius:var(--md-sys-shape-corner-l);padding:.4rem;box-shadow:var(--e1);
+}
+.zoom-controls .btn{width:2.4rem;height:2.4rem;padding:0}
+
+.win-overlay{
+  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 55%, transparent);
+  animation:puzzle-win-fade .25s var(--ease-emph-dec) both;
+}
+@keyframes puzzle-win-fade{from{opacity:0}to{opacity:1}}
+.win-card{
+  background:var(--md-sys-color-surface-container-lowest);border-radius:var(--md-sys-shape-corner-xl);
+  padding:2rem 2.2rem;text-align:center;box-shadow:var(--e2);max-width:22rem;
+}
+.win-card h2{font-size:1.35rem;margin-bottom:.5rem}
+.win-card p{color:var(--md-sys-color-on-surface-variant);margin-bottom:1.2rem}
+
+/* ===================== КОМНАТЫ: СПИСОК ===================== */
+.text-input{
+  border:1px solid var(--md-sys-color-outline);border-radius:var(--md-sys-shape-corner-m);
+  padding:.6em .9em;font:inherit;background:var(--md-sys-color-surface-container-lowest);
+  color:var(--md-sys-color-on-surface);
+}
+.create-room-form{display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:1.4rem}
+.create-room-form .text-input{flex:1;min-width:14rem}
+
+.room-list{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr))}
+.room-card{
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
+  padding:1rem 1.1rem;box-shadow:var(--e1);cursor:pointer;display:flex;flex-direction:column;gap:.35rem;
+  transition:box-shadow .15s var(--ease-std),transform .15s var(--ease-std);
+}
+.room-card:hover{box-shadow:var(--e2);transform:translateY(-1px)}
+.room-card-title{font-size:1.05rem;font-weight:650}
+.room-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant)}
+
+/* ===================== КОМНАТЫ: ЭКРАН КОМНАТЫ ===================== */
+.room-head{display:flex;flex-direction:column;gap:.7rem;margin-bottom:1.2rem}
+.room-head-title{font-size:1.4rem;font-weight:650}
+.invite-box{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;font-size:.9rem}
+.invite-box .text-input{flex:1;min-width:14rem;font-size:.85rem}
+
+.room-members{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.2rem}
+.member-chip{
+  background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
+  font-size:.82rem;font-weight:600;padding:.32em .8em;border-radius:var(--md-sys-shape-corner-full);
+}
+.member-chip.owner{background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container)}
+
+.room-section-title{font-size:1.05rem;font-weight:650;margin:1.2rem 0 .7rem}
+.room-active-card{
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
+  padding:1rem 1.1rem;box-shadow:var(--e1);display:flex;align-items:center;gap:1rem;flex-wrap:wrap;
+}
+.room-active-card p{flex:1;min-width:12rem;color:var(--md-sys-color-on-surface-variant)}
+
+.room-history{display:flex;flex-direction:column;gap:.5rem}
+.history-row{
+  display:flex;justify-content:space-between;gap:1rem;padding:.6rem .9rem;flex-wrap:wrap;
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-m);
+}
+.history-puzzle{font-weight:650}
+.history-meta{color:var(--md-sys-color-on-surface-variant);font-size:.88rem}
+
+/* ===================== КОМНАТЫ: ВСТУПЛЕНИЕ ПО ССЫЛКЕ ===================== */
+.room-join-screen{
+  max-width:26rem;margin:3rem auto;text-align:center;display:flex;flex-direction:column;gap:1rem;
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-xl);
+  padding:2.2rem 2rem;box-shadow:var(--e1);
+}
+.room-join-screen h2{font-size:1.25rem}
+.room-join-screen p{color:var(--md-sys-color-on-surface-variant)}
+.room-join-screen .btn{align-self:center}
+
+/* ===================== КОМНАТЫ: ПРИСУТСТВИЕ ЗА СТОЛОМ ===================== */
+.presence-bar{display:flex;gap:.4rem;flex-wrap:wrap}
+.presence-chip{
+  background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container);
+  font-size:.78rem;font-weight:600;padding:.26em .7em;border-radius:var(--md-sys-shape-corner-full);
+}
+/* Разрыв соединения — не ошибка, а временное состояние: сокет сам
+   переподключается (см. connectRoomSocket), подсказка не должна выглядеть
+   тревожно ярче, чем оно того стоит. */
+.table-progress.offline{color:var(--md-sys-color-error)}
+.table-progress.offline::before{content:"переподключение… ";font-weight:600}
+
+/* ===================== СОСТОЯНИЯ ЗАГРУЗКИ/ОШИБКИ ===================== */
+.state-note{padding:2.4rem 1rem;text-align:center;color:var(--md-sys-color-on-surface-variant)}
+
+@media (max-width: 30rem){
+  .table-toolbar{padding:.6rem .8rem}
+  .table-progress{display:none}
+}

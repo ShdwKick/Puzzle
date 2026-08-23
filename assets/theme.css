@@ -1,0 +1,131 @@
+/* «Что собираем?» — M3-подобные токены интерфейса.
+   Тот же фиолетовый seed, что и в остальных сервисах BurningHouse: интерфейс
+   у семьи общий, сервисы различаются цветом ПЛАМЕНИ, а не кнопок
+   (BurningHouse/Design/palette.md). Значения — дословно как в Trip/Movies.
+
+   --flame-* переопределены в assets/styles.css (вещество — бор, зелёное).
+   Фавикон рядом с остальными сервисами — по-прежнему отдельный шаг чек-листа
+   Design/services.md, здесь не сделан. */
+:root{
+  --md-sys-color-primary:#5b4fe0;
+  --md-sys-color-on-primary:#ffffff;
+  --md-sys-color-primary-container:#e4dfff;
+  --md-sys-color-on-primary-container:#180265;
+  --md-sys-color-secondary:#5d5b77;
+  --md-sys-color-on-secondary:#ffffff;
+  --md-sys-color-secondary-container:#e3e0f9;
+  --md-sys-color-on-secondary-container:#1a1836;
+  --md-sys-color-tertiary:#7c5295;
+  --md-sys-color-on-tertiary:#ffffff;
+  --md-sys-color-tertiary-container:#f6d9ff;
+  --md-sys-color-on-tertiary-container:#300945;
+  --md-sys-color-error:#ba1a1a;
+  --md-sys-color-on-error:#ffffff;
+  --md-sys-color-error-container:#ffdad6;
+  --md-sys-color-on-error-container:#410002;
+  --md-sys-color-surface:#fbf8ff;
+  --md-sys-color-on-surface:#1c1b20;
+  --md-sys-color-on-surface-variant:#46464f;
+  --md-sys-color-surface-container-lowest:#ffffff;
+  --md-sys-color-surface-container-low:#f5f2fa;
+  --md-sys-color-surface-container:#efecf4;
+  --md-sys-color-surface-container-high:#e9e6ee;
+  --md-sys-color-surface-container-highest:#e3e1e9;
+  --md-sys-color-outline:#777680;
+  --md-sys-color-outline-variant:#c7c5d0;
+  --md-sys-color-inverse-surface:#313036;
+  --md-sys-color-inverse-on-surface:#f4eff4;
+  --md-sys-color-inverse-primary:#c6bfff;
+  --md-ok:#2e6b3f;
+  --md-ok-container:#c6f0cf;
+  --md-warn:#8a5a00;
+  --md-warn-container:#ffddb0;
+
+  --md-sys-shape-corner-xs:4px;
+  --md-sys-shape-corner-s:8px;
+  --md-sys-shape-corner-m:12px;
+  --md-sys-shape-corner-l:16px;
+  --md-sys-shape-corner-xl:28px;
+  --md-sys-shape-corner-full:9999px;
+
+  --md-font:"Roboto Flex","Segoe UI",system-ui,Roboto,sans-serif;
+
+  --ease-emph:cubic-bezier(0.2,0,0,1);
+  --ease-emph-dec:cubic-bezier(0.05,0.7,0.1,1);
+  --ease-std:cubic-bezier(0.2,0,0,1);
+
+  --e1:0 1px 2px rgba(0,0,0,.05),0 2px 6px rgba(0,0,0,.06);
+  --e2:0 2px 6px rgba(0,0,0,.07),0 8px 20px rgba(0,0,0,.08);
+}
+[data-theme="dark"]{
+  --md-sys-color-primary:#c6bfff;
+  --md-sys-color-on-primary:#2e1591;
+  --md-sys-color-primary-container:#4335a8;
+  --md-sys-color-on-primary-container:#e4dfff;
+  --md-sys-color-secondary:#c7c4e0;
+  --md-sys-color-on-secondary:#2f2d45;
+  --md-sys-color-secondary-container:#45435c;
+  --md-sys-color-on-secondary-container:#e3e0f9;
+  --md-sys-color-tertiary:#e9b4ff;
+  --md-sys-color-on-tertiary:#46215b;
+  --md-sys-color-tertiary-container:#613876;
+  --md-sys-color-on-tertiary-container:#f6d9ff;
+  --md-sys-color-error:#ffb4ab;
+  --md-sys-color-on-error:#690005;
+  --md-sys-color-error-container:#93000a;
+  --md-sys-color-on-error-container:#ffdad6;
+  --md-sys-color-surface:#141318;
+  --md-sys-color-on-surface:#e5e1e9;
+  --md-sys-color-on-surface-variant:#c8c5d0;
+  --md-sys-color-surface-container-lowest:#0f0e13;
+  --md-sys-color-surface-container-low:#1c1b20;
+  --md-sys-color-surface-container:#201f25;
+  --md-sys-color-surface-container-high:#2b2930;
+  --md-sys-color-surface-container-highest:#36343b;
+  --md-sys-color-outline:#918f9a;
+  --md-sys-color-outline-variant:#46464f;
+  --md-sys-color-inverse-surface:#e5e1e9;
+  --md-sys-color-inverse-on-surface:#313036;
+  --md-sys-color-inverse-primary:#5b4fe0;
+  --md-ok:#8fd6a2;
+  --md-ok-container:#1d4a2c;
+  --md-warn:#ffb951;
+  --md-warn-container:#5c3f00;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --md-sys-color-primary:#c6bfff;
+    --md-sys-color-on-primary:#2e1591;
+    --md-sys-color-primary-container:#4335a8;
+    --md-sys-color-on-primary-container:#e4dfff;
+    --md-sys-color-secondary:#c7c4e0;
+    --md-sys-color-on-secondary:#2f2d45;
+    --md-sys-color-secondary-container:#45435c;
+    --md-sys-color-on-secondary-container:#e3e0f9;
+    --md-sys-color-tertiary:#e9b4ff;
+    --md-sys-color-on-tertiary:#46215b;
+    --md-sys-color-tertiary-container:#613876;
+    --md-sys-color-on-tertiary-container:#f6d9ff;
+    --md-sys-color-error:#ffb4ab;
+    --md-sys-color-on-error:#690005;
+    --md-sys-color-error-container:#93000a;
+    --md-sys-color-on-error-container:#ffdad6;
+    --md-sys-color-surface:#141318;
+    --md-sys-color-on-surface:#e5e1e9;
+    --md-sys-color-on-surface-variant:#c8c5d0;
+    --md-sys-color-surface-container-lowest:#0f0e13;
+    --md-sys-color-surface-container-low:#1c1b20;
+    --md-sys-color-surface-container:#201f25;
+    --md-sys-color-surface-container-high:#2b2930;
+    --md-sys-color-surface-container-highest:#36343b;
+    --md-sys-color-outline:#918f9a;
+    --md-sys-color-outline-variant:#46464f;
+    --md-sys-color-inverse-surface:#e5e1e9;
+    --md-sys-color-inverse-on-surface:#313036;
+    --md-sys-color-inverse-primary:#5b4fe0;
+    --md-ok:#8fd6a2;
+    --md-ok-container:#1d4a2c;
+    --md-warn:#ffb951;
+    --md-warn-container:#5c3f00;
+  }
+}

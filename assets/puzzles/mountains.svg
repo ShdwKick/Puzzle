@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600">
+  <defs>
+    <linearGradient id="sky3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3f4f7a"/>
+      <stop offset="0.55" stop-color="#8f7aa8"/>
+      <stop offset="1" stop-color="#f2b38c"/>
+    </linearGradient>
+    <linearGradient id="peakFar" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#6c6f95"/>
+      <stop offset="1" stop-color="#565a82"/>
+    </linearGradient>
+    <linearGradient id="peakNear" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#454a72"/>
+      <stop offset="1" stop-color="#33375c"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="800" height="600" fill="url(#sky3)"/>
+  <circle cx="600" cy="150" r="46" fill="#ffe3b0" opacity="0.9"/>
+  <path d="M0,340 L120,180 L220,300 L320,150 L420,320 L520,200 L620,340 L720,220 L800,320 L800,600 L0,600 Z" fill="url(#peakFar)"/>
+  <path d="M0,420 L160,260 L280,400 L400,240 L540,410 L680,270 L800,400 L800,600 L0,600 Z" fill="url(#peakNear)"/>
+  <g fill="#ffffff" opacity="0.85">
+    <path d="M120,180 L150,220 L90,220 Z"/>
+    <path d="M320,150 L350,195 L290,195 Z"/>
+    <path d="M520,200 L548,240 L492,240 Z"/>
+    <path d="M720,220 L748,258 L692,258 Z"/>
+  </g>
+</svg>

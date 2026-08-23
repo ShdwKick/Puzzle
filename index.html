@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="color-scheme" content="light dark">
+<title>Что собираем? — BurningHouse</title>
+<meta name="description" content="«Что собираем?» — сервис BurningHouse для сборки пазлов онлайн: фигурные детали, зум и панорама стола, сохранение прогресса для вошедших пользователей.">
+<!-- SVG-фавикон подключён (бор, зелёный) — растровые фолбэки (favicon-16/32/180.png,
+     favicon.ico) для индексаторов, которые SVG не читают, ещё не сделаны: их
+     нужно экспортировать из этого же SVG, здесь такого инструмента нет.
+     Визуальная сверка «четыре фавикона рядом» из чек-листа Design/services.md
+     тоже не пройдена — нужны настоящие глаза в панели вкладок. -->
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/brand.css">
+<link rel="stylesheet" href="assets/theme.css">
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body>
+
+<!-- Горящий дом под всем приложением — тот же приём, что в остальных сервисах
+     BurningHouse (Shared/brand.css). Вещество — бор (зелёное), повадка искр —
+     interlock: своя, придумана для этого сервиса (см. Shared/brand.css,
+     раздел «пазлы» рядом с settle/motes/wind/pulse/flicker): искра блуждает,
+     как в поиске своего места, затем «щёлкает» на позицию вспышкой и дальше
+     идёт ровно вверх, без блужданий — деталь нашла пару. -->
+<div class="bh-backdrop bh-backdrop--page bh-backdrop--quiet" aria-hidden="true">
+  <div class="bh-layer"><div class="bh-glow"></div></div>
+  <div class="bh-layer"><div class="bh-haze"></div></div>
+  <div class="bh-layer bh-sparks bh-sparks--interlock" data-bh-sparks="6"></div>
+</div>
+
+<div class="appbar" id="appbar">
+  <div class="appbar-inner">
+    <div class="bh-lockup">
+      <a class="bh-lockup-home" href="https://burninghouse.ru" aria-label="BurningHouse — каталог сервисов">
+        <svg class="bh-mark" viewBox="0 0 24 24" role="img" aria-hidden="true">
+          <defs>
+            <linearGradient id="bh-flame" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0" stop-color="var(--flame-base, #c2410c)"/>
+              <stop offset="1" stop-color="var(--flame-tip, #ffa62b)"/>
+            </linearGradient>
+          </defs>
+          <path fill="url(#bh-flame)" fill-rule="evenodd"
+                d="M12 1.2C13.6 5 16.4 6.6 18.2 9.4C21.4 14.4 18.6 22.4 12 22.4C5.4 22.4 2.6 14.4 5.8 9.4C7.2 7.2 9.2 6 10.2 3.4C10.9 5.6 11.4 6.6 12 7.4C12.4 5.6 12.3 3.4 12 1.2ZM12 9.8 7.4 13.6V19.2H16.6V13.6Z"/>
+        </svg>
+        <span class="bh-name">BurningHouse</span>
+      </a>
+      <span class="bh-sep" aria-hidden="true"></span>
+      <a class="bh-lockup-service" href="#/" aria-label="Что собираем? — на главную сервиса">
+        <span class="bh-service">Что собираем?</span>
+      </a>
+    </div>
+    <div class="spacer"></div>
+    <a class="btn text sm" href="#/rooms">Комнаты</a>
+    <div id="authArea" class="auth-area"></div>
+  </div>
+</div>
+
+<main id="app" class="content"></main>
+
+<!-- Шаблон карточки пазла в библиотеке -->
+<template id="tplPuzzleCard">
+  <article class="puzzle-card">
+    <div class="puzzle-card-thumb">
+      <img alt="">
+      <span class="puzzle-card-badge" hidden></span>
+    </div>
+    <div class="puzzle-card-body">
+      <h3 class="puzzle-card-title"></h3>
+      <p class="puzzle-card-meta"></p>
+      <button class="btn filled puzzle-card-play" type="button">За стол</button>
+    </div>
+  </article>
+</template>
+
+<script src="assets/brand.js"></script>
+<script src="assets/auth-client.js"></script>
+<script src="assets/puzzle-shapes.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
