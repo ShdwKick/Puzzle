@@ -19,7 +19,7 @@
  * Запуск:            node server.js
  *
  * Переменные окружения:
- *   PORT            (по умолчанию 8792)      — порт
+ *   PORT            (по умолчанию 8796)      — порт
  *   HOST            (по умолчанию 127.0.0.1) — интерфейс (за nginx — localhost)
  *   DATA_DIR        (по умолчанию ./data)    — store.db
  *   AUTH_ISSUER     ОБЯЗАТЕЛЬНО — адрес auth-сервиса, напр. https://auth.burninghouse.ru.
@@ -42,7 +42,7 @@ const { DatabaseSync } = require("node:sqlite");
 const { checkAdminKey, createAdminLog } = require("./admin-internal");
 const ws = require("./ws-server");
 
-const PORT = parseInt(process.env.PORT || "8792", 10);
+const PORT = parseInt(process.env.PORT || "8796", 10);
 const HOST = process.env.HOST || "127.0.0.1";
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DB_PATH = path.join(DATA_DIR, "store.db");

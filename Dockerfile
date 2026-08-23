@@ -34,7 +34,7 @@ ENV HOST=0.0.0.0
 ENV PORT=8796
 ENV DATA_DIR=/app/data
 
-EXPOSE 8792
+EXPOSE 8796
 VOLUME ["/app/data"]
 
 CMD ["node", "server.js"]

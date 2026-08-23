@@ -8,7 +8,7 @@ services:
     restart: unless-stopped
     environment:
       HOST: 0.0.0.0
-      PORT: 8792
+      PORT: 8796
       # Адрес общего auth-сервиса. Обязателен: без него сервер не стартует, потому что
       # проверять токены нечем. Локально auth поднимается из своего репозитория
       # (см. dev.mjs — тот же приём, что у остальных сервисов).
@@ -20,7 +20,7 @@ services:
       # ALLOWED_ORIGIN: https://puzzle.burninghouse.ru
     ports:
       # По умолчанию слушаем только localhost — наружу отдаёт nginx (см. README.md).
-      - "127.0.0.1:8792:8792"
+      - "127.0.0.1:8796:8796"
     volumes:
       - puzzle-data:/app/data
 

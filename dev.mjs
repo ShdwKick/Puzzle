@@ -6,8 +6,8 @@
  *   node dev.mjs --reset    начать с чистых данных
  *
  * Что делает: заводит отдельные базы в .dev/, регистрирует в auth клиента
- * `puzzle` с адресом возврата http://localhost:8792/, создаёт тестовый
- * аккаунт и запускает оба сервиса. Дальше открываете http://localhost:8792
+ * `puzzle` с адресом возврата http://localhost:8796/, создаёт тестовый
+ * аккаунт и запускает оба сервиса. Дальше открываете http://localhost:8796
  * и входите (или играете гостем — вход необязателен, см. README.md).
  *
  * Почему нельзя просто открыть index.html или отдать папку Live Server'ом:
@@ -16,7 +16,7 @@
  *      прогресса живут в server.js — без него страница получит пустую
  *      библиотеку или 401 на первом же запросе к API.
  *   2. redirect_uri сверяется в auth ПОБАЙТОВО. Live Server отдаёт на порту
- *      5500, а зарегистрирован адрес :8792 — вход отобьётся ещё до формы.
+ *      5500, а зарегистрирован адрес :8796 — вход отобьётся ещё до формы.
  *   3. Кука сессии auth помечена Secure и по http:// браузером не сохраняется.
  *      Поэтому auth здесь запускается с DEV=1: без него логин проходит, а
  *      обратно возвращает будто ничего не было. Именно так это и выглядит,
@@ -38,7 +38,7 @@ const WORK = path.join(PUZZLE_DIR, ".dev");
 // Адрес возврата регистрируется под выбранный порт тут же, поэтому вход
 // продолжает работать: auth сверяет redirect_uri побайтово.
 const AUTH_PORT = parseInt(process.env.AUTH_PORT || "8788", 10);
-const PUZZLE_PORT = parseInt(process.env.PUZZLE_PORT || "8792", 10);
+const PUZZLE_PORT = parseInt(process.env.PUZZLE_PORT || "8796", 10);
 const AUTH = `http://localhost:${AUTH_PORT}`;
 const PUZZLE = `http://localhost:${PUZZLE_PORT}`;
 const LOGIN = process.env.DEV_LOGIN || "dev";
