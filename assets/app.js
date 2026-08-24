@@ -29,6 +29,31 @@ async function getPuzzles() {
   return puzzlesCache;
 }
 
+// По индексу, не по точному числу деталей: gridForPieceTarget округляет
+// rows/cols независимо, поэтому реальный total у пресета «108» иногда
+// получается 104 или 112 — сверка по значению иногда промахивалась бы
+// мимо ярлыка. variants всегда отсортирован по возрастанию и всегда
+// получен из PIECE_PRESETS в этом порядке, так что порядковый номер
+// надёжнее самого числа деталей.
+const DIFFICULTY_LABELS = ["Легко", "Средне", "Сложно", "Эксперт"];
+
+/** Сводит отдельные строки-варианты одной загрузки (общий imageUrl +
+ *  владелец) в одну карточку с массивом .variants, отсортированным от
+ *  лёгкого к сложному. У встроенных пазлов (ownerUserId нет) — группа
+ *  из одного варианта, там ничего не меняется внешне. */
+function groupPuzzles(list) {
+  const groups = new Map();
+  for (const p of list) {
+    const key = p.ownerUserId ? `${p.ownerUserId}:${p.imageUrl}` : p.id;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(p);
+  }
+  return [...groups.values()].map(variants => {
+    variants.sort((a, b) => a.gridRows * a.gridCols - b.gridRows * b.gridCols);
+    return { ...variants[0], variants };
+  });
+}
+
 /** Верхний потолок стороны выше, чем у фото Trip (2000 против 1600) —
  *  картинка режется на десятки кусков и разглядывается вблизи при зуме. */
 async function shrinkForPuzzle(file) {
@@ -43,9 +68,9 @@ async function shrinkForPuzzle(file) {
   return { blob, width: w, height: h };
 }
 
-async function uploadPuzzlePhoto(file, pieces, title) {
+async function uploadPuzzlePhoto(file, title) {
   const { blob, width, height } = await shrinkForPuzzle(file);
-  const qs = new URLSearchParams({ pieces: String(pieces), w: String(width), h: String(height), title: title || "Мой пазл" });
+  const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || "Мой пазл" });
   const res = await auth.fetch(`/api/puzzles?${qs}`, {
     method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
   });
@@ -75,20 +100,15 @@ async function deletePuzzle(id) {
   puzzlesCache = null;
 }
 
-/** Вставляет форму загрузки в контейнер, вызывает onDone(puzzle) при
- *  успехе. Используется и в библиотеке (renderLibrary), и в пикере
- *  комнаты (renderRoom) — с разным onDone: один переходит на #/table/:id,
- *  другой стартует сеанс. */
+/** Вставляет форму загрузки в контейнер, вызывает onDone({title, variants})
+ *  при успехе — один аплоад сразу заводит все 4 уровня сложности (см.
+ *  README «Свои фото»), выбора числа деталей тут больше нет. Используется
+ *  только в пикере комнаты (renderRoom) — своих фото в соло-библиотеке
+ *  больше нет (см. renderLibrary). */
 function mountUploadForm(container, onDone) {
   container.innerHTML = `
     <form class="upload-form" id="uploadForm">
       <input class="text-input" id="uploadTitle" type="text" maxlength="80" placeholder="Название — необязательно">
-      <select class="text-input" id="uploadPieces">
-        <option value="12">Легко · 12 деталей</option>
-        <option value="48" selected>Средне · 48 деталей</option>
-        <option value="108">Сложно · 108 деталей</option>
-        <option value="216">Эксперт · 216 деталей</option>
-      </select>
       <input type="file" id="uploadFile" accept="image/*" required>
       <button class="btn filled" type="submit">Собрать из фото</button>
       <p class="state-note" id="uploadError" hidden></p>
@@ -103,10 +123,11 @@ function mountUploadForm(container, onDone) {
     const submitBtn = $(form, "button[type=submit]");
     submitBtn.disabled = true;
     try {
-      const pieces = parseInt($(form, "#uploadPieces").value, 10);
       const title = $(form, "#uploadTitle").value.trim();
-      const puzzle = await uploadPuzzlePhoto(file, pieces, title);
-      onDone(puzzle);
+      const result = await uploadPuzzlePhoto(file, title);
+      onDone(result);
+      form.reset();
+      submitBtn.disabled = false;
     } catch (err) {
       errEl.textContent = err.message === "not an image" ? "Файл не похож на изображение (JPEG/PNG/WebP)."
         : err.message === "too large" ? "Файл слишком большой даже после сжатия."
@@ -166,7 +187,10 @@ function buildCard(p, opts = {}) {
   img.src = p.imageUrl;
   img.alt = p.title;
   $(node, ".puzzle-card-title").textContent = p.title;
-  $(node, ".puzzle-card-meta").textContent = `${p.gridCols}×${p.gridRows} · ${p.gridCols * p.gridRows} деталей`;
+  const variants = p.variants || [p];
+  $(node, ".puzzle-card-meta").textContent = variants.length > 1
+    ? `${variants.length} уровня сложности`
+    : `${p.gridCols}×${p.gridRows} · ${p.gridCols * p.gridRows} деталей`;
   const mine = p.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === p.ownerUserId;
   if (mine && opts.allowDelete !== false) {
     const del = document.createElement("button");
@@ -180,9 +204,23 @@ function buildCard(p, opts = {}) {
     });
     $(node, ".puzzle-card-body").appendChild(del);
   }
-  $(node, ".puzzle-card-play").addEventListener("click", () => {
-    location.hash = `#/table/${encodeURIComponent(p.id)}`;
-  });
+  const playBtn = $(node, ".puzzle-card-play");
+  const onPlay = opts.onPlay || (v => { location.hash = `#/table/${encodeURIComponent(v.id)}`; });
+  if (variants.length > 1) {
+    const picker = document.createElement("div");
+    picker.className = "difficulty-picker";
+    variants.forEach((v, i) => {
+      const b = document.createElement("button");
+      b.className = "btn outlined sm";
+      b.type = "button";
+      b.textContent = DIFFICULTY_LABELS[i] || `${v.gridRows * v.gridCols}`;
+      b.addEventListener("click", () => onPlay(v));
+      picker.appendChild(b);
+    });
+    playBtn.replaceWith(picker);
+  } else {
+    playBtn.addEventListener("click", () => onPlay(variants[0]));
+  }
   return node;
 }
 
@@ -211,7 +249,6 @@ async function renderLibrary(root, signal) {
       <p>Собирайте встроенные пазлы прямо в браузере — детали фигурные, стол зумится и таскается. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
     </div>
     <div id="guestNoteWrap"></div>
-    <div id="uploadWrap"></div>
     <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
 
   if (!auth.isAuthenticated()) {
@@ -225,10 +262,6 @@ async function renderLibrary(root, signal) {
     btn.addEventListener("click", () => auth.login());
     note.append(span, btn);
     $(root, "#guestNoteWrap").appendChild(note);
-  } else {
-    mountUploadForm($(root, "#uploadWrap"), puzzle => {
-      location.hash = `#/table/${encodeURIComponent(puzzle.id)}`;
-    });
   }
 
   let puzzles;
@@ -240,9 +273,11 @@ async function renderLibrary(root, signal) {
   }
   if (signal.aborted) return;
 
+  // Свои фото — только в комнатах (см. README «Свои фото»), соло-библиотека
+  // видит исключительно встроенные пазлы.
   const grid = $(root, "#puzzleGrid");
   grid.innerHTML = "";
-  const cards = puzzles.map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
+  const cards = puzzles.filter(p => !p.ownerUserId).map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
   for (const { p, node } of cards) applyBadge(node, p);
 }
 
@@ -362,10 +397,13 @@ async function renderTable(root, puzzleId, signal) {
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
         <button class="btn outlined sm" id="shuffleBtn" type="button">Перемешать</button>
+        <button class="btn outlined sm" id="previewBtn" type="button">Показать картинку</button>
+        <button class="btn outlined sm" id="boardThemeBtn" type="button">Светлый фон</button>
         <span class="table-progress" id="tableProgress"></span>
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
+        <img class="preview-thumb" id="previewThumb" alt="" hidden>
         <div class="zoom-controls">
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="Приблизить" aria-label="Приблизить">+</button>
           <button class="btn outlined icon" id="zoomResetBtn" type="button" title="Показать всё" aria-label="Показать всё">⤢</button>
@@ -380,6 +418,10 @@ async function renderTable(root, puzzleId, signal) {
   if (signal.aborted) return;
   const puzzle = puzzles.find(p => p.id === puzzleId);
   if (!puzzle) { stage.innerHTML = '<p class="state-note">Такого пазла нет.</p>'; return; }
+  if (puzzle.ownerUserId) {
+    stage.innerHTML = '<p class="state-note">Пазлы из своих фото собираются только в комнатах. <a class="btn text sm" href="#/rooms">К комнатам</a></p>';
+    return;
+  }
   $(root, "#tableTitle").textContent = puzzle.title;
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
@@ -543,6 +585,21 @@ async function renderTable(root, puzzleId, signal) {
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
 
+  const previewThumb = $(root, "#previewThumb");
+  previewThumb.src = puzzle.imageUrl;
+  previewThumb.alt = `Как должно получиться: ${puzzle.title}`;
+  $(root, "#previewBtn").addEventListener("click", () => {
+    previewThumb.hidden = !previewThumb.hidden;
+  }, { signal });
+
+  // Светлый фон стола — постоянно фиксированные светлые тона, не тема
+  // сайта: тёмная деталь на тёмной (в тёмной теме) доске почти не видна
+  // по краям, пока не собрана — переключатель никак не зависит от того,
+  // светлая сейчас тема интерфейса или нет.
+  $(root, "#boardThemeBtn").addEventListener("click", () => {
+    stage.classList.toggle("light-board");
+  }, { signal });
+
   $(root, "#shuffleBtn").addEventListener("click", () => {
     // Уже правильно собранные детали не трогаем — «встряхнуть оставшуюся
     // кучу», а не собрать заново с нуля. Риска потерять прогресс нет,
@@ -641,12 +698,20 @@ async function renderTable(root, puzzleId, signal) {
     overlay.className = "win-overlay";
     const card = document.createElement("div");
     card.className = "win-card";
+    const img = document.createElement("img");
+    img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzle.title;
     const h2 = document.createElement("h2"); h2.textContent = "Готово!";
     const p = document.createElement("p"); p.textContent = `Пазл «${puzzle.title}» собран.`;
-    const btn = document.createElement("button");
-    btn.className = "btn filled"; btn.type = "button"; btn.textContent = "Отлично";
-    btn.addEventListener("click", () => overlay.remove());
-    card.append(h2, p, btn);
+    const actions = document.createElement("div");
+    actions.className = "win-actions";
+    const stayBtn = document.createElement("button");
+    stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = "Остаться";
+    stayBtn.addEventListener("click", () => overlay.remove());
+    const homeBtn = document.createElement("button");
+    homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = "На главную";
+    homeBtn.addEventListener("click", () => { location.hash = "#/"; });
+    actions.append(stayBtn, homeBtn);
+    card.append(img, h2, p, actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
   }
@@ -877,30 +942,20 @@ async function renderRoom(root, roomId, signal) {
     if (signal.aborted) return;
     const grid = $(activeEl, "#roomPuzzleGrid");
     grid.innerHTML = "";
-    for (const p of puzzles) {
-      const node = buildCard(p, { allowDelete: false });
-      // Внутри комнаты клик по карточке стартует общий сеанс, а не сольный
-      // стол — заменяем обработчик, повесленный buildCard на "#/table/:id".
-      const playBtn = $(node, ".puzzle-card-play");
-      const clone = playBtn.cloneNode(true);
-      playBtn.replaceWith(clone);
-      clone.addEventListener("click", async () => {
-        clone.disabled = true;
-        try {
-          const sessionId = await startRoomSession(roomId, p.id);
-          location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
-        } catch {
-          clone.disabled = false;
-        }
-      }, { signal });
-      grid.appendChild(node);
+
+    async function playVariant(variant) {
+      try {
+        const sessionId = await startRoomSession(roomId, variant.id);
+        location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
+      } catch { /* ошибка сети — пользователь просто попробует кнопку ещё раз */ }
     }
 
-    mountUploadForm($(activeEl, "#roomUploadWrap"), async puzzle => {
-      try {
-        const sessionId = await startRoomSession(roomId, puzzle.id);
-        location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
-      } catch { /* форма сама покажет ошибку при следующей попытке */ }
+    for (const group of groupPuzzles(puzzles)) {
+      grid.appendChild(buildCard(group, { allowDelete: false, onPlay: playVariant }));
+    }
+
+    mountUploadForm($(activeEl, "#roomUploadWrap"), result => {
+      grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { allowDelete: false, onPlay: playVariant }));
     });
   }
 
@@ -979,11 +1034,14 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
         <button class="btn outlined sm" id="shuffleBtn" type="button">Перемешать</button>
+        <button class="btn outlined sm" id="previewBtn" type="button">Показать картинку</button>
+        <button class="btn outlined sm" id="boardThemeBtn" type="button">Светлый фон</button>
         <div class="presence-bar" id="presenceBar"></div>
         <span class="table-progress" id="tableProgress"></span>
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
+        <img class="preview-thumb" id="previewThumb" alt="" hidden>
         <div class="zoom-controls">
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="Приблизить" aria-label="Приблизить">+</button>
           <button class="btn outlined icon" id="zoomResetBtn" type="button" title="Показать всё" aria-label="Показать всё">⤢</button>
@@ -1155,6 +1213,21 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
 
+  const previewThumb = $(root, "#previewThumb");
+  previewThumb.src = puzzle.imageUrl;
+  previewThumb.alt = `Как должно получиться: ${puzzle.title}`;
+  $(root, "#previewBtn").addEventListener("click", () => {
+    previewThumb.hidden = !previewThumb.hidden;
+  }, { signal });
+
+  // Светлый фон стола — постоянно фиксированные светлые тона, не тема
+  // сайта: тёмная деталь на тёмной (в тёмной теме) доске почти не видна
+  // по краям, пока не собрана — переключатель никак не зависит от того,
+  // светлая сейчас тема интерфейса или нет.
+  $(root, "#boardThemeBtn").addEventListener("click", () => {
+    stage.classList.toggle("light-board");
+  }, { signal });
+
   $(root, "#shuffleBtn").addEventListener("click", () => {
     // pieces строится асинхронно в buildBoard() по первому sync — до этого
     // момента стол ещё не собран, перемешивать нечего.
@@ -1194,12 +1267,20 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     overlay.className = "win-overlay";
     const card = document.createElement("div");
     card.className = "win-card";
+    const img = document.createElement("img");
+    img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzle.title;
     const h2 = document.createElement("h2"); h2.textContent = "Готово!";
     const p = document.createElement("p"); p.textContent = `Пазл «${puzzle.title}» собран вместе с друзьями.`;
-    const btn = document.createElement("button");
-    btn.className = "btn filled"; btn.type = "button"; btn.textContent = "Отлично";
-    btn.addEventListener("click", () => overlay.remove());
-    card.append(h2, p, btn);
+    const actions = document.createElement("div");
+    actions.className = "win-actions";
+    const stayBtn = document.createElement("button");
+    stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = "Остаться";
+    stayBtn.addEventListener("click", () => overlay.remove());
+    const homeBtn = document.createElement("button");
+    homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = "В комнату";
+    homeBtn.addEventListener("click", () => { location.hash = `#/room/${encodeURIComponent(roomId)}`; });
+    actions.append(stayBtn, homeBtn);
+    card.append(img, h2, p, actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
   }

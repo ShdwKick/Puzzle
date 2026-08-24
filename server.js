@@ -177,6 +177,7 @@ const stmt = {
       VALUES (?,?,?,?,?,?,?,?,?)`),
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
+  puzzlesByImage: db.prepare("SELECT * FROM puzzles WHERE image_file = ? AND owner_user_id = ?"),
 };
 
 Object.assign(stmt, {
@@ -451,11 +452,12 @@ async function api(req, res, url, user) {
   }
 
   // Загрузка своего фото и генерация пазла из него — см. README «Свои фото».
+  // Один аплоад сразу заводит все 4 варианта сложности (PIECE_PRESETS) —
+  // свой id/сетка/seed на каждый, но общий файл картинки и владелец, чтобы
+  // клиент мог собрать их в одну карточку (groupPuzzles в app.js).
   if (seg[1] === "puzzles" && seg.length === 2 && m === "POST") {
     if (!user) return json(res, 401, { error: "unauthorized" });
 
-    const targetTotal = parseInt(url.searchParams.get("pieces"), 10);
-    if (!PIECE_PRESETS.includes(targetTotal)) return json(res, 400, { error: "bad pieces" });
     const width = parseInt(url.searchParams.get("w"), 10) || 0;
     const height = parseInt(url.searchParams.get("h"), 10) || 0;
     const title = str(url.searchParams.get("title"), 80) || "Мой пазл";
@@ -466,27 +468,33 @@ async function api(req, res, url, user) {
     const mime = sniffImage(buf);
     if (!mime) return json(res, 415, { error: "not an image" });
 
-    const { rows, cols } = gridForPieceTarget(targetTotal, width, height);
-    const id = crypto.randomUUID();
-    const file = id + PHOTO_MIME[mime];
+    const groupId = crypto.randomUUID();
+    const file = groupId + PHOTO_MIME[mime];
     fs.writeFileSync(path.join(PUZZLE_PHOTO_DIR, file), buf);
-    const seed = crypto.randomInt(1, 2 ** 31 - 1);
     const ts = now();
-    stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id);
-    return json(res, 200, puzzlePayload(stmt.puzzle.get(id)));
+    const variants = PIECE_PRESETS.map(total => {
+      const { rows, cols } = gridForPieceTarget(total, width, height);
+      const id = crypto.randomUUID();
+      const seed = crypto.randomInt(1, 2 ** 31 - 1);
+      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id);
+      return puzzlePayload(stmt.puzzle.get(id));
+    });
+    return json(res, 200, { title, variants });
   }
 
-  // Удаление своего пазла — заблокировано, если им уже играли в комнате
-  // (см. «Ключевые решения»: room_sessions.puzzle_id без ON DELETE CASCADE).
+  // Удаление своего пазла — целой группой (все варианты сложности одной
+  // загрузки, см. «Ключевые решения»), заблокировано, если хоть один вариант
+  // уже засветился в комнате (room_sessions.puzzle_id без ON DELETE CASCADE).
   if (seg[1] === "puzzles" && seg[2] && seg.length === 3 && m === "DELETE") {
     if (!user) return json(res, 401, { error: "unauthorized" });
     const puzzle = stmt.puzzle.get(seg[2]);
     if (!puzzle) return json(res, 404, { error: "not found" });
     if (puzzle.owner_user_id !== user.id) return json(res, 403, { error: "not yours" });
-    if (stmt.sessionsForPuzzle.get(puzzle.id)) {
+    const group = stmt.puzzlesByImage.all(puzzle.image_file, user.id);
+    if (group.some(p => stmt.sessionsForPuzzle.get(p.id))) {
       return json(res, 409, { error: "in use", message: "Этим пазлом уже играли в комнате — удалить нельзя." });
     }
-    stmt.deletePuzzle.run(puzzle.id);
+    for (const p of group) stmt.deletePuzzle.run(p.id);
     try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
     return json(res, 200, { ok: true });
   }

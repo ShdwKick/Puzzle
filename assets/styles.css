@@ -88,6 +88,7 @@ a{color:inherit}
 .puzzle-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);flex:1}
 .puzzle-card-play{align-self:flex-start;margin-top:.2rem}
 .puzzle-card-delete{align-self:flex-start;color:var(--md-sys-color-error)}
+.difficulty-picker{display:flex;flex-wrap:wrap;gap:.4rem;align-self:flex-start;margin-top:.2rem}
 
 /* ===================== ЗАГРУЗКА СВОЕГО ФОТО ===================== */
 .upload-form{
@@ -163,6 +164,19 @@ a{color:inherit}
 }
 .zoom-controls .btn{width:2.4rem;height:2.4rem;padding:0}
 
+/* Справочная картинка «как должно получиться» — pointer-events:none,
+   поэтому её не нужно исключать из панорамы стола отдельно (в отличие от
+   .zoom-controls, см. комментарий у pointerdown ниже): клики и драг просто
+   проходят сквозь неё к тому, что под ней. */
+.preview-thumb{
+  position:absolute;left:.9rem;top:.9rem;max-width:min(40vw,14rem);max-height:min(40vh,14rem);
+  object-fit:contain;border-radius:var(--md-sys-shape-corner-l);
+  background:var(--md-sys-color-surface-container-lowest);
+  border:2px solid var(--md-sys-color-surface);box-shadow:var(--e2);
+  pointer-events:none;
+}
+.preview-thumb[hidden]{display:none}
+
 .win-overlay{
   position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 55%, transparent);
@@ -173,8 +187,23 @@ a{color:inherit}
   background:var(--md-sys-color-surface-container-lowest);border-radius:var(--md-sys-shape-corner-xl);
   padding:2rem 2.2rem;text-align:center;box-shadow:var(--e2);max-width:22rem;
 }
-.win-card h2{font-size:1.35rem;margin-bottom:.5rem}
+.win-card h2{font-size:1.35rem;margin:.2rem 0 .5rem}
 .win-card p{color:var(--md-sys-color-on-surface-variant);margin-bottom:1.2rem}
+.win-image{
+  width:100%;max-height:14rem;object-fit:contain;border-radius:var(--md-sys-shape-corner-l);
+  background:var(--md-sys-color-surface-container-high);
+}
+.win-actions{display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap}
+
+/* Светлый фон стола — постоянные светлые тона, не зависят от темы
+   интерфейса: тёмная деталь на тёмном (в тёмной теме) фоне почти не
+   отличима от пустой доски, пока не собрана. Переключается кнопкой
+   на самом столе, не через общую тему сайта. */
+.table-stage.light-board{
+  background:
+    radial-gradient(circle at 1px 1px, #d9d6c9 1px, transparent 0) 0 0/22px 22px,
+    #f8f6ef;
+}
 
 /* ===================== КОМНАТЫ: СПИСОК ===================== */
 .text-input{
