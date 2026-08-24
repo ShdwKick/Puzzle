@@ -516,7 +516,11 @@ async function api(req, res, url, user) {
       const placed = pieces.filter(pc => pc.placed).length;
       const existing = stmt.progress.get(user.id, puzzle.id);
       const ts = now();
-      const completedAt = placed >= total ? (existing?.completed_at || ts) : null;
+      // Отметка "Готово" стойкая: однажды выставленный completed_at не
+      // затирается обратно в null, даже если сейчас собранных деталей меньше
+      // total (например, после «Перемешать») — пазл когда-то был собран, и
+      // бейдж в библиотеке не должен пропадать из-за этого.
+      const completedAt = existing?.completed_at || (placed >= total ? ts : null);
       stmt.upsertProgress.run(
         user.id, puzzle.id, JSON.stringify(pieces), placed, total,
         existing?.started_at || ts, ts, completedAt,
@@ -700,6 +704,23 @@ function attachRoomConnection(sessionId, user, wsConn) {
         type: "sync", pieces: state.pieces, piecesTotal: state.piecesTotal,
         piecesPlaced: pieces.filter(p => p.placed).length, members: presenceList(state),
       }, null);
+      return;
+    }
+
+    // Перемешать может только уже раскрытая раскладка (state.pieces есть) —
+    // и только активный сеанс: attachRoomConnection в принципе недостижим для
+    // уже completed_at-сеанса (loadSessionState/handleUpgrade отсекают раньше),
+    // так что отдельно проверять завершённость здесь нечего.
+    if (msg.type === "shuffle") {
+      if (!state.pieces) return;
+      const pieces = sanitizePieces(msg.pieces, state.rows, state.cols);
+      if (!pieces) return;
+      state.pieces = pieces;
+      schedulePersist(state);
+      broadcast(state, {
+        type: "sync", pieces: state.pieces, piecesTotal: state.piecesTotal,
+        piecesPlaced: pieces.filter(p => p.placed).length, members: presenceList(state),
+      }, null); // всем, включая отправителя — тот же приём, что у init
       return;
     }
 

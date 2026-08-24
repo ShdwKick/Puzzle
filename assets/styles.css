@@ -105,7 +105,17 @@ a{color:inherit}
 }
 
 /* ===================== СТОЛ ===================== */
-.table-screen{display:flex;flex-direction:column;gap:.8rem;height:calc(100dvh - 4.6rem);margin:-1.4rem -1.1rem -4rem}
+/* Стол растягивается на всю ширину окна, а не только до max-width родителя
+   (.content: 76rem) — стандартный выход из центрированного контейнера через
+   100vw + компенсирующие отрицательные margin. body{overflow-x:hidden} уже
+   стоит в базовых стилях выше, так что не страшно, если 100vw чуть шире
+   реальной области просмотра из-за полосы прокрутки — обрежет, а не породит
+   горизонтальный скролл страницы. */
+.table-screen{
+  display:flex;flex-direction:column;gap:.8rem;height:calc(100dvh - 4.6rem);
+  margin-top:-1.4rem;margin-bottom:-4rem;
+  width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);
+}
 .table-toolbar{display:flex;align-items:center;gap:.8rem;padding:.7rem 1.1rem;flex-wrap:wrap}
 .table-toolbar .spacer{flex:1}
 .table-progress{font-size:.88rem;color:var(--md-sys-color-on-surface-variant)}
@@ -212,6 +222,10 @@ a{color:inherit}
 }
 .history-puzzle{font-weight:650}
 .history-meta{color:var(--md-sys-color-on-surface-variant);font-size:.88rem}
+/* .history-row стало три элемента (заголовок+метаданные+кнопка «Собрать ещё
+   раз») — space-between расставил бы их неровно, группируем текстовые в один
+   блок. */
+.history-info{display:flex;flex-direction:column;gap:.15rem}
 
 /* ===================== КОМНАТЫ: ВСТУПЛЕНИЕ ПО ССЫЛКЕ ===================== */
 .room-join-screen{

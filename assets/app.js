@@ -55,6 +55,19 @@ async function uploadPuzzlePhoto(file, pieces, title) {
   return data;
 }
 
+/** POST /api/rooms/:id/sessions с готовой обработкой гонки (кто-то уже
+ *  начал сеанс раньше) — редиректит на уже существующий вместо ошибки.
+ *  Общий код для пикера, формы загрузки, экрана «уже собран» и истории. */
+async function startRoomSession(roomId, puzzleId) {
+  const res = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId }),
+  });
+  const data = await res.json();
+  if (res.status === 409 && data.session) return data.session.id;
+  if (!res.ok) throw new Error("start session failed");
+  return data.id;
+}
+
 async function deletePuzzle(id) {
   const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}`, { method: "DELETE" });
   const data = await res.json().catch(() => ({}));
@@ -348,6 +361,7 @@ async function renderTable(root, puzzleId, signal) {
         <a class="btn text sm" href="#/">← Библиотека</a>
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
+        <button class="btn outlined sm" id="shuffleBtn" type="button">Перемешать</button>
         <span class="table-progress" id="tableProgress"></span>
       </div>
       <div class="table-stage" id="stage">
@@ -528,6 +542,21 @@ async function renderTable(root, puzzleId, signal) {
   }, { signal });
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
+
+  $(root, "#shuffleBtn").addEventListener("click", () => {
+    // Уже правильно собранные детали не трогаем — «встряхнуть оставшуюся
+    // кучу», а не собрать заново с нуля. Риска потерять прогресс нет,
+    // подтверждение (confirm) не нужно.
+    const unplaced = [...pieces.values()].filter(p => !p.placed);
+    if (!unplaced.length) return; // всё уже собрано — мешать нечего
+    const fresh = scatterLayout(rows, cols, CELL, pad);
+    unplaced.forEach((piece, i) => {
+      const cell = fresh.cells[i];
+      piece.x = cell.x; piece.y = cell.y;
+      applyPieceTransform(piece);
+    });
+    scheduleSave();
+  }, { signal });
 
   /* ── перетаскивание детали ── */
   function bindPieceDrag(el, piece) {
@@ -715,7 +744,7 @@ async function renderRoomsList(root, signal) {
     const note = document.createElement("div");
     note.className = "guest-note";
     const span = document.createElement("span");
-    span.textContent = "Комнаты доступны только вошедшим — без входа некому подписать ваши действия за столом.";
+    span.textContent = "Комнаты доступны только вошедшим — нужен аккаунт, чтобы участники видели, кто есть кто за столом.";
     const btn = document.createElement("button");
     btn.className = "btn tonal sm"; btn.type = "button";
     btn.textContent = "Войти";
@@ -858,16 +887,8 @@ async function renderRoom(root, roomId, signal) {
       clone.addEventListener("click", async () => {
         clone.disabled = true;
         try {
-          const res = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`, {
-            method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId: p.id }),
-          });
-          const data = await res.json();
-          if (res.status === 409 && data.session) {
-            location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(data.session.id)}`;
-            return;
-          }
-          if (!res.ok) throw new Error("start session failed");
-          location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(data.id)}`;
+          const sessionId = await startRoomSession(roomId, p.id);
+          location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
         } catch {
           clone.disabled = false;
         }
@@ -876,11 +897,10 @@ async function renderRoom(root, roomId, signal) {
     }
 
     mountUploadForm($(activeEl, "#roomUploadWrap"), async puzzle => {
-      const res = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`, {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId: puzzle.id }),
-      });
-      const data = await res.json();
-      if (res.ok) location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(data.id)}`;
+      try {
+        const sessionId = await startRoomSession(roomId, puzzle.id);
+        location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
+      } catch { /* форма сама покажет ошибку при следующей попытке */ }
     });
   }
 
@@ -893,9 +913,23 @@ async function renderRoom(root, roomId, signal) {
     for (const s of past) {
       const row = document.createElement("div");
       row.className = "history-row";
-      row.innerHTML = `<span class="history-puzzle"></span><span class="history-meta"></span>`;
+      row.innerHTML = `
+        <div class="history-info">
+          <span class="history-puzzle"></span>
+          <span class="history-meta"></span>
+        </div>
+        <button class="btn outlined sm history-replay" type="button">Собрать ещё раз</button>`;
       $(row, ".history-puzzle").textContent = s.puzzle.title;
       $(row, ".history-meta").textContent = `${s.piecesTotal} деталей · собран ${fmtDate(s.completedAt)}`;
+      // Доступна и когда сейчас уже идёт другой активный сеанс —
+      // startRoomSession в этом случае просто перекинет на него (409-ветка).
+      $(row, ".history-replay").addEventListener("click", async e => {
+        e.target.disabled = true;
+        try {
+          const newId = await startRoomSession(roomId, s.puzzle.id);
+          location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`;
+        } catch { e.target.disabled = false; }
+      }, { signal });
       historyEl.appendChild(row);
     }
   }
@@ -944,6 +978,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">← Комната</a>
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
+        <button class="btn outlined sm" id="shuffleBtn" type="button">Перемешать</button>
         <div class="presence-bar" id="presenceBar"></div>
         <span class="table-progress" id="tableProgress"></span>
       </div>
@@ -975,7 +1010,23 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   // причины), поэтому клиент раньше уходил в вечный "переподключение…".
   // Проверяем то же поле, что уже пришло в session, до попытки подключения.
   if (session.completedAt) {
-    stage.innerHTML = `<p class="state-note">Этот пазл уже собран. <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a></p>`;
+    // Не тупик: «мы не вправе ограничивать этим пользователя» — вместо
+    // возврата в комнату без вариантов даём стартовать новый сеанс тем же
+    // пазлом (см. «Ключевые решения» в плане — старый сеанс остаётся в
+    // истории с тем же completedAt, его физически не трогаем).
+    stage.innerHTML = `
+      <div class="state-note">
+        <p>Этот пазл уже собран.</p>
+        <button class="btn filled sm" id="replayBtn" type="button">Собрать ещё раз</button>
+        <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a>
+      </div>`;
+    $(stage, "#replayBtn").addEventListener("click", async e => {
+      e.target.disabled = true;
+      try {
+        const newId = await startRoomSession(roomId, session.puzzle.id);
+        location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`;
+      } catch { e.target.disabled = false; }
+    }, { signal });
     return;
   }
   const puzzle = session.puzzle;
@@ -1103,6 +1154,25 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   }, { signal });
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
+
+  $(root, "#shuffleBtn").addEventListener("click", () => {
+    // pieces строится асинхронно в buildBoard() по первому sync — до этого
+    // момента стол ещё не собран, перемешивать нечего.
+    if (!pieces) return;
+    // Та же поправка, что и в соло: уже собранные детали едут в сообщении
+    // с их ТЕКУЩИМИ координатами и placed:true, не трогаются — переставляются
+    // только несобранные. Риска потерять прогресс нет, confirm не нужен.
+    const unplacedCount = [...pieces.values()].filter(p => !p.placed).length;
+    if (!unplacedCount) return;
+    const fresh = scatterLayout(rows, cols, CELL, pad);
+    let i = 0;
+    const arr = [...pieces.values()].map(piece => {
+      if (piece.placed) return { r: piece.r, c: piece.c, x: piece.x, y: piece.y, placed: true };
+      const cell = fresh.cells[i++];
+      return { r: piece.r, c: piece.c, x: cell.x, y: cell.y, placed: false };
+    });
+    socket.send({ type: "shuffle", pieces: arr });
+  }, { signal });
 
   function updateProgressLabel(placed, total) {
     progressEl.innerHTML = "";
