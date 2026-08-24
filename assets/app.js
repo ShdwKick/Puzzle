@@ -465,7 +465,11 @@ async function renderTable(root, puzzleId, signal) {
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
   stage.addEventListener("pointerdown", e => {
-    if (e.target.closest(".piece")) return;
+    // .zoom-controls тоже исключаем: иначе setPointerCapture ниже перехватывает
+    // указатель на #stage раньше, чем браузер успевает синтезировать click на
+    // кнопке — колесо мыши работало (свой отдельный wheel-хендлер), а кнопки
+    // +/−/⤢ не реагировали на клик вовсе.
+    if (e.target.closest(".piece") || e.target.closest(".zoom-controls")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 1) {
@@ -636,14 +640,29 @@ function wsUrlFor(path) {
  *  максимум 10с) и троттлингом на вызывающей стороне (см. throttle ниже).
  *  Токен запрашивается заново при каждой попытке подключения — уже
  *  просроченный к моменту переподключения токен getAccessToken() сам
- *  обновит. */
-function connectRoomSocket({ roomId, sessionId, signal, onMessage, onOpen, onClose }) {
+ *  обновит.
+ *
+ *  Браузерный WebSocket не доносит до JS причину отказа при провале
+ *  хэндшейка (403/404/410 от сервера видны как обычный close без кода) —
+ *  раньше это значило бесконечный тихий ретрай с вечным "переподключение…"
+ *  на экране, даже когда причина никогда не исчезнет сама (не тот сеанс,
+ *  доступ отозван и т.п.). MAX_ATTEMPTS — потолок, после которого перестаём
+ *  долбиться и явно сообщаем через onGiveUp, а не тонем в ретраях молча. */
+function connectRoomSocket({ roomId, sessionId, signal, onMessage, onOpen, onClose, onGiveUp }) {
   let socket = null, attempt = 0, stopped = false;
+  const MAX_ATTEMPTS = 8;
+
+  function scheduleRetry() {
+    if (stopped || signal.aborted) return;
+    attempt++;
+    if (attempt > MAX_ATTEMPTS) { onGiveUp && onGiveUp(); return; }
+    setTimeout(open, Math.min(10000, 500 * 2 ** attempt));
+  }
 
   async function open() {
     if (stopped || signal.aborted) return;
     const token = await auth.getAccessToken();
-    if (!token) return;
+    if (!token) { scheduleRetry(); return; }
     const url = wsUrlFor(`/ws/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}?token=${encodeURIComponent(token)}`);
     socket = new WebSocket(url);
     socket.addEventListener("open", () => { attempt = 0; onOpen && onOpen(); });
@@ -653,9 +672,7 @@ function connectRoomSocket({ roomId, sessionId, signal, onMessage, onOpen, onClo
     });
     socket.addEventListener("close", () => {
       onClose && onClose();
-      if (stopped || signal.aborted) return;
-      attempt++;
-      setTimeout(open, Math.min(10000, 500 * 2 ** attempt));
+      scheduleRetry();
     });
     socket.addEventListener("error", () => socket.close());
   }
@@ -953,6 +970,14 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     return;
   }
   if (signal.aborted) return;
+  // Сеанс уже завершён — сервер отклонит апгрейд сокета 410-м, а браузерный
+  // WebSocket не умеет донести код HTTP-отказа до JS (close без вменяемой
+  // причины), поэтому клиент раньше уходил в вечный "переподключение…".
+  // Проверяем то же поле, что уже пришло в session, до попытки подключения.
+  if (session.completedAt) {
+    stage.innerHTML = `<p class="state-note">Этот пазл уже собран. <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a></p>`;
+    return;
+  }
   const puzzle = session.puzzle;
   $(root, "#tableTitle").textContent = puzzle.title;
 
@@ -1015,7 +1040,11 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
   stage.addEventListener("pointerdown", e => {
-    if (e.target.closest(".piece")) return;
+    // .zoom-controls тоже исключаем: иначе setPointerCapture ниже перехватывает
+    // указатель на #stage раньше, чем браузер успевает синтезировать click на
+    // кнопке — колесо мыши работало (свой отдельный wheel-хендлер), а кнопки
+    // +/−/⤢ не реагировали на клик вовсе.
+    if (e.target.closest(".piece") || e.target.closest(".zoom-controls")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 1) {
@@ -1222,6 +1251,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     onMessage: handleSocketMessage,
     onOpen: () => { progressEl.classList.remove("offline"); },
     onClose: () => { progressEl.classList.add("offline"); },
+    onGiveUp: () => {
+      progressEl.classList.remove("offline");
+      stage.insertAdjacentHTML("beforeend", `<p class="state-note table-give-up">Не удаётся подключиться к столу. <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a> или обновите страницу.</p>`);
+    },
   });
 }
 

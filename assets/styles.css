@@ -234,6 +234,13 @@ a{color:inherit}
    тревожно ярче, чем оно того стоит. */
 .table-progress.offline{color:var(--md-sys-color-error)}
 .table-progress.offline::before{content:"переподключение… ";font-weight:600}
+/* connectRoomSocket сдаётся после MAX_ATTEMPTS — сообщение поверх стола,
+   а не в потоке (пазл-мир под ним — сплошь position:absolute). */
+.table-give-up{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
+  box-shadow:var(--e2);z-index:2000;max-width:22rem;
+}
 
 /* ===================== СОСТОЯНИЯ ЗАГРУЗКИ/ОШИБКИ ===================== */
 .state-note{padding:2.4rem 1rem;text-align:center;color:var(--md-sys-color-on-surface-variant)}
