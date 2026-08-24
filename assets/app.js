@@ -513,20 +513,19 @@ async function renderTable(root, puzzleId, signal) {
         <a class="btn text sm" href="#/">← Библиотека</a>
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
-        <button class="btn outlined sm toolbar-btn" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
-          <span class="toolbar-btn-icon" aria-hidden="true">🔀</span><span class="toolbar-btn-label">Перемешать</span>
-        </button>
-        <button class="btn outlined sm toolbar-btn" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
-          <span class="toolbar-btn-icon" aria-hidden="true">🖼</span><span class="toolbar-btn-label">Показать картинку</span>
-        </button>
-        <button class="btn outlined sm toolbar-btn" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
-          <span class="toolbar-btn-icon" aria-hidden="true">☀</span><span class="toolbar-btn-label">Светлый фон</span>
-        </button>
         <span class="table-progress" id="tableProgress"></span>
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
         <img class="preview-thumb" id="previewThumb" alt="" hidden>
+        <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
+             см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
+             углу, чтобы не пересекаться ни с ним, ни с .preview-thumb. -->
+        <div class="board-tools">
+          <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">🔀</button>
+          <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">🖼</button>
+          <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">☀</button>
+        </div>
         <div class="zoom-controls">
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="Приблизить" aria-label="Приблизить">+</button>
           <button class="btn outlined icon" id="zoomResetBtn" type="button" title="Показать всё" aria-label="Показать всё">⤢</button>
@@ -652,11 +651,14 @@ async function renderTable(root, puzzleId, signal) {
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
   stage.addEventListener("pointerdown", e => {
-    // .zoom-controls тоже исключаем: иначе setPointerCapture ниже перехватывает
-    // указатель на #stage раньше, чем браузер успевает синтезировать click на
-    // кнопке — колесо мыши работало (свой отдельный wheel-хендлер), а кнопки
-    // +/−/⤢ не реагировали на клик вовсе.
-    if (e.target.closest(".piece") || e.target.closest(".zoom-controls")) return;
+    // .zoom-controls (а теперь и .board-tools/.win-overlay/.table-give-up)
+    // тоже исключаем: иначе setPointerCapture ниже перехватывает указатель на
+    // #stage раньше, чем браузер успевает синтезировать click на кнопке —
+    // колесо мыши работало (свой отдельный wheel-хендлер), а кнопки +/−/⤢
+    // (и, отдельно найденный тот же баг, кнопки в окне победы) не реагировали
+    // на клик вовсе.
+    if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
+      || e.target.closest(".presence-widget") || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 1) {
@@ -807,6 +809,13 @@ async function renderTable(root, puzzleId, signal) {
     }
     el.addEventListener("pointerup", finish, { signal });
     el.addEventListener("pointercancel", finish, { signal });
+    // Подстраховка от «вечно тащим» (см. расследование бага с прогрессом):
+    // pointerup/pointercancel не гарантированно долетают при нештатном
+    // завершении жеста (потеря фокуса окна, вкладка свёрнута, ОС перехватила
+    // жест) — lostpointercapture по спецификации срабатывает ВСЕГДА, когда
+    // элемент теряет захват указателя, каким бы ни был повод, поэтому это
+    // надёжная точка для финального finish() и очистки draggingKeys/dragging.
+    el.addEventListener("lostpointercapture", finish, { signal });
   }
 
   /* ── сохранение прогресса ── */
@@ -970,6 +979,10 @@ const ROOMS_PAGE_SIZE = 5;
 // обработчики вешаются внутри renderRoomsList со своим { signal }.
 bindModal("createRoomModalBackdrop", null, "createRoomModalClose");
 bindModal("joinRoomModalBackdrop", null, "joinRoomModalClose");
+// Открывающая кнопка (#addPuzzleBtn) рендерится внутри renderRoom при каждом
+// заходе в комнату — та же схема, что у createRoomOpenBtn/joinRoomOpenBtn
+// выше: сама модалка статична в index.html и привязывается один раз здесь.
+bindModal("uploadPuzzleModalBackdrop", null, "uploadPuzzleModalClose");
 document.getElementById("createRoomBtn").addEventListener("click", async () => {
   const input = document.getElementById("newRoomTitle");
   const title = input.value.trim();
@@ -1135,11 +1148,15 @@ async function renderRoom(root, roomId, signal) {
   body.innerHTML = `
     <div class="room-head">
       <h2 class="room-head-title"></h2>
-      <div class="invite-box">
-        <span>Приглашение:</span>
-        <input class="text-input" id="inviteInput" type="text" readonly>
-        <button class="btn outlined sm" id="copyInviteBtn" type="button">Скопировать</button>
-      </div>
+    </div>
+    <!-- Крупный пунктирный блок с кодом комнаты — тот же паттерн, что в
+         Movies (.code-box, renderCodeArea): код кликабелен и копируется
+         сам по себе, кнопка рядом — для полной ссылки. Без «Перевыпустить
+         код» — этого эндпоинта у Puzzle нет. -->
+    <div class="code-box">
+      <code id="roomCode" title="Скопировать код"></code>
+      <button class="btn tonal sm" id="copyInviteLinkBtn" type="button">Скопировать ссылку</button>
+      <span class="code-box-hint muted" id="roomCodeHint" aria-live="polite" hidden></span>
     </div>
     <div class="room-members" id="roomMembers"></div>
     <div class="room-active" id="roomActive"></div>
@@ -1147,9 +1164,21 @@ async function renderRoom(root, roomId, signal) {
     <div class="room-history" id="roomHistory"></div>`;
 
   $(root, ".room-head-title").textContent = room.title;
-  $(root, "#inviteInput").value = inviteUrl;
-  $(root, "#copyInviteBtn").addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(inviteUrl); } catch { /* буфер недоступен — ссылка и так видна в поле */ }
+  const roomCodeEl = $(root, "#roomCode");
+  const roomCodeHint = $(root, "#roomCodeHint");
+  roomCodeEl.textContent = room.joinCode;
+  let hintTimer = null;
+  function flashCopied() {
+    clearTimeout(hintTimer);
+    roomCodeHint.textContent = "Скопировано";
+    roomCodeHint.hidden = false;
+    hintTimer = setTimeout(() => { roomCodeHint.hidden = true; }, 1800);
+  }
+  roomCodeEl.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(room.joinCode); flashCopied(); } catch { /* буфер недоступен — код и так виден */ }
+  }, { signal });
+  $(root, "#copyInviteLinkBtn").addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(inviteUrl); flashCopied(); } catch { /* буфер недоступен — ссылка есть в приглашении */ }
   }, { signal });
 
   const membersEl = $(root, "#roomMembers");
@@ -1173,7 +1202,10 @@ async function renderRoom(root, roomId, signal) {
       <p>Сейчас за столом собирают пазл «${s.puzzle.title}» — ${s.piecesPlaced}/${s.piecesTotal} деталей.</p>
       <button class="btn filled join-table-btn" type="button" data-session="${s.id}">За стол</button>
     </div>`).join("")
-    + '<h3 class="room-section-title">Начать сборку</h3><div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">Загружаем пазлы…</p></div><div id="roomUploadWrap"></div><p class="state-note" id="sessionLimitNote" hidden></p>';
+    + '<div class="room-section-head"><h3 class="room-section-title">Начать сборку</h3>'
+    + '<button class="icon-btn tonal" id="addPuzzleBtn" type="button" title="Добавить пазл" aria-label="Добавить пазл">'
+    + '<svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>'
+    + '<div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">Загружаем пазлы…</p></div><p class="state-note" id="sessionLimitNote" hidden></p>';
   for (const btn of activeEl.querySelectorAll(".join-table-btn")) {
     btn.addEventListener("click", () => {
       location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(btn.dataset.session)}`;
@@ -1204,8 +1236,15 @@ async function renderRoom(root, roomId, signal) {
     grid.appendChild(buildCard(group, { allowDelete: false, onPlay: playVariant }));
   }
 
-  mountUploadForm($(activeEl, "#roomUploadWrap"), result => {
+  $(activeEl, "#addPuzzleBtn").addEventListener("click", () => openModal("uploadPuzzleModalBackdrop"), { signal });
+  // Форма — внутри статичной модалки (index.html, вне #app), не под сеткой:
+  // раньше висела постоянно открытой, теперь только по клику на «+» (см. кнопку
+  // выше). Монтируем один раз на каждый заход в комнату — mountUploadForm сам
+  // перезаписывает innerHTML контейнера, повторный вызов при новом рендере не
+  // накапливает старые формы/обработчики.
+  mountUploadForm(document.getElementById("uploadPuzzleFormMount"), result => {
     grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { allowDelete: false, onPlay: playVariant }));
+    closeModal("uploadPuzzleModalBackdrop");
   });
 
   const historyEl = $(root, "#roomHistory");
@@ -1282,21 +1321,34 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">← Комната</a>
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
-        <button class="btn outlined sm toolbar-btn" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
-          <span class="toolbar-btn-icon" aria-hidden="true">🔀</span><span class="toolbar-btn-label">Перемешать</span>
-        </button>
-        <button class="btn outlined sm toolbar-btn" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
-          <span class="toolbar-btn-icon" aria-hidden="true">🖼</span><span class="toolbar-btn-label">Показать картинку</span>
-        </button>
-        <button class="btn outlined sm toolbar-btn" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
-          <span class="toolbar-btn-icon" aria-hidden="true">☀</span><span class="toolbar-btn-label">Светлый фон</span>
-        </button>
-        <div class="presence-bar" id="presenceBar"></div>
         <span class="table-progress" id="tableProgress"></span>
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
         <img class="preview-thumb" id="previewThumb" alt="" hidden>
+        <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
+             см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
+             углу, чтобы не пересекаться ни с ним, ни с .preview-thumb, ни с
+             кнопкой присутствия ниже. -->
+        <div class="board-tools">
+          <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">🔀</button>
+          <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">🖼</button>
+          <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">☀</button>
+        </div>
+        <!-- Присутствующие за столом — раньше постоянно видимая строка чипов
+             в тулбаре (занимала место), теперь кнопка-иконка с бейджем-числом
+             и всплывающая панель со списком (см. updatePresence ниже), а не
+             полноэкранная модалка — это лёгкий быстрый список, не диалог. -->
+        <div class="presence-widget">
+          <button class="btn outlined icon presence-btn" id="presenceBtn" type="button"
+            title="Участники за столом" aria-label="Участники за столом" aria-haspopup="true" aria-expanded="false">
+            👥<span class="presence-count" id="presenceCount" hidden>0</span>
+          </button>
+          <div class="presence-popover hidden" id="presencePopover">
+            <p class="presence-popover-title">За столом</p>
+            <div class="presence-popover-list" id="presenceList"></div>
+          </div>
+        </div>
         <div class="zoom-controls">
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="Приблизить" aria-label="Приблизить">+</button>
           <button class="btn outlined icon" id="zoomResetBtn" type="button" title="Показать всё" aria-label="Показать всё">⤢</button>
@@ -1352,7 +1404,26 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
 
   const world = $(root, "#world");
   const progressEl = $(root, "#tableProgress");
-  const presenceEl = $(root, "#presenceBar");
+  const presenceBtn = $(root, "#presenceBtn");
+  const presenceCount = $(root, "#presenceCount");
+  const presencePopover = $(root, "#presencePopover");
+  const presenceListEl = $(root, "#presenceList");
+  function setPresencePopoverOpen(open) {
+    presencePopover.classList.toggle("hidden", !open);
+    presenceBtn.setAttribute("aria-expanded", String(open));
+  }
+  presenceBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    setPresencePopoverOpen(presencePopover.classList.contains("hidden"));
+  }, { signal });
+  // Клик снаружи закрывает поповер — тот же паттерн, что у модалок
+  // (клик по подложке), но без подложки: поповер компактный, не блокирует
+  // остальной интерфейс.
+  document.addEventListener("click", e => {
+    if (presencePopover.classList.contains("hidden")) return;
+    if (e.target.closest(".presence-widget")) return;
+    setPresencePopoverOpen(false);
+  }, { signal });
   const scatter = scatterLayout(rows, cols, CELL, pad);
   const BOARD_X = scatter.margin, BOARD_Y = scatter.margin;
 
@@ -1404,11 +1475,14 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
   stage.addEventListener("pointerdown", e => {
-    // .zoom-controls тоже исключаем: иначе setPointerCapture ниже перехватывает
-    // указатель на #stage раньше, чем браузер успевает синтезировать click на
-    // кнопке — колесо мыши работало (свой отдельный wheel-хендлер), а кнопки
-    // +/−/⤢ не реагировали на клик вовсе.
-    if (e.target.closest(".piece") || e.target.closest(".zoom-controls")) return;
+    // .zoom-controls (а теперь и .board-tools/.win-overlay/.table-give-up)
+    // тоже исключаем: иначе setPointerCapture ниже перехватывает указатель на
+    // #stage раньше, чем браузер успевает синтезировать click на кнопке —
+    // колесо мыши работало (свой отдельный wheel-хендлер), а кнопки +/−/⤢
+    // (и, отдельно найденный тот же баг, кнопки в окне победы) не реагировали
+    // на клик вовсе.
+    if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
+      || e.target.closest(".presence-widget") || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 1) {
@@ -1497,9 +1571,14 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // потерять прогресс нет, confirm не нужен.
     const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE);
     if (!next) return;
-    const arr = [...pieces.values()].map(piece => {
-      const pos = next.get(`${piece.r},${piece.c}`);
-      return { r: piece.r, c: piece.c, x: pos ? pos.x : piece.x, y: pos ? pos.y : piece.y, placed: false };
+    // Шлём только реально переставленные детали (ключи next), а не весь
+    // борд — см. разбор гонки group/shuffle в server.js: полный снимок
+    // ЛОКАЛЬНОГО pieces отправителя мог быть устаревшим для деталей, которых
+    // «Перемешать» не касалось (их мог только что подвинуть кто-то другой),
+    // и слепая замена state.pieces целиком откатывала бы этот чужой ход.
+    const arr = [...next.entries()].map(([k, pos]) => {
+      const piece = pieces.get(k);
+      return { r: piece.r, c: piece.c, x: pos.x, y: pos.y, placed: false };
     });
     socket.send({ type: "shuffle", pieces: arr });
   }, { signal });
@@ -1511,12 +1590,15 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     progressEl.append(b, document.createTextNode(" деталей собрано"));
   }
   function updatePresence(members) {
-    presenceEl.innerHTML = "";
-    for (const m of members || []) {
+    const list = members || [];
+    presenceCount.textContent = String(list.length);
+    presenceCount.hidden = list.length === 0;
+    presenceListEl.innerHTML = "";
+    for (const m of list) {
       const chip = document.createElement("span");
       chip.className = "presence-chip";
       chip.textContent = m.name || "участник";
-      presenceEl.appendChild(chip);
+      presenceListEl.appendChild(chip);
     }
   }
   function showWin() {
@@ -1587,7 +1669,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         p.x = ox + dx; p.y = oy + dy;
         applyPieceTransform(p);
       }
-      if (dragging.origins.length > 1) sendGroup(); else sendMove(piece);
+      if (dragging.origins.length > 1) sendGroup(dragging.draggingKeys); else sendMove(piece);
     }, { signal });
 
     function finish(e) {
@@ -1614,14 +1696,24 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       lastClusterEdgeIds = nextIds;
       updateProgressLabel(window.PuzzleClusters.largestClusterSize(members), rows * cols);
       setSelected([]);
-      // >1 детали тащили или стыковка образовала новое ребро — шлём полную
-      // раскладку группой (сосед должен увидеть весь жёсткий блок за один
-      // sync), иначе — компактный move одной детали.
-      if (origins.length > 1 || newCount > 0) sendGroup();
+      // >1 детали тащили или стыковка образовала новое ребро — шлём группой
+      // ТОЛЬКО те детали, которых коснулся этот жест (groupKeys — тащенная
+      // группа, включая стыковку соседей внутри неё; сами соседи, к которым
+      // пристыковались, не входят в groupKeys и не пересылаются — их
+      // координаты не менялись), иначе — компактный move одной детали. Не
+      // весь борд: см. разбор гонки group/shuffle в server.js.
+      if (origins.length > 1 || newCount > 0) sendGroup(groupKeys);
       else sendMove(piece);
     }
     el.addEventListener("pointerup", finish, { signal });
     el.addEventListener("pointercancel", finish, { signal });
+    // Подстраховка от «вечно тащим» (см. расследование бага с прогрессом):
+    // pointerup/pointercancel не гарантированно долетают при нештатном
+    // завершении жеста (потеря фокуса окна, вкладка свёрнута, ОС перехватила
+    // жест) — lostpointercapture по спецификации срабатывает ВСЕГДА, когда
+    // элемент теряет захват указателя, каким бы ни был повод, поэтому это
+    // надёжная точка для финального finish() и очистки draggingKeys/dragging.
+    el.addEventListener("lostpointercapture", finish, { signal });
   }
 
   function reconcilePiece(r, c, x, y) {
@@ -1647,8 +1739,14 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     }
 
     const sendMove = throttle(p => socket.send({ type: "move", r: p.r, c: p.c, x: p.x, y: p.y }), 70);
-    const sendGroup = throttle(() => {
-      const arr = [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: false }));
+    // keys — только детали ЭТОГО жеста (см. bindRoomPieceDrag), не весь
+    // борд: сервер мержит group/shuffle по ключу поверх своего состояния
+    // (см. server.js), полный локальный снимок отправителя мог быть
+    // устаревшим для деталей, которых этот жест не касался, и раньше слепо
+    // затирал чужой параллельный ход (гонка при одновременном перетаскивании
+    // разными участниками — регресс test/e2e-rooms.mjs).
+    const sendGroup = throttle(keys => {
+      const arr = [...keys].map(k => { const p = pieces.get(k); return { r: p.r, c: p.c, x: p.x, y: p.y, placed: false }; });
       socket.send({ type: "group", pieces: arr });
     }, 70);
 

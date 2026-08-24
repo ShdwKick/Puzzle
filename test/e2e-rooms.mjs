@@ -197,6 +197,68 @@ await sleep(300);
 r = await asJson(tokenA, `/rooms/${roomId}/sessions/${sessionId}`);
 ok("сеанс сохранён завершённым в БД", r.status === 200 && !!r.body.completedAt, JSON.stringify(r.body));
 
+// ───────── регресс: гонка group/shuffle при конкурентных ходах двух участников ─────────
+// Раньше group/shuffle несли ПОЛНЫЙ локальный снимок pieces отправителя, и
+// сервер заменял state.pieces им целиком (state.pieces = pieces). Если C
+// стыкует одну пару деталей ровно в момент, когда D (независимо, ещё не
+// получив через sync ход C) стыкует СВОЮ, другую пару и шлёт свой group,
+// массив D — устаревший в части хода C — полностью перезаписывал
+// state.pieces: стыковка C пропадала/откатывалась, хотя D её вообще не
+// касался. Починка — group/shuffle несут ТОЛЬКО реально изменившиеся детали
+// и мержатся по ключу (r,c) поверх текущего state.pieces (см. server.js,
+// ветка "shuffle"/"group"), поэтому ходы по непересекающимся ключам больше
+// не могут затереть друг друга независимо от порядка доставки по сети.
+// Сеанс — новый (первый уже завершён строкой выше), сессий активно меньше
+// лимита (см. «до 5 параллельных сборок»), можно стартовать ещё один.
+r = await asJson(tokenA, `/rooms/${roomId}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+ok("сеанс для регресса гонки group/shuffle стартовал", r.status === 200, JSON.stringify(r.body));
+const raceSessionId = r.body.id;
+const raceWsUrl = token => `ws://localhost:${PUZZLE_PORT}/ws/rooms/${roomId}/sessions/${raceSessionId}?token=${encodeURIComponent(token)}`;
+
+// Открываем и ждём первый sync СТРОГО последовательно (не Promise.all) —
+// тот же порядок, что у wsA/wsB выше: у нативного WebSocket нет буфера
+// событий для ещё не навешанных обработчиков, и если ждать открытия сразу
+// двух сокетов параллельно, начальный "sync" одного из них может прийти и
+// потеряться, пока JS всё ещё ждёт открытия второго.
+const wsC = new WebSocket(raceWsUrl(tokenA));
+await waitOpen(wsC);
+await waitMessage(wsC, m => m.type === "sync");
+
+const wsD = new WebSocket(raceWsUrl(tokenB));
+await waitOpen(wsD);
+await waitMessage(wsD, m => m.type === "sync");
+
+const dInitSyncPromise = waitMessage(wsD, m => m.type === "sync" && m.pieces);
+wsC.send(JSON.stringify({ type: "init", pieces: scatteredPieces() }));
+await dInitSyncPromise;
+
+// Конкурентно, БЕЗ ожидания sync друг от друга между отправками: C стыкует
+// пару (0,0)+(0,1) частичным group (шлёт только эти два ключа), D —
+// независимую пару (2,0)+(2,1) (тоже только свои два ключа). Ключи
+// непересекающиеся, порядок доставки серверу не важен для итога.
+const bothStitched = m => {
+  if (m.type !== "sync" || !Array.isArray(m.pieces)) return false;
+  const at = (r, c) => m.pieces.find(p => p.r === r && p.c === c);
+  const a = at(0, 0), b = at(0, 1), x = at(2, 0), y = at(2, 1);
+  return !!a && !!b && !!x && !!y
+    && a.x === 0 && a.y === 0 && b.x === PUZZLE_CELL && b.y === 0
+    && x.x === 2000 && x.y === 2000 && y.x === 2000 + PUZZLE_CELL && y.y === 2000;
+};
+const raceSyncPromise = waitMessage(wsC, bothStitched, 4000);
+wsC.send(JSON.stringify({ type: "group", pieces: [
+  { r: 0, c: 0, x: 0, y: 0, placed: false },
+  { r: 0, c: 1, x: PUZZLE_CELL, y: 0, placed: false },
+] }));
+wsD.send(JSON.stringify({ type: "group", pieces: [
+  { r: 2, c: 0, x: 2000, y: 2000, placed: false },
+  { r: 2, c: 1, x: 2000 + PUZZLE_CELL, y: 2000, placed: false },
+] }));
+const raceSync = await raceSyncPromise;
+ok("конкурентные partial-group от двух участников не затёрли друг друга", bothStitched(raceSync));
+ok("итог гонки — два независимых кластера по 2 детали, piecesPlaced===2", raceSync.piecesPlaced === 2, JSON.stringify({ piecesPlaced: raceSync.piecesPlaced }));
+ok("длина pieces не меняется при частичном group", raceSync.pieces.length === piecesTotal, String(raceSync.pieces.length));
+
+wsC.close(); wsD.close();
 wsA.close(); wsB.close();
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

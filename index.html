@@ -138,6 +138,23 @@
   </div>
 </div>
 
+<!-- ===================== МОДАЛКА: ДОБАВИТЬ ПАЗЛ =====================
+     Открывается кнопкой «+» рядом с заголовком «Начать сборку» в комнате
+     (renderRoom, assets/app.js) — форма загрузки своего фото раньше висела
+     под сеткой пазлов постоянно, теперь только по запросу. Форму монтирует
+     mountUploadForm() в #uploadPuzzleFormMount при каждом заходе в комнату. -->
+<div class="modal-backdrop hidden" id="uploadPuzzleModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="uploadPuzzleModalTitle">
+    <div class="modal-head">
+      <h2 id="uploadPuzzleModalTitle">Добавить пазл</h2>
+      <button class="icon-btn" id="uploadPuzzleModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div id="uploadPuzzleFormMount"></div>
+  </div>
+</div>
+
 <script src="assets/brand.js"></script>
 <script src="assets/auth-client.js"></script>
 <script src="assets/puzzle-shapes.js"></script>

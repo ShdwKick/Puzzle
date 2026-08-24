@@ -222,6 +222,20 @@ a{color:inherit}
 }
 .zoom-controls .btn{width:2.4rem;height:2.4rem;padding:0}
 
+/* Перемешать/Показать картинку/Светлый фон — раньше текстовые кнопки в
+   .table-toolbar, схлопывались в иконки только на узком экране (см. былой
+   .toolbar-btn/@media ниже). Теперь всегда иконки, в собственной плашке в
+   том же визуальном языке, что .zoom-controls, но в другом углу (нижний
+   левый — .zoom-controls внизу справа, .preview-thumb вверху слева, кнопка
+   присутствия вверху справа, см. .presence-widget), чтобы ничего не
+   перекрывалось. */
+.board-tools{
+  position:absolute;left:.9rem;bottom:.9rem;display:flex;flex-direction:row;gap:.4rem;
+  background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
+  border-radius:var(--md-sys-shape-corner-l);padding:.4rem;box-shadow:var(--e1);
+}
+.board-tools .btn{width:2.4rem;height:2.4rem;padding:0}
+
 /* Справочная картинка «как должно получиться» — pointer-events:none,
    поэтому её не нужно исключать из панорамы стола отдельно (в отличие от
    .zoom-controls, см. комментарий у pointerdown ниже): клики и драг просто
@@ -307,8 +321,23 @@ a{color:inherit}
 /* ===================== КОМНАТЫ: ЭКРАН КОМНАТЫ ===================== */
 .room-head{display:flex;flex-direction:column;gap:.7rem;margin-bottom:1.2rem}
 .room-head-title{font-size:1.4rem;font-weight:650}
-.invite-box{display:flex;align-items:center;gap:.6rem;flex-wrap:wrap;font-size:.9rem}
-.invite-box .text-input{flex:1;min-width:14rem;font-size:.85rem}
+
+/* Код приглашения — дословно паттерн Movies (.code-box/.code-box code, см.
+   Movies/assets/app.js renderCodeArea и Movies/assets/styles.css) вместо
+   readonly-поля со ссылкой: крупный кликабельный код + кнопка отдельно для
+   полной ссылки. Без «Перевыпустить код» — этого эндпоинта у Puzzle нет. */
+.code-box{
+  display:flex;align-items:center;justify-content:center;gap:.6rem;flex-wrap:wrap;
+  margin:.5rem auto 0;width:fit-content;max-width:100%;text-align:center;
+  padding:.7em 1.2em;border-radius:var(--md-sys-shape-corner-m);
+  background:var(--md-sys-color-surface-container-low);
+  border:1px dashed color-mix(in srgb,var(--flame-tip) 45%,var(--md-sys-color-outline-variant));
+}
+.code-box code{
+  font-size:1.7rem;font-weight:700;letter-spacing:.06em;cursor:pointer;
+  font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
+}
+.code-box-hint{font-size:.82rem}
 
 .room-members{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.2rem}
 .member-chip{
@@ -318,6 +347,10 @@ a{color:inherit}
 .member-chip.owner{background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container)}
 
 .room-section-title{font-size:1.05rem;font-weight:650;margin:1.2rem 0 .7rem}
+/* «Начать сборку» + кнопка «+» (открывает модалку загрузки своего фото) в
+   одной строке — тот же приём justify-content:space-between, что и в шапке. */
+.room-section-head{display:flex;align-items:center;justify-content:space-between;gap:.8rem}
+.room-section-head .room-section-title{margin:1.2rem 0 .7rem}
 .room-active-card{
   background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
   padding:1rem 1.1rem;box-shadow:var(--e1);display:flex;align-items:center;gap:1rem;flex-wrap:wrap;
@@ -347,10 +380,34 @@ a{color:inherit}
 .room-join-screen .btn{align-self:center}
 
 /* ===================== КОМНАТЫ: ПРИСУТСТВИЕ ЗА СТОЛОМ ===================== */
-.presence-bar{display:flex;gap:.4rem;flex-wrap:wrap}
+/* Раньше постоянная строка чипов в .table-toolbar — занимала место. Теперь
+   кнопка-иконка (тот же язык, что .zoom-controls/.board-tools) с бейджем-
+   числом, вверху справа стола (см. расстановку углов у .board-tools выше),
+   раскрывающая компактный поповер со списком — не полноэкранная модалка,
+   лёгкая position:absolute панель рядом с кнопкой. */
+.presence-widget{position:absolute;right:.9rem;top:.9rem}
+.btn.presence-btn{
+  position:relative;width:2.4rem;height:2.4rem;padding:0;
+  background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);box-shadow:var(--e1);
+}
+.presence-count{
+  position:absolute;top:-.15rem;right:-.15rem;min-width:1.1rem;height:1.1rem;padding:0 .25rem;
+  border-radius:var(--md-sys-shape-corner-full);background:var(--flame-tip);color:#0a1408;
+  font-size:.68rem;font-weight:800;line-height:1.1rem;text-align:center;
+}
+.presence-count[hidden]{display:none}
+.presence-popover{
+  position:absolute;top:calc(100% + .5rem);right:0;min-width:11rem;max-width:16rem;max-height:16rem;overflow:auto;
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
+  padding:.6rem .7rem;box-shadow:var(--e2);z-index:10;
+}
+.presence-popover.hidden{display:none}
+.presence-popover-title{font-size:.78rem;font-weight:700;color:var(--md-sys-color-on-surface-variant);margin-bottom:.4rem}
+.presence-popover-list{display:flex;flex-direction:column;gap:.35rem}
 .presence-chip{
   background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container);
   font-size:.78rem;font-weight:600;padding:.26em .7em;border-radius:var(--md-sys-shape-corner-full);
+  align-self:flex-start;
 }
 /* Разрыв соединения — не ошибка, а временное состояние: сокет сам
    переподключается (см. connectRoomSocket), подсказка не должна выглядеть
@@ -371,6 +428,4 @@ a{color:inherit}
 @media (max-width: 30rem){
   .table-toolbar{padding:.6rem .8rem}
   .table-progress{display:none}
-  .toolbar-btn-label{display:none}
-  .table-toolbar .toolbar-btn{padding:.5em;border-radius:50%;width:2.4rem;height:2.4rem}
 }

@@ -276,6 +276,13 @@ function puzzlePayload(p) {
 // Пришедшие с фронта детали — доверенный документ хранится как есть, но
 // форма проверяется: чужой сервис/битый клиент не должен положить в базу
 // произвольный JSON. rows/cols не пришли явно в body — берём из самого пазла.
+function sanitizePieceItem(it, rows, cols) {
+  if (!it || typeof it !== "object") return null;
+  const r = Number(it.r), c = Number(it.c), x = Number(it.x), y = Number(it.y);
+  if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= rows || c < 0 || c >= cols) return null;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { r, c, x, y, placed: !!it.placed };
+}
 function sanitizePieces(raw, rows, cols) {
   if (!Array.isArray(raw)) return null;
   const total = rows * cols;
@@ -283,14 +290,31 @@ function sanitizePieces(raw, rows, cols) {
   const seen = new Set();
   const out = [];
   for (const it of raw) {
-    if (!it || typeof it !== "object") return null;
-    const r = Number(it.r), c = Number(it.c), x = Number(it.x), y = Number(it.y);
-    if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= rows || c < 0 || c >= cols) return null;
-    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-    const key = `${r},${c}`;
+    const p = sanitizePieceItem(it, rows, cols);
+    if (!p) return null;
+    const key = `${p.r},${p.c}`;
     if (seen.has(key)) return null;
     seen.add(key);
-    out.push({ r, c, x, y, placed: !!it.placed });
+    out.push(p);
+  }
+  return out;
+}
+// Частичное обновление (group/shuffle шлют ТОЛЬКО реально изменившиеся
+// детали — см. assets/app.js, sendGroup/planShuffle-обработчик комнаты, и
+// комментарий у ветки "shuffle"/"group" ниже) — та же форма элемента, что и
+// в sanitizePieces, но БЕЗ требования полного покрытия total: от 1 до total
+// деталей, без дублей ключей.
+function sanitizePiecesPartial(raw, rows, cols) {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > rows * cols) return null;
+  const seen = new Set();
+  const out = [];
+  for (const it of raw) {
+    const p = sanitizePieceItem(it, rows, cols);
+    if (!p) return null;
+    const key = `${p.r},${p.c}`;
+    if (seen.has(key)) return null;
+    seen.add(key);
+    out.push(p);
   }
   return out;
 }
@@ -734,12 +758,28 @@ function attachRoomConnection(sessionId, user, wsConn) {
     // `group` — то же самое сообщение с другим именем, для группового
     // перетаскивания деталей (см. assets/app.js, bindRoomPieceDrag), не
     // только для кнопки «Перемешать».
+    //
+    // ВАЖНО: msg.pieces несёт ТОЛЬКО те детали, которые отправитель реально
+    // подвинул за этот жест/перемешивание (см. sendGroup/shuffleBtn в
+    // assets/app.js) — не весь борд. Раньше это был полный снимок ЛОКАЛЬНОГО
+    // pieces отправителя на момент finish(), и сервер слепо заменял им
+    // state.pieces целиком (state.pieces = pieces). При одновременном
+    // перетаскивании РАЗНЫМИ участниками это была настоящая гонка: если A
+    // стыкует деталь ровно в тот момент, когда локальный снимок B ещё не
+    // получил через sync этот ход A, а B чуть позже шлёт СВОЙ group/shuffle,
+    // полный массив B (устаревший в части хода A) полностью перезаписывал
+    // state.pieces — стыковка A пропадала/откатывалась, прогресс "прыгал
+    // назад". Теперь сообщение частичное и мержится по ключу (r,c) поверх
+    // текущего state.pieces — сервер трогает только те детали, которые
+    // отправитель реально подтверждает, не откатывая то, чего он не касался
+    // (регресс — test/e2e-rooms.mjs, «конкурентные ходы двух участников»).
     if (msg.type === "shuffle" || msg.type === "group") {
       if (!state.pieces) return;
-      const pieces = sanitizePieces(msg.pieces, state.rows, state.cols);
-      if (!pieces) return;
-      state.pieces = pieces;
-      const placedNow = clusterProgress(pieces);
+      const incoming = sanitizePiecesPartial(msg.pieces, state.rows, state.cols);
+      if (!incoming) return;
+      const byKey = new Map(incoming.map(p => [`${p.r},${p.c}`, p]));
+      state.pieces = state.pieces.map(p => byKey.get(`${p.r},${p.c}`) || p);
+      const placedNow = clusterProgress(state.pieces);
       schedulePersist(state);
       if (placedNow >= state.piecesTotal) persistSession(state);
       broadcast(state, {
