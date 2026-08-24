@@ -286,8 +286,9 @@ function buildCard(p, opts = {}) {
   const mine = p.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === p.ownerUserId;
   if (mine && opts.allowDelete !== false) {
     const del = document.createElement("button");
-    del.className = "btn text sm puzzle-card-delete";
-    del.type = "button"; del.textContent = "Удалить";
+    del.className = "icon-btn xs puzzle-card-delete";
+    del.type = "button"; del.title = "Удалить"; del.setAttribute("aria-label", "Удалить");
+    del.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
     del.addEventListener("click", async ev => {
       ev.stopPropagation();
       if (!confirm(`Удалить пазл «${p.title}»?`)) return;
@@ -551,7 +552,6 @@ async function renderTable(root, puzzleId, signal) {
   root.innerHTML = `
     <div class="table-screen">
       <div class="table-toolbar">
-        <a class="btn text sm" href="#/">← Библиотека</a>
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
         <span class="table-progress" id="tableProgress"></span>
@@ -561,11 +561,21 @@ async function renderTable(root, puzzleId, signal) {
         <img class="preview-thumb" id="previewThumb" alt="" hidden>
         <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
              см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
-             углу, чтобы не пересекаться ни с ним, ни с .preview-thumb. -->
+             углу, чтобы не пересекаться ни с ним, ни с .preview-thumb. Первой —
+             «Назад» (была текстовой ссылкой «← Библиотека» в .table-toolbar). -->
         <div class="board-tools">
-          <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">🔀</button>
-          <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">🖼</button>
-          <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">☀</button>
+          <a class="btn outlined icon" href="#/" title="Библиотека" aria-label="Библиотека">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+          </a>
+          <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+          </button>
+          <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          </button>
+          <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
+            <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor" stroke="none"/></svg>
+          </button>
         </div>
         <div class="zoom-controls">
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="Приблизить" aria-label="Приблизить">+</button>
@@ -1242,7 +1252,9 @@ async function renderRoom(root, roomId, signal) {
     <div class="room-active-card">
       <p>Сейчас за столом собирают пазл «${s.puzzle.title}» — ${s.piecesPlaced}/${s.piecesTotal} деталей.</p>
       <button class="btn filled join-table-btn" type="button" data-session="${s.id}">За стол</button>
-      <button class="btn outlined sm delete-session-btn" type="button" data-session="${s.id}" data-title="${s.puzzle.title}">Удалить</button>
+      <button class="icon-btn xs delete-session-btn" type="button" data-session="${s.id}" data-title="${s.puzzle.title}" title="Удалить" aria-label="Удалить">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
     </div>`).join("")
     + '<div class="room-section-head"><h3 class="room-section-title">Начать сборку</h3>'
     + '<button class="icon-btn tonal" id="addPuzzleBtn" type="button" title="Добавить пазл" aria-label="Добавить пазл">'
@@ -1323,7 +1335,9 @@ async function renderRoom(root, roomId, signal) {
         </div>
         <div class="history-actions">
           <button class="btn outlined sm history-replay" type="button">Собрать ещё раз</button>
-          <button class="btn outlined sm history-delete" type="button">Удалить</button>
+          <button class="icon-btn xs history-delete" type="button" title="Удалить" aria-label="Удалить">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
         </div>`;
       $(row, ".history-puzzle").textContent = s.puzzle.title;
       $(row, ".history-meta").textContent = `${s.piecesTotal} деталей · собран ${fmtDate(s.completedAt)}`;
@@ -1341,10 +1355,13 @@ async function renderRoom(root, roomId, signal) {
       // корректно её обработает, если что-то поменялось между рендером и кликом.
       $(row, ".history-delete").addEventListener("click", async e => {
         if (!confirm(`Удалить сеанс сборки «${s.puzzle.title}»?`)) return;
-        e.target.disabled = true;
+        // currentTarget, не target: клик может попасть на вложенный <svg>/<path>
+        // иконки крестика — у них нет свойства disabled, а нужно отключить
+        // саму кнопку.
+        e.currentTarget.disabled = true;
         try { await deleteRoomSession(roomId, s.id); row.remove(); }
         catch (err) {
-          e.target.disabled = false;
+          e.currentTarget.disabled = false;
           alert(err.message === "table not empty" ? "За этим столом сейчас кто-то сидит — сначала все должны выйти." : "Не удалось удалить.");
         }
       }, { signal });
@@ -1393,7 +1410,6 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   root.innerHTML = `
     <div class="table-screen">
       <div class="table-toolbar">
-        <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">← Комната</a>
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
         <span class="table-progress" id="tableProgress"></span>
@@ -1404,11 +1420,21 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
              см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
              углу, чтобы не пересекаться ни с ним, ни с .preview-thumb, ни с
-             кнопкой присутствия ниже. -->
+             кнопкой присутствия ниже. Первой — «Назад» (была текстовой
+             ссылкой «← Комната» в .table-toolbar). -->
         <div class="board-tools">
-          <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">🔀</button>
-          <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">🖼</button>
-          <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">☀</button>
+          <a class="btn outlined icon" href="#/room/${encodeURIComponent(roomId)}" title="Комната" aria-label="Комната">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+          </a>
+          <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+          </button>
+          <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+          </button>
+          <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
+            <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor" stroke="none"/></svg>
+          </button>
         </div>
         <!-- Присутствующие за столом — раньше постоянно видимая строка чипов
              в тулбаре (занимала место), теперь кнопка-иконка с бейджем-числом

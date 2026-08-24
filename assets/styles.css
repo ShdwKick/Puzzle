@@ -63,6 +63,11 @@ a{color:inherit}
 .icon-btn:hover::after{opacity:.08}
 .icon-btn:active::after{opacity:.12}
 .icon-btn.tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+/* Компактный размер для инлайновых точечных действий (крестик "Удалить" в
+   карточке пазла/строке истории/карточке активной сессии) — полноразмерный
+   44px там слишком тяжёл рядом с мелким текстом строки. */
+.icon-btn.xs{width:1.7rem;height:1.7rem}
+.icon-btn.xs .icon{width:16px;height:16px}
 
 .menu-wrap{position:relative;flex:none}
 .menu-user{
@@ -97,6 +102,13 @@ a{color:inherit}
   transition:transform .15s var(--ease-std),box-shadow .15s var(--ease-std),background-color .15s var(--ease-std);
   white-space:nowrap;
 }
+/* .btn{display:inline-flex} у автора-стиля перебивает встроенное правило
+   браузера [hidden]{display:none} (то же имя специфичности — выигрывает тот,
+   кто загружен позже, а не UA-стиль) — без этого правила hidden="" на любой
+   .btn-кнопке визуально ничего не даёт (баг был у #headerLoginBtn: скрывалась
+   атрибутом, но .btn{display:inline-flex} всё равно её показывал). Тот же
+   приём уже точечно применён у .presence-count[hidden] ниже. */
+.btn[hidden]{display:none}
 .btn:active{transform:scale(.97)}
 .btn.filled{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);box-shadow:var(--e1)}
 .btn.filled:hover{box-shadow:var(--e2)}
@@ -227,7 +239,9 @@ a{color:inherit}
    том же визуальном языке, что .zoom-controls, но в другом углу (нижний
    левый — .zoom-controls внизу справа, .preview-thumb вверху слева, кнопка
    присутствия вверху справа, см. .presence-widget), чтобы ничего не
-   перекрывалось. */
+   перекрывалось. Первой кнопкой в той же плашке — «Назад» (была текстовой
+   ссылкой «← Комната»/«← Библиотека» в .table-toolbar, теперь тоже иконка
+   в стиле кнопок масштаба, см. .board-back). */
 .board-tools{
   position:absolute;left:.9rem;bottom:.9rem;display:flex;flex-direction:row;gap:.4rem;
   background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
