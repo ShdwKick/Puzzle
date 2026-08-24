@@ -719,7 +719,10 @@ function attachRoomConnection(sessionId, user, wsConn) {
     // и только активный сеанс: attachRoomConnection в принципе недостижим для
     // уже completed_at-сеанса (loadSessionState/handleUpgrade отсекают раньше),
     // так что отдельно проверять завершённость здесь нечего.
-    if (msg.type === "shuffle") {
+    // `group` — то же самое сообщение с другим именем, для группового
+    // перетаскивания деталей (см. assets/app.js, bindRoomPieceDrag), не
+    // только для кнопки «Перемешать».
+    if (msg.type === "shuffle" || msg.type === "group") {
       if (!state.pieces) return;
       const pieces = sanitizePieces(msg.pieces, state.rows, state.cols);
       if (!pieces) return;

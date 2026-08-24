@@ -470,6 +470,13 @@ async function renderTable(root, puzzleId, signal) {
     }
   }
 
+  const selected = new Set(); // ключи "r,c" — только ещё не собранные детали
+  function setSelected(keys) {
+    selected.clear();
+    for (const k of keys) selected.add(k);
+    for (const [k, p] of pieces) p.el.classList.toggle("selected", selected.has(k));
+  }
+
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const piece = pieces.get(`${r},${c}`);
@@ -516,7 +523,7 @@ async function renderTable(root, puzzleId, signal) {
   // Пинч на тач — по активным Pointer ID: деталь останавливает всплытие
   // pointerdown (см. bindPieceDrag), поэтому сюда долетают только жесты по фону.
   const active = new Map();
-  let panState = null, pinchState = null;
+  let panState = null, pinchState = null, clickCandidate = null;
   const midOf = m => { const p = [...m.values()]; return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 }; };
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
@@ -531,13 +538,16 @@ async function renderTable(root, puzzleId, signal) {
     if (active.size === 1) {
       panState = { startX: e.clientX, startY: e.clientY, originX: panX, originY: panY };
       stage.classList.add("panning");
+      clickCandidate = { x: e.clientX, y: e.clientY };
     } else if (active.size === 2) {
       panState = null;
       pinchState = { lastDist: distOf(active), lastMid: midOf(active) };
+      clickCandidate = null;
     }
   }, { signal });
 
   stage.addEventListener("pointermove", e => {
+    if (clickCandidate && Math.hypot(e.clientX - clickCandidate.x, e.clientY - clickCandidate.y) > 4) clickCandidate = null;
     if (!active.has(e.pointerId)) return;
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 2) {
@@ -570,6 +580,8 @@ async function renderTable(root, puzzleId, signal) {
       panState = null; pinchState = null;
       stage.classList.remove("panning");
     }
+    if (clickCandidate && selected.size) setSelected([]);
+    clickCandidate = null;
   }
   stage.addEventListener("pointerup", endPointer, { signal });
   stage.addEventListener("pointercancel", endPointer, { signal });
@@ -615,34 +627,61 @@ async function renderTable(root, puzzleId, signal) {
     scheduleSave();
   }, { signal });
 
-  /* ── перетаскивание детали ── */
+  /* ── перетаскивание детали (одиночное или групповое — по текущему выделению) ── */
   function bindPieceDrag(el, piece) {
     let dragging = null;
+    let moved = false;
+    const key = `${piece.r},${piece.c}`;
+
     el.addEventListener("pointerdown", e => {
       if (piece.placed) return;
       e.stopPropagation(); // не даём фону начать панораму
       el.setPointerCapture(e.pointerId);
-      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, originX: piece.x, originY: piece.y };
-      el.classList.add("dragging");
+      moved = false;
+      if (!(selected.has(key) && selected.size > 1)) setSelected([key]);
+      const group = [...selected];
+      const origins = group.map(k => { const p = pieces.get(k); p.el.classList.add("dragging"); return [k, p.x, p.y]; });
+      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins };
     }, { signal });
 
     el.addEventListener("pointermove", e => {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
-      piece.x = dragging.originX + (e.clientX - dragging.startX) / zoom;
-      piece.y = dragging.originY + (e.clientY - dragging.startY) / zoom;
-      applyPieceTransform(piece);
+      const dx0 = e.clientX - dragging.startX, dy0 = e.clientY - dragging.startY;
+      if (!moved && Math.hypot(dx0, dy0) > 4) moved = true;
+      const dx = dx0 / zoom, dy = dy0 / zoom;
+      for (const [k, ox, oy] of dragging.origins) {
+        const p = pieces.get(k);
+        p.x = ox + dx; p.y = oy + dy;
+        applyPieceTransform(p);
+      }
     }, { signal });
 
     function finish(e) {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
+      const origins = dragging.origins;
       dragging = null;
-      el.classList.remove("dragging");
-      const dist = Math.hypot(piece.x - piece.target.x, piece.y - piece.target.y);
-      if (dist < CELL * 0.28) {
-        piece.x = piece.target.x; piece.y = piece.target.y; piece.placed = true;
-        applyPieceTransform(piece);
-        el.classList.add("placed", "just-snapped");
-        setTimeout(() => el.classList.remove("just-snapped"), 600);
+      for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
+      if (!moved) {
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        if (additive) {
+          const next = new Set(selected);
+          if (next.has(key)) next.delete(key); else next.add(key);
+          setSelected(next);
+        } else {
+          setSelected([key]);
+        }
+        return;
+      }
+      for (const [k] of origins) {
+        const p = pieces.get(k);
+        const dist = Math.hypot(p.x - p.target.x, p.y - p.target.y);
+        if (dist < CELL * 0.28) {
+          p.x = p.target.x; p.y = p.target.y; p.placed = true;
+          applyPieceTransform(p);
+          p.el.classList.add("placed", "just-snapped");
+          setTimeout(() => p.el.classList.remove("just-snapped"), 600);
+          selected.delete(k); p.el.classList.remove("selected");
+        }
       }
       scheduleSave();
     }
@@ -1144,7 +1183,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   }, { passive: false, signal });
 
   const active = new Map();
-  let panState = null, pinchState = null;
+  let panState = null, pinchState = null, clickCandidate = null;
   const midOf = m => { const p = [...m.values()]; return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 }; };
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
@@ -1159,13 +1198,16 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     if (active.size === 1) {
       panState = { startX: e.clientX, startY: e.clientY, originX: panX, originY: panY };
       stage.classList.add("panning");
+      clickCandidate = { x: e.clientX, y: e.clientY };
     } else if (active.size === 2) {
       panState = null;
       pinchState = { lastDist: distOf(active), lastMid: midOf(active) };
+      clickCandidate = null;
     }
   }, { signal });
 
   stage.addEventListener("pointermove", e => {
+    if (clickCandidate && Math.hypot(e.clientX - clickCandidate.x, e.clientY - clickCandidate.y) > 4) clickCandidate = null;
     if (!active.has(e.pointerId)) return;
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 2) {
@@ -1198,6 +1240,8 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       panState = null; pinchState = null;
       stage.classList.remove("panning");
     }
+    if (clickCandidate && selected.size) setSelected([]);
+    clickCandidate = null;
   }
   stage.addEventListener("pointerup", endPointer, { signal });
   stage.addEventListener("pointercancel", endPointer, { signal });
@@ -1288,43 +1332,83 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   /* ── перетаскивание детали: локально сразу, серверу — троттлингом ── */
   const draggingKeys = new Set(); // детали, которые СЕЙЧАС тащит локальный пользователь — resync их не трогает
   let pieces; // Map "r,c" -> piece, строится в buildBoard() по первому sync
+  let announced = false; // защита от повторного showWin() при нескольких sync подряд (троттлинг group)
 
-  function bindRoomPieceDrag(el, piece, sendMove, sendPlace) {
+  const selected = new Set(); // ключи "r,c" — только ещё не собранные детали
+  function setSelected(keys) {
+    selected.clear();
+    for (const k of keys) selected.add(k);
+    for (const [k, p] of pieces) p.el.classList.toggle("selected", selected.has(k));
+  }
+
+  function bindRoomPieceDrag(el, piece, sendMove, sendPlace, sendGroup) {
     let dragging = null;
+    let moved = false;
     const key = `${piece.r},${piece.c}`;
 
     el.addEventListener("pointerdown", e => {
       if (piece.placed) return;
       e.stopPropagation();
       el.setPointerCapture(e.pointerId);
-      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, originX: piece.x, originY: piece.y };
-      draggingKeys.add(key);
-      el.classList.add("dragging");
+      moved = false;
+      if (!(selected.has(key) && selected.size > 1)) setSelected([key]);
+      const group = [...selected];
+      const origins = group.map(k => {
+        const p = pieces.get(k);
+        p.el.classList.add("dragging");
+        draggingKeys.add(k);
+        return [k, p.x, p.y];
+      });
+      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins };
     }, { signal });
 
     el.addEventListener("pointermove", e => {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
-      piece.x = dragging.originX + (e.clientX - dragging.startX) / zoom;
-      piece.y = dragging.originY + (e.clientY - dragging.startY) / zoom;
-      applyPieceTransform(piece);
-      sendMove(piece);
+      const dx0 = e.clientX - dragging.startX, dy0 = e.clientY - dragging.startY;
+      if (!moved && Math.hypot(dx0, dy0) > 4) moved = true;
+      const dx = dx0 / zoom, dy = dy0 / zoom;
+      for (const [k, ox, oy] of dragging.origins) {
+        const p = pieces.get(k);
+        p.x = ox + dx; p.y = oy + dy;
+        applyPieceTransform(p);
+      }
+      if (dragging.origins.length > 1) sendGroup(); else sendMove(piece);
     }, { signal });
 
     function finish(e) {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
+      const origins = dragging.origins;
       dragging = null;
-      el.classList.remove("dragging");
-      const dist = Math.hypot(piece.x - piece.target.x, piece.y - piece.target.y);
-      if (dist < CELL * 0.28) {
-        piece.x = piece.target.x; piece.y = piece.target.y; piece.placed = true;
-        applyPieceTransform(piece);
-        el.classList.add("placed", "just-snapped");
-        setTimeout(() => el.classList.remove("just-snapped"), 600);
-        sendPlace(piece);
-      } else {
-        sendMove(piece);
+      for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
+      if (!moved) {
+        for (const [k] of origins) draggingKeys.delete(k);
+        const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+        if (additive) {
+          const next = new Set(selected);
+          if (next.has(key)) next.delete(key); else next.add(key);
+          setSelected(next);
+        } else {
+          setSelected([key]);
+        }
+        return;
       }
-      draggingKeys.delete(key);
+      let anySnapped = false;
+      for (const [k] of origins) {
+        const p = pieces.get(k);
+        const dist = Math.hypot(p.x - p.target.x, p.y - p.target.y);
+        if (dist < CELL * 0.28) {
+          p.x = p.target.x; p.y = p.target.y; p.placed = true;
+          applyPieceTransform(p);
+          p.el.classList.add("placed", "just-snapped");
+          setTimeout(() => p.el.classList.remove("just-snapped"), 600);
+          selected.delete(k); p.el.classList.remove("selected");
+          anySnapped = true;
+        }
+        draggingKeys.delete(k);
+      }
+      if (origins.length > 1) sendGroup();
+      else if (anySnapped) sendPlace(piece);
+      else sendMove(piece);
     }
     el.addEventListener("pointerup", finish, { signal });
     el.addEventListener("pointercancel", finish, { signal });
@@ -1357,6 +1441,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
 
     const sendMove = throttle(p => socket.send({ type: "move", r: p.r, c: p.c, x: p.x, y: p.y }), 70);
     const sendPlace = p => socket.send({ type: "place", r: p.r, c: p.c, x: p.x, y: p.y });
+    const sendGroup = throttle(() => {
+      const arr = [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: p.placed }));
+      socket.send({ type: "group", pieces: arr });
+    }, 70);
 
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
@@ -1366,7 +1454,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         applyPieceTransform(piece);
         if (piece.placed) el.classList.add("placed");
         world.appendChild(el);
-        bindRoomPieceDrag(el, piece, sendMove, sendPlace);
+        bindRoomPieceDrag(el, piece, sendMove, sendPlace, sendGroup);
       }
     }
     updateProgressLabel([...pieces.values()].filter(p => p.placed).length, rows * cols);
@@ -1384,6 +1472,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       if (msg.pieces) for (const p of msg.pieces) reconcilePiece(p.r, p.c, p.x, p.y, p.placed);
       updateProgressLabel(msg.piecesPlaced, msg.piecesTotal);
       updatePresence(msg.members);
+      if (msg.piecesPlaced >= msg.piecesTotal && !announced) { announced = true; showWin(); }
       return;
     }
     if (msg.type === "presence") return updatePresence(msg.members);
@@ -1393,7 +1482,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       const p = pieces.get(`${msg.r},${msg.c}`);
       if (p && p.el) { p.el.classList.add("just-snapped"); setTimeout(() => p.el.classList.remove("just-snapped"), 600); }
       updateProgressLabel(msg.piecesPlaced, msg.piecesTotal);
-      if (msg.completed) showWin();
+      if (msg.completed && !announced) { announced = true; showWin(); }
     }
   }
 

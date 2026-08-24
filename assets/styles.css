@@ -156,6 +156,15 @@ a{color:inherit}
   100%{ filter:drop-shadow(0 1px 1px rgba(0,0,0,.18)) drop-shadow(0 0 0 transparent) }
 }
 .piece.just-snapped{animation:piece-snap .55s var(--ease-emph-dec)}
+/* Обводка через drop-shadow, не box-shadow: деталь — фигурная SVG,
+   обычная тень легла бы прямоугольником по bounding box, а drop-shadow
+   идёт по альфа-каналу самой картинки и повторяет форму детали. */
+.piece.selected{
+  filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 4px var(--flame-tip)) drop-shadow(0 0 4px var(--flame-tip));
+}
+.piece.selected.dragging{
+  filter:drop-shadow(0 6px 14px rgba(0,0,0,.35)) drop-shadow(0 0 4px var(--flame-tip)) drop-shadow(0 0 4px var(--flame-tip));
+}
 
 .zoom-controls{
   position:absolute;right:.9rem;bottom:.9rem;display:flex;flex-direction:column;gap:.4rem;
