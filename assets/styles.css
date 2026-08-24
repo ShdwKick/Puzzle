@@ -5,9 +5,9 @@
    сирень/малиновый) или холодное сине-зелёное (бирюза у поездок) — уверенный
    жёлто-зелёный не путается ни с одним из них даже на маленьком фавиконе.
    Совпадение кстати: тот же зелёный уже нужен был интерфейсу как цвет
-   «совпадения» при сборке — деталь на своём месте вспыхивает этим оттенком
-   (см. .piece.placed ниже), так что вещество и обратная связь сборки говорят
-   одним цветом, а не двумя разными зелёными вперемешку. */
+   «совпадения» при сборке — деталь вспыхивает этим оттенком, когда стыкуется
+   с соседом (см. .piece.just-snapped ниже), так что вещество и обратная
+   связь сборки говорят одним цветом, а не двумя разными зелёными вперемешку. */
 :root{
   --flame-base:#3f6212;
   --flame-tip:#7ddf3c;
@@ -29,10 +29,14 @@ html{background:var(--dawn-1)}
 @media (prefers-color-scheme: dark){ html:not([data-theme="light"]){background:var(--night-1)} }
 html[data-theme="dark"]{background:var(--night-1)}
 body{background:transparent;font-family:var(--md-font);color:var(--md-sys-color-on-surface);overflow-x:hidden}
+body.modal-open{overflow:hidden}
 
 button{font:inherit}
 img{display:block;max-width:100%}
 a{color:inherit}
+
+.icon{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.muted{color:var(--md-sys-color-on-surface-variant);font-size:.85rem}
 
 /* ===================== APPBAR ===================== */
 .appbar{position:sticky;top:0;z-index:10;backdrop-filter:blur(10px);
@@ -43,6 +47,44 @@ a{color:inherit}
 .auth-area{display:flex;align-items:center;gap:.6rem}
 .auth-user{display:flex;align-items:center;gap:.5rem;font-size:.92rem}
 .auth-user-name{font-weight:600}
+
+/* Кнопка темы (#themeBtn) и модалка аккаунта — как в остальных сервисах
+   BurningHouse (Movies и т.д.), дословно оттуда же (иконка-кружок,
+   центральная модалка вместо дропдауна). */
+.icon-btn{
+  position:relative;width:44px;height:44px;flex:none;padding:0;border-radius:var(--md-sys-shape-corner-full);
+  border:0;background:transparent;color:var(--md-sys-color-on-surface-variant);
+  cursor:pointer;display:grid;place-items:center;overflow:hidden;
+}
+.icon-btn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .2s}
+.icon-btn:hover::after{opacity:.08}
+.icon-btn:active::after{opacity:.12}
+.icon-btn.tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+
+.menu-wrap{position:relative;flex:none}
+.menu-user{
+  padding:.5em .8em .6em;border-bottom:1px solid var(--md-sys-color-outline-variant);
+  margin-bottom:.3rem;display:flex;flex-direction:column;gap:.1rem;
+}
+.menu-user b{font-weight:650}
+#accountModalBackdrop .menu-user{padding:0 0 .2rem;margin-bottom:0;border-bottom:0}
+#accountModalBackdrop .btn{margin-top:.5rem}
+
+/* ===================== МОДАЛКИ ===================== */
+.modal-backdrop{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.5);
+  display:flex;align-items:center;justify-content:center;padding:1.2rem}
+.modal-backdrop.hidden{display:none}
+.modal{
+  background:var(--md-sys-color-surface-container-low);
+  border-radius:var(--md-sys-shape-corner-xl);
+  width:100%;max-width:30rem;max-height:85vh;overflow:auto;
+  padding:1.1rem 1.3rem 1.3rem;box-shadow:var(--e2);
+  scrollbar-width:thin;scrollbar-color:var(--md-sys-color-outline-variant) transparent;
+}
+.modal-head{display:flex;justify-content:space-between;align-items:center;gap:.8rem}
+.modal-head h2{margin:0}
+.bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:1rem}
+.bar .text-input{flex:1;width:auto;min-width:0}
 
 /* ===================== BUTTONS ===================== */
 .btn{
@@ -60,6 +102,9 @@ a{color:inherit}
 .btn.text{background:transparent;color:var(--md-sys-color-primary)}
 .btn.sm{padding:.42em 1em;font-size:.84rem}
 .btn.icon{padding:.5em;border-radius:50%}
+.btn.full{width:100%}
+.btn.danger{color:var(--md-sys-color-error)}
+.btn.outlined.danger{border-color:color-mix(in srgb, var(--md-sys-color-error) 45%, var(--md-sys-color-outline))}
 .btn:disabled{opacity:.5;cursor:default;pointer-events:none}
 
 /* ===================== CONTENT ===================== */
@@ -143,12 +188,13 @@ a{color:inherit}
 }
 .piece svg{display:block;width:100%;height:100%}
 .piece.dragging{cursor:grabbing;filter:drop-shadow(0 6px 14px rgba(0,0,0,.35));z-index:1000}
-/* Собранная деталь больше не перетаскивается — снимаем pointer-events совсем,
-   а не только игнорируем pointerdown в JS: иначе её невидимый bounding box
-   (квадратный, шире самой фигурной детали — см. «Хит-тест» в плане) закрывал
-   бы жест панорамы фона под уже собранной частью пазла. */
-.piece.placed{cursor:default;filter:drop-shadow(0 1px 1px rgba(0,0,0,.18));pointer-events:none}
-/* Деталь встала на место — вспышка в цвет пламени сервиса, а не абстрактный
+/* Механика «связей»: у детали больше нет фиксированного места, поэтому
+   ничем не блокируем драг — даже полностью собранную картинку можно взять
+   за любую деталь и подвинуть целиком (класс .piece.placed сюда не пишется
+   больше нигде в app.js — состояние "собрано" целиком производное от
+   buildClusters, не хранится на детали). */
+/* Деталь встала на место (образовалось новое ребро кластера) — вспышка в
+   цвет пламени сервиса, а не абстрактный
    "успех"-зелёный: связывает подтверждение сборки с веществом на фоне. */
 @keyframes piece-snap{
   0%  { filter:drop-shadow(0 1px 1px rgba(0,0,0,.18)) drop-shadow(0 0 0 transparent) }
@@ -220,16 +266,38 @@ a{color:inherit}
   padding:.6em .9em;font:inherit;background:var(--md-sys-color-surface-container-lowest);
   color:var(--md-sys-color-on-surface);
 }
-.create-room-form{display:flex;gap:.7rem;flex-wrap:wrap;margin-bottom:1.4rem}
-.create-room-form .text-input{flex:1;min-width:14rem}
+
+/* Создание/присоединение — раньше инлайн-форма, теперь две широкие кнопки
+   под списком, каждая открывает свою модалку (см. #createRoomModalBackdrop/
+   #joinRoomModalBackdrop в index.html и bindModal в app.js), дословно как
+   .room-actions-row в Movies. */
+.room-actions-row{display:flex;gap:.8rem;margin:1.2rem 0}
+.room-actions-row .btn{flex:1}
+@media(max-width:26rem){
+  .room-actions-row{flex-direction:column}
+  .room-actions-row .btn{flex:none;height:52px;font-size:15px}
+}
+
+/* Пейджер под списком комнат (Стр. N из M) — прячется целиком, если комнат
+   меньше ROOMS_PAGE_SIZE (см. renderRoomsList в app.js). */
+.pager{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.8rem;margin-top:1rem}
 
 .room-list{display:grid;gap:1rem;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr))}
 .room-card{
+  position:relative;overflow:hidden;
   background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
   padding:1rem 1.1rem;box-shadow:var(--e1);cursor:pointer;display:flex;flex-direction:column;gap:.35rem;
   transition:box-shadow .15s var(--ease-std),transform .15s var(--ease-std);
+  animation:rise .4s var(--ease-emph-dec) both;
 }
 .room-card:hover{box-shadow:var(--e2);transform:translateY(-1px)}
+/* Акцентная полоска слева в цвет пламени сервиса — тот же приём, что у
+   карточек комнат в Movies (там пламя фиолетовое, тут — зелёное). */
+.room-card::before{
+  content:"";position:absolute;left:0;top:0;bottom:0;width:3px;
+  background:linear-gradient(to top,var(--flame-base),var(--flame-tip));opacity:.75;
+}
+@keyframes rise{from{opacity:0;transform:translateY(10px)}}
 .room-card-title{font-size:1.05rem;font-weight:650}
 .room-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant)}
 
@@ -300,4 +368,6 @@ a{color:inherit}
 @media (max-width: 30rem){
   .table-toolbar{padding:.6rem .8rem}
   .table-progress{display:none}
+  .toolbar-btn-label{display:none}
+  .table-toolbar .toolbar-btn{padding:.5em;border-radius:50%;width:2.4rem;height:2.4rem}
 }

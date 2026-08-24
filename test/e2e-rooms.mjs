@@ -95,8 +95,16 @@ r = await asJson(tokenA, `/rooms/${roomId}/sessions`, { method: "POST", body: { 
 ok("сеанс стартовал", r.status === 200, JSON.stringify(r.body));
 const sessionId = r.body.id, piecesTotal = r.body.piecesTotal;
 
+// До 5 параллельных активных сборок в комнате (временное послабление, см.
+// план п.3) — тот же puzzleId на разные сеансы допустим, схема этого не
+// запрещает. Стартуем ещё 4 (итого 5 активных), все должны создаться
+// успешно, 6-й должен быть отбит лимитом.
+for (let i = 2; i <= 5; i++) {
+  r = await asJson(tokenA, `/rooms/${roomId}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+  ok(`сеанс №${i} стартовал`, r.status === 200, JSON.stringify(r.body));
+}
 r = await asJson(tokenA, `/rooms/${roomId}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
-ok("повторный старт отбит 409", r.status === 409, JSON.stringify(r.body));
+ok("6-й сеанс отбит лимитом", r.status === 409 && r.body.error === "room session limit reached", JSON.stringify(r.body));
 
 const wsUrl = token => `ws://localhost:${PUZZLE_PORT}/ws/rooms/${roomId}/sessions/${sessionId}?token=${encodeURIComponent(token)}`;
 
@@ -135,12 +143,29 @@ const wsB = new WebSocket(wsUrl(tokenB));
 await waitOpen(wsB);
 await waitMessage(wsB, m => m.type === "sync");
 
-const pieces = [];
-for (let rr = 0; rr < 4; rr++) for (let cc = 0; cc < 3; cc++) pieces.push({ r: rr, c: cc, x: 0, y: 0, placed: false });
+// Механика «связей»: у детали нет фиксированного места, прогресс = размер
+// наибольшего связного кластера (см. assets/puzzle-clusters.js, CELL=100
+// там же и в server.js). Тип "place" убран из протокола целиком — клиент
+// стыкует детали только через геометрию, сервер отдельно её пересчитывает.
+const ROWS = 4, COLS = 3, PUZZLE_CELL = 100; // «hills» — 4×3, см. PUZZLE_MANIFEST в server.js
+// Шаг 500, не CELL=100 — заведомо несмежная раскладка: каждая деталь сама
+// себе кластер размера 1, largest === 1 независимо от общего числа деталей.
+function scatteredPieces() {
+  const arr = [];
+  for (let rr = 0; rr < ROWS; rr++) for (let cc = 0; cc < COLS; cc++) arr.push({ r: rr, c: cc, x: cc * 500, y: rr * 500, placed: false });
+  return arr;
+}
+function gridAlignedPieces() {
+  const arr = [];
+  for (let rr = 0; rr < ROWS; rr++) for (let cc = 0; cc < COLS; cc++) arr.push({ r: rr, c: cc, x: cc * PUZZLE_CELL, y: rr * PUZZLE_CELL, placed: false });
+  return arr;
+}
+
 const bSyncPromise = waitMessage(wsB, m => m.type === "sync" && m.pieces);
-wsA.send(JSON.stringify({ type: "init", pieces }));
+wsA.send(JSON.stringify({ type: "init", pieces: scatteredPieces() }));
 const bSync = await bSyncPromise;
 ok("B получил каноническую раскладку от A", Array.isArray(bSync.pieces) && bSync.pieces.length === piecesTotal);
+ok("несмежная раскладка после init — piecesPlaced===1 (каждая деталь свой кластер)", bSync.piecesPlaced === 1, JSON.stringify({ piecesPlaced: bSync.piecesPlaced }));
 
 let echoOnA = false;
 wsA.addEventListener("message", function guard(e) { if (JSON.parse(e.data).type === "move") echoOnA = true; });
@@ -151,13 +176,22 @@ ok("B увидел движение детали", move.x === 123 && move.y === 
 await sleep(200);
 ok("A не получил эхо своего же move", !echoOnA);
 
-let lastPlace;
-for (const p of pieces) {
-  const placePromise = waitMessage(wsB, m => m.type === "place" && m.r === p.r && m.c === p.c);
-  wsA.send(JSON.stringify({ type: "place", r: p.r, c: p.c, x: 1, y: 1 }));
-  lastPlace = await placePromise;
-}
-ok("последняя деталь помечена completed", lastPlace.completed === true && lastPlace.piecesPlaced === piecesTotal);
+// Первый "group" стыкует ровно пару (0,0)+(0,1) на идеальную сетку —
+// остальные 10 деталей остаются несмежными (та же раскладка шагом 500).
+const pairPieces = scatteredPieces();
+Object.assign(pairPieces.find(p => p.r === 0 && p.c === 0), { x: 0, y: 0 });
+Object.assign(pairPieces.find(p => p.r === 0 && p.c === 1), { x: PUZZLE_CELL, y: 0 });
+const pairSyncPromise = waitMessage(wsB, m => m.type === "sync" && m.pieces);
+wsA.send(JSON.stringify({ type: "group", pieces: pairPieces }));
+const pairSync = await pairSyncPromise;
+ok("group стыкует пару деталей — piecesPlaced===2", pairSync.piecesPlaced === 2, JSON.stringify({ piecesPlaced: pairSync.piecesPlaced }));
+
+// Второй "group" достраивает всю раскладку на идеальную сетку — весь пазл
+// становится одним кластером, сеанс должен немедленно зафиксироваться завершённым.
+const fullSyncPromise = waitMessage(wsB, m => m.type === "sync" && m.pieces);
+wsA.send(JSON.stringify({ type: "group", pieces: gridAlignedPieces() }));
+const fullSync = await fullSyncPromise;
+ok("второй group достраивает всю раскладку — piecesPlaced===piecesTotal", fullSync.piecesPlaced === piecesTotal, JSON.stringify({ piecesPlaced: fullSync.piecesPlaced, piecesTotal }));
 
 await sleep(300);
 r = await asJson(tokenA, `/rooms/${roomId}/sessions/${sessionId}`);

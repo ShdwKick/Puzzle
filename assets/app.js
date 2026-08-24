@@ -11,8 +11,52 @@ let puzzlesCache = null;
 let currentRouteAbort = null;
 
 const $ = (root, sel) => root.querySelector(sel);
-const CELL = 100;          // размер ячейки сетки в «мировых» пикселях (масштаб — зумом)
+const CELL = 100;          // размер ячейки сетки в «мировых» пикселях (масштаб — зумом), должно совпадать с CELL в server.js
 const PAD_FACTOR = 0.32;   // тот же коэффициент, что зашит в buildPiecePath — держим один здесь и там
+const SNAP_TOLERANCE = window.PuzzleClusters.tolerance(CELL); // допуск стыковки — общий модуль с сервером
+const MAX_ACTIVE_SESSIONS_PER_ROOM = 5; // только для текста ошибки лимита — сервер решает сам, см. playVariant
+
+/* ───────────────────────── тема приложения ─────────────────────────
+ * Общий переключатель светлой/тёмной темы (data-theme на <html>) — тот же
+ * приём, что и во всех остальных сервисах BurningHouse (Movies/Trip/
+ * Финансы/Brain). НЕ путать с #boardThemeBtn/.light-board на столе ниже —
+ * та кнопка переключает ТОЛЬКО фон игрового стола, а не тему всего
+ * приложения; обе кнопки остаются, это разные вещи. Puzzle's $ — по
+ * селектору внутри корня (см. выше), для элементов шапки, которые вне
+ * #app и живут в DOM всегда, используем document.getElementById напрямую. */
+const SUN = '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+const MOON = '<svg class="icon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem("puzzle.theme", theme);
+  document.getElementById("themeBtn").innerHTML = theme === "dark" ? SUN : MOON;
+}
+document.getElementById("themeBtn").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+applyTheme(localStorage.getItem("puzzle.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
+
+/* ───────────────────────── модалки: общий каркас ─────────────────────────
+ * Дословно как в Movies (не завязано на специфику сервиса) — подложка на
+ * весь экран + карточка по центру, закрытие по крестику/клику по подложке. */
+let openModalId = null; // id открытого .modal-backdrop
+function openModal(backdropId) {
+  document.getElementById(backdropId).classList.remove("hidden");
+  document.body.classList.add("modal-open");
+  openModalId = backdropId;
+}
+function closeModal(backdropId) {
+  const b = document.getElementById(backdropId);
+  if (!b || b.classList.contains("hidden")) return;
+  b.classList.add("hidden");
+  document.body.classList.remove("modal-open");
+  if (openModalId === backdropId) openModalId = null;
+}
+function bindModal(backdropId, openBtnId, closeBtnId) {
+  if (openBtnId) document.getElementById(openBtnId).onclick = () => openModal(backdropId);
+  if (closeBtnId) document.getElementById(closeBtnId).onclick = () => closeModal(backdropId);
+  document.getElementById(backdropId).addEventListener("click", e => {
+    if (e.target === document.getElementById(backdropId)) closeModal(backdropId);
+  });
+}
 
 /* ───────────────────────── хранилище гостя ───────────────────────── */
 const localKey = id => `puzzle_progress_${id}`;
@@ -35,7 +79,7 @@ async function getPuzzles() {
 // мимо ярлыка. variants всегда отсортирован по возрастанию и всегда
 // получен из PIECE_PRESETS в этом порядке, так что порядковый номер
 // надёжнее самого числа деталей.
-const DIFFICULTY_LABELS = ["Легко", "Средне", "Сложно", "Эксперт"];
+const DIFFICULTY_LABELS = ["Легко", "Средне", "Сложно", "Эксперт", "Мастер", "Легенда"];
 
 /** Сводит отдельные строки-варианты одной загрузки (общий imageUrl +
  *  владелец) в одну карточку с массивом .variants, отсортированным от
@@ -89,7 +133,7 @@ async function startRoomSession(roomId, puzzleId) {
   });
   const data = await res.json();
   if (res.status === 409 && data.session) return data.session.id;
-  if (!res.ok) throw new Error("start session failed");
+  if (!res.ok) throw new Error(data.error || "start session failed");
   return data.id;
 }
 
@@ -150,34 +194,36 @@ async function progressFor(p) {
   return localProgress(p.id);
 }
 
-/* ───────────────────────── шапка: вход/выход ───────────────────────── */
+/* ───────────────────────── шапка: аккаунт ─────────────────────────
+ * Модалка #accountModalBackdrop вместо голого "имя + Выйти" — см. index.html
+ * и openModal/closeModal/bindModal выше. Гость видит #headerLoginBtn вместо
+ * иконки-человечка (#accountMenuWrap) — видимость переключает эта функция. */
 function renderAuthArea() {
-  const el = document.getElementById("authArea");
-  el.innerHTML = "";
-  if (auth.isAuthenticated()) {
+  const authed = auth.isAuthenticated();
+  document.getElementById("headerLoginBtn").hidden = authed;
+  document.getElementById("accountMenuWrap").hidden = !authed;
+  if (authed) {
     const user = auth.getUser();
     const label = (user && (user.name || user.username)) || "аккаунт";
-    const wrap = document.createElement("span");
-    wrap.className = "auth-user";
-    const name = document.createElement("span");
-    name.className = "auth-user-name";
-    name.textContent = label;
-    const logout = document.createElement("button");
-    logout.className = "btn text sm";
-    logout.type = "button";
-    logout.textContent = "Выйти";
-    logout.addEventListener("click", () => auth.logout());
-    wrap.appendChild(name);
-    el.append(wrap, logout);
-  } else {
-    const login = document.createElement("button");
-    login.className = "btn tonal sm";
-    login.type = "button";
-    login.textContent = "Войти";
-    login.addEventListener("click", () => auth.login());
-    el.appendChild(login);
+    document.getElementById("accountBtn").title = "Аккаунт — " + label;
   }
 }
+document.getElementById("headerLoginBtn").addEventListener("click", () => auth.login());
+document.getElementById("accountBtn").addEventListener("click", () => {
+  const user = auth.getUser();
+  document.getElementById("accountModalName").textContent = (user && (user.name || user.username)) || "аккаунт";
+  document.getElementById("accountModalMeta").textContent = (user && user.email) || "";
+  openModal("accountModalBackdrop");
+});
+bindModal("accountModalBackdrop", null, "accountModalClose");
+document.getElementById("accountModalManage").addEventListener("click", () => {
+  closeModal("accountModalBackdrop");
+  window.open(auth.accountUrl(), "_blank", "noopener");
+});
+document.getElementById("accountModalLogout").addEventListener("click", () => {
+  closeModal("accountModalBackdrop");
+  auth.logout();
+});
 
 /* ───────────────────────── библиотека ───────────────────────── */
 function buildCard(p, opts = {}) {
@@ -328,6 +374,77 @@ function shuffleInPlace(arr) {
   }
 }
 
+/* ───────────────────────── стол: кластеры (связи вместо фиксированного места) ─────────────────────────
+ * Кластер нигде не хранится явно — выводится заново из raw {r,c,x,y} через
+ * assets/puzzle-clusters.js (общий модуль с сервером) на каждое значимое
+ * событие. Прогресс = размер наибольшего кластера, не число "своих мест". */
+
+/** Прогресс = размер наибольшего связного кластера — заменяет старое
+ *  [...pieces.values()].filter(p=>p.placed).length. */
+function computePiecesPlaced(pieces, cell, tol) {
+  return window.PuzzleClusters.largestClusterSize(window.PuzzleClusters.buildClusters(pieces.values(), cell, tol).members);
+}
+
+function edgeId(a, b) { return a < b ? `${a}|${b}` : `${b}|${a}`; }
+function clusterEdgeIds(edges) {
+  const set = new Set();
+  for (const [a, b] of edges) set.add(edgeId(a, b));
+  return set;
+}
+/** Вспышка "just-snapped" на КАЖДОЕ новое ребро кластерного графа — сравнение
+ *  с набором id рёбер от прошлого пересчёта (prevIds), не поштучная проверка
+ *  расстояния до target (target у детали больше нет). Возвращает новый набор
+ *  id (для следующего сравнения) и число добавившихся рёбер — по нему
+ *  bindRoomPieceDrag решает, слать move или group (см. план). */
+function flashClusterEdges(pieces, prevIds, edges) {
+  const nextIds = clusterEdgeIds(edges);
+  let newCount = 0;
+  for (const [a, b] of edges) {
+    const id = edgeId(a, b);
+    if (prevIds.has(id)) continue;
+    newCount++;
+    for (const k of [a, b]) {
+      const p = pieces.get(k);
+      if (!p || !p.el) continue;
+      p.el.classList.add("just-snapped");
+      setTimeout(() => p.el.classList.remove("just-snapped"), 600);
+    }
+  }
+  return { nextIds, newCount };
+}
+
+/** «Перемешать» с учётом кластеров: наибольший уже собранный кластер (если
+ *  в нём больше одной детали — это прогресс) не трогаем, остальные кластеры
+ *  раскидываем как жёсткие блоки — внутренние относительные смещения
+ *  сохраняются, меняется только позиция опорной детали (минимальная (r,c)
+ *  в кластере). Возвращает Map "r,c" -> {x,y} новых позиций или null, если
+ *  мешать нечего (всё уже в одном кластере). */
+function planShuffle(pieces, rows, cols, cell, pad, tol) {
+  const { members } = window.PuzzleClusters.buildClusters(pieces.values(), cell, tol);
+  let mainId = null, mainSize = 0;
+  for (const [id, keys] of members) if (keys.size > mainSize) { mainSize = keys.size; mainId = id; }
+  const preserveMain = mainSize > 1;
+  const toScatter = [...members.entries()].filter(([id]) => !(preserveMain && id === mainId));
+  if (!toScatter.length) return null;
+
+  const fresh = scatterLayout(rows, cols, cell, pad);
+  let cellIdx = 0;
+  const next = new Map();
+  for (const [, keys] of toScatter) {
+    const arr = [...keys];
+    const ref = arr.reduce((best, k) => {
+      const [br, bc] = best.split(",").map(Number), [kr, kc] = k.split(",").map(Number);
+      return (kr < br || (kr === br && kc < bc)) ? k : best;
+    });
+    const anchor = fresh.cells[cellIdx];
+    cellIdx = Math.min(cellIdx + arr.length, fresh.cells.length - 1);
+    const refPiece = pieces.get(ref);
+    const dx = anchor.x - refPiece.x, dy = anchor.y - refPiece.y;
+    for (const k of arr) { const p = pieces.get(k); next.set(k, { x: p.x + dx, y: p.y + dy }); }
+  }
+  return next;
+}
+
 /** Один <div class="piece"> со своим <svg viewBox="0 0 size size">, clipPath и <image>,
  *  все детали одного пазла ссылаются на один и тот же URL картинки. */
 function createPieceEl(puzzleId, r, c, rows, cols, cell, pad, edges, imageUrl, boardW, boardH) {
@@ -396,9 +513,15 @@ async function renderTable(root, puzzleId, signal) {
         <a class="btn text sm" href="#/">← Библиотека</a>
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
-        <button class="btn outlined sm" id="shuffleBtn" type="button">Перемешать</button>
-        <button class="btn outlined sm" id="previewBtn" type="button">Показать картинку</button>
-        <button class="btn outlined sm" id="boardThemeBtn" type="button">Светлый фон</button>
+        <button class="btn outlined sm toolbar-btn" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
+          <span class="toolbar-btn-icon" aria-hidden="true">🔀</span><span class="toolbar-btn-label">Перемешать</span>
+        </button>
+        <button class="btn outlined sm toolbar-btn" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
+          <span class="toolbar-btn-icon" aria-hidden="true">🖼</span><span class="toolbar-btn-label">Показать картинку</span>
+        </button>
+        <button class="btn outlined sm toolbar-btn" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
+          <span class="toolbar-btn-icon" aria-hidden="true">☀</span><span class="toolbar-btn-label">Светлый фон</span>
+        </button>
         <span class="table-progress" id="tableProgress"></span>
       </div>
       <div class="table-stage" id="stage">
@@ -461,21 +584,22 @@ async function renderTable(root, puzzleId, signal) {
   let scatterIdx = 0;
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const target = { x: BOARD_X + c * CELL - pad, y: BOARD_Y + r * CELL - pad };
       const savedPiece = saved && Array.isArray(saved.pieces) && saved.pieces.find(pc => pc.r === r && pc.c === c);
-      let x, y, placed;
-      if (savedPiece) { x = savedPiece.x; y = savedPiece.y; placed = !!savedPiece.placed; }
-      else { const cell = scatter.cells[scatterIdx++]; x = cell.x; y = cell.y; placed = false; }
-      pieces.set(`${r},${c}`, { r, c, x, y, placed, target });
+      let x, y;
+      if (savedPiece) { x = savedPiece.x; y = savedPiece.y; }
+      else { const cell = scatter.cells[scatterIdx++]; x = cell.x; y = cell.y; }
+      pieces.set(`${r},${c}`, { r, c, x, y });
     }
   }
 
-  const selected = new Set(); // ключи "r,c" — только ещё не собранные детали
+  const selected = new Set(); // ключи "r,c" — текущее ручное выделение (клик/shift-клик)
   function setSelected(keys) {
     selected.clear();
     for (const k of keys) selected.add(k);
     for (const [k, p] of pieces) p.el.classList.toggle("selected", selected.has(k));
   }
+
+  let lastClusterEdgeIds = new Set(); // "r,c|r,c" — вспышка только на НОВЫХ стыковках
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -483,11 +607,11 @@ async function renderTable(root, puzzleId, signal) {
       const el = createPieceEl(puzzle.id, r, c, rows, cols, CELL, pad, edges, puzzle.imageUrl, boardW, boardH);
       piece.el = el;
       applyPieceTransform(piece);
-      if (piece.placed) el.classList.add("placed");
       world.appendChild(el);
       bindPieceDrag(el, piece);
     }
   }
+  lastClusterEdgeIds = clusterEdgeIds(window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE).edges);
 
   /* ── zoom/pan мирового контейнера ── */
   let zoom = 1, panX = 0, panY = 0;
@@ -613,35 +737,35 @@ async function renderTable(root, puzzleId, signal) {
   }, { signal });
 
   $(root, "#shuffleBtn").addEventListener("click", () => {
-    // Уже правильно собранные детали не трогаем — «встряхнуть оставшуюся
-    // кучу», а не собрать заново с нуля. Риска потерять прогресс нет,
-    // подтверждение (confirm) не нужно.
-    const unplaced = [...pieces.values()].filter(p => !p.placed);
-    if (!unplaced.length) return; // всё уже собрано — мешать нечего
-    const fresh = scatterLayout(rows, cols, CELL, pad);
-    unplaced.forEach((piece, i) => {
-      const cell = fresh.cells[i];
-      piece.x = cell.x; piece.y = cell.y;
-      applyPieceTransform(piece);
-    });
+    // Уже состыкованный наибольший кластер не трогаем — «встряхнуть
+    // оставшуюся кучу», а не собрать заново с нуля. Риска потерять прогресс
+    // нет, подтверждение (confirm) не нужно.
+    const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE);
+    if (!next) return; // всё уже в одном кластере — мешать нечего
+    for (const [k, pos] of next) {
+      const p = pieces.get(k);
+      p.x = pos.x; p.y = pos.y;
+      applyPieceTransform(p);
+    }
     scheduleSave();
   }, { signal });
 
-  /* ── перетаскивание детали (одиночное или групповое — по текущему выделению) ── */
+  /* ── перетаскивание детали: группа = объединение кластеров текущего выделения ── */
   function bindPieceDrag(el, piece) {
     let dragging = null;
     let moved = false;
     const key = `${piece.r},${piece.c}`;
 
     el.addEventListener("pointerdown", e => {
-      if (piece.placed) return;
       e.stopPropagation(); // не даём фону начать панораму
       el.setPointerCapture(e.pointerId);
       moved = false;
       if (!(selected.has(key) && selected.size > 1)) setSelected([key]);
-      const group = [...selected];
-      const origins = group.map(k => { const p = pieces.get(k); p.el.classList.add("dragging"); return [k, p.x, p.y]; });
-      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins };
+      const { clusterOf, members } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const groupSet = new Set();
+      for (const k of selected) for (const m of members.get(clusterOf.get(k))) groupSet.add(m);
+      const origins = [...groupSet].map(k => { const p = pieces.get(k); p.el.classList.add("dragging"); return [k, p.x, p.y]; });
+      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins, draggingKeys: groupSet };
     }, { signal });
 
     el.addEventListener("pointermove", e => {
@@ -658,7 +782,7 @@ async function renderTable(root, puzzleId, signal) {
 
     function finish(e) {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
-      const origins = dragging.origins;
+      const { origins, draggingKeys } = dragging;
       dragging = null;
       for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
       if (!moved) {
@@ -672,17 +796,13 @@ async function renderTable(root, puzzleId, signal) {
         }
         return;
       }
-      for (const [k] of origins) {
-        const p = pieces.get(k);
-        const dist = Math.hypot(p.x - p.target.x, p.y - p.target.y);
-        if (dist < CELL * 0.28) {
-          p.x = p.target.x; p.y = p.target.y; p.placed = true;
-          applyPieceTransform(p);
-          p.el.classList.add("placed", "just-snapped");
-          setTimeout(() => p.el.classList.remove("just-snapped"), 600);
-          selected.delete(k); p.el.classList.remove("selected");
-        }
-      }
+      window.PuzzleClusters.stitchGroup(pieces, draggingKeys, CELL, SNAP_TOLERANCE);
+      for (const k of draggingKeys) applyPieceTransform(pieces.get(k));
+      const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const { nextIds } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
+      lastClusterEdgeIds = nextIds;
+      updateProgressLabel(window.PuzzleClusters.largestClusterSize(members), rows * cols);
+      setSelected([]);
       scheduleSave();
     }
     el.addEventListener("pointerup", finish, { signal });
@@ -704,8 +824,10 @@ async function renderTable(root, puzzleId, signal) {
   }
   async function saveProgress() {
     const total = rows * cols;
-    const arr = [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: p.placed }));
-    const placed = arr.filter(p => p.placed).length;
+    // placed:false — wire-формат остаётся для совместимости со старой БД,
+    // но клиент нигде не читает это поле обратно, только пишет заглушку.
+    const arr = [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: false }));
+    const placed = computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE);
     updateProgressLabel(placed, total);
     const payload = { pieces: arr, piecesPlaced: placed, piecesTotal: total };
 
@@ -726,7 +848,7 @@ async function renderTable(root, puzzleId, signal) {
       if (completedAt && !announced) { announced = true; showWin(); }
     }
   }
-  updateProgressLabel([...pieces.values()].filter(p => p.placed).length, rows * cols);
+  updateProgressLabel(computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE), rows * cols);
   if (announced) {
     // Уже был собран раньше (пришли на готовый пазл заново) — витрину «Готово»
     // не выскакиваем сразу поверх стола, достаточно бейджа в тулбаре/библиотеке.
@@ -831,17 +953,71 @@ function fmtDate(ts) {
   catch { return ""; }
 }
 
+/** Русское склонение по числу — дословно как в Movies (plural). */
+function plural(n, one, few, many) {
+  const a = Math.abs(n) % 100, b = a % 10;
+  if (a > 10 && a < 20) return many;
+  if (b > 1 && b < 5) return few;
+  return b === 1 ? one : many;
+}
+
+const ROOMS_PAGE_SIZE = 5;
+
+// Модалки создания/присоединения — статическая разметка в index.html (вне
+// #app, как и accountModalBackdrop выше, живёт постоянно) — привязываем
+// один раз здесь; кнопки, которые их ОТКРЫВАЮТ (#createRoomOpenBtn/
+// #joinRoomOpenBtn), рендерятся заново при каждом заходе на #/rooms — их
+// обработчики вешаются внутри renderRoomsList со своим { signal }.
+bindModal("createRoomModalBackdrop", null, "createRoomModalClose");
+bindModal("joinRoomModalBackdrop", null, "joinRoomModalClose");
+document.getElementById("createRoomBtn").addEventListener("click", async () => {
+  const input = document.getElementById("newRoomTitle");
+  const title = input.value.trim();
+  if (!title) return;
+  try {
+    const res = await auth.fetch("/api/rooms", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }),
+    });
+    if (!res.ok) throw new Error("create room failed");
+    const room = await res.json();
+    input.value = "";
+    closeModal("createRoomModalBackdrop");
+    location.hash = `#/room/${encodeURIComponent(room.id)}`;
+  } catch { /* останемся на месте, поле не очистится — можно повторить */ }
+});
+document.getElementById("newRoomTitle").addEventListener("keydown", e => {
+  if (e.key === "Enter") document.getElementById("createRoomBtn").click();
+});
+function goToRoomCode(raw) {
+  const code = raw.trim().toUpperCase();
+  if (!code) return;
+  closeModal("joinRoomModalBackdrop");
+  // Переиспользует уже существующий маршрут/экран (см. renderRoomJoin ниже).
+  location.hash = `#/rooms/join/${encodeURIComponent(code)}`;
+}
+document.getElementById("joinCodeBtn").addEventListener("click", () => {
+  goToRoomCode(document.getElementById("joinCodeInput").value);
+});
+document.getElementById("joinCodeInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") goToRoomCode(e.target.value);
+});
+
 async function renderRoomsList(root, signal) {
   root.innerHTML = `
     <div class="library-head">
       <h1>Комнаты</h1>
       <p>Соберите пазл вместе с друзьями — детали двигаются в реальном времени для всех, кто за столом.</p>
     </div>
-    <form class="create-room-form" id="createRoomForm">
-      <input class="text-input" id="roomTitleInput" type="text" maxlength="120" placeholder="Название комнаты, например «Пятничный вечер»" required>
-      <button class="btn filled" type="submit">Создать комнату</button>
-    </form>
-    <div class="room-list" id="roomList"><p class="state-note">Загружаем…</p></div>`;
+    <div class="room-actions-row" id="roomActionsRow">
+      <button class="btn filled" id="createRoomOpenBtn" type="button">Создать комнату</button>
+      <button class="btn outlined" id="joinRoomOpenBtn" type="button">Присоединиться к комнате</button>
+    </div>
+    <div class="room-list" id="roomList"><p class="state-note">Загружаем…</p></div>
+    <div class="pager" id="roomsPager" hidden>
+      <button class="btn outlined sm" id="roomsPrevBtn" type="button">← Назад</button>
+      <span class="muted" id="roomsPagerLabel"></span>
+      <button class="btn outlined sm" id="roomsNextBtn" type="button">Вперёд →</button>
+    </div>`;
 
   if (!auth.isAuthenticated()) {
     $(root, "#roomList").innerHTML = "";
@@ -855,13 +1031,56 @@ async function renderRoomsList(root, signal) {
     btn.addEventListener("click", () => auth.login());
     note.append(span, btn);
     $(root, "#roomList").appendChild(note);
-    $(root, "#createRoomForm").hidden = true;
+    $(root, "#roomActionsRow").hidden = true;
     return;
+  }
+
+  // Пагинация — целиком на фронте, список уже загружен целиком (см.
+  // loadRooms) — на масштабе личного проекта заводить свой лимит/оффсет на
+  // бэке незачем (тот же приём, что в Movies).
+  let rooms = [];
+  let roomsPage = 0;
+
+  function renderPage() {
+    const list = $(root, "#roomList");
+    const pagerEl = $(root, "#roomsPager");
+    if (!rooms.length) {
+      list.innerHTML = '<p class="state-note">Пока нет ни одной комнаты — создайте первую.</p>';
+      pagerEl.hidden = true;
+      return;
+    }
+    const pages = Math.max(1, Math.ceil(rooms.length / ROOMS_PAGE_SIZE));
+    roomsPage = Math.min(roomsPage, pages - 1);
+    const start = roomsPage * ROOMS_PAGE_SIZE;
+    const pageRooms = rooms.slice(start, start + ROOMS_PAGE_SIZE);
+
+    list.innerHTML = "";
+    for (const r of pageRooms) {
+      const card = document.createElement("article");
+      card.className = "room-card";
+      card.innerHTML = `
+        <h3 class="room-card-title"></h3>
+        <p class="room-card-meta"></p>`;
+      $(card, ".room-card-title").textContent = r.title;
+      $(card, ".room-card-meta").textContent =
+        `${r.membersCount} ${plural(r.membersCount, "участник", "участника", "участников")}`
+        + (r.role === "owner" ? " · вы владелец" : "")
+        + ` · обновлено ${fmtDate(r.updatedAt)}`;
+      card.addEventListener("click", () => { location.hash = `#/room/${encodeURIComponent(r.id)}`; });
+      list.appendChild(card);
+    }
+
+    const showPager = rooms.length > ROOMS_PAGE_SIZE;
+    pagerEl.hidden = !showPager;
+    if (showPager) {
+      $(root, "#roomsPagerLabel").textContent = `Стр. ${roomsPage + 1} из ${pages}`;
+      $(root, "#roomsPrevBtn").disabled = roomsPage <= 0;
+      $(root, "#roomsNextBtn").disabled = roomsPage >= pages - 1;
+    }
   }
 
   async function loadRooms() {
     const list = $(root, "#roomList");
-    let rooms;
     try {
       const res = await auth.fetch("/api/rooms");
       if (!res.ok) throw new Error("rooms fetch failed");
@@ -871,35 +1090,13 @@ async function renderRoomsList(root, signal) {
       return;
     }
     if (signal.aborted) return;
-    if (!rooms.length) { list.innerHTML = '<p class="state-note">Пока нет ни одной комнаты — создайте первую.</p>'; return; }
-    list.innerHTML = "";
-    for (const r of rooms) {
-      const card = document.createElement("article");
-      card.className = "room-card";
-      card.innerHTML = `
-        <h3 class="room-card-title"></h3>
-        <p class="room-card-meta"></p>`;
-      $(card, ".room-card-title").textContent = r.title;
-      $(card, ".room-card-meta").textContent = `${r.membersCount} участник(ов) · обновлено ${fmtDate(r.updatedAt)}`;
-      card.addEventListener("click", () => { location.hash = `#/room/${encodeURIComponent(r.id)}`; });
-      list.appendChild(card);
-    }
+    renderPage();
   }
 
-  $(root, "#createRoomForm").addEventListener("submit", async e => {
-    e.preventDefault();
-    const input = $(root, "#roomTitleInput");
-    const title = input.value.trim();
-    if (!title) return;
-    try {
-      const res = await auth.fetch("/api/rooms", {
-        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }),
-      });
-      if (!res.ok) throw new Error("create room failed");
-      const room = await res.json();
-      location.hash = `#/room/${encodeURIComponent(room.id)}`;
-    } catch { /* останемся на месте, форма не очистится — можно повторить */ }
-  }, { signal });
+  $(root, "#roomsPrevBtn").addEventListener("click", () => { roomsPage = Math.max(0, roomsPage - 1); renderPage(); }, { signal });
+  $(root, "#roomsNextBtn").addEventListener("click", () => { roomsPage += 1; renderPage(); }, { signal });
+  $(root, "#createRoomOpenBtn").addEventListener("click", () => openModal("createRoomModalBackdrop"), { signal });
+  $(root, "#joinRoomOpenBtn").addEventListener("click", () => openModal("joinRoomModalBackdrop"), { signal });
 
   await loadRooms();
 }
@@ -964,39 +1161,52 @@ async function renderRoom(root, roomId, signal) {
     membersEl.appendChild(chip);
   }
 
+  // До MAX_ACTIVE_SESSIONS_PER_ROOM параллельных активных сборок в комнате
+  // (временное послабление, см. план) — список карточек 0..5 вместо жёсткого
+  // if/else «одна активная ИЛИ пикер». Пикер показывается ВСЕГДА ниже,
+  // независимо от числа активных: если лимит достигнут, сервер отобьёт
+  // попытку старта 409-м, сообщение поймает playVariant.
   const activeEl = $(root, "#roomActive");
-  if (room.activeSession) {
-    activeEl.innerHTML = `
-      <div class="room-active-card">
-        <p>Сейчас за столом собирают пазл «${room.activeSession.puzzle.title}» — ${room.activeSession.piecesPlaced}/${room.activeSession.piecesTotal} деталей.</p>
-        <button class="btn filled" id="joinTableBtn" type="button">За стол</button>
-      </div>`;
-    $(activeEl, "#joinTableBtn").addEventListener("click", () => {
-      location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(room.activeSession.id)}`;
+  const activeSessions = room.activeSessions || [];
+  activeEl.innerHTML = activeSessions.map(s => `
+    <div class="room-active-card">
+      <p>Сейчас за столом собирают пазл «${s.puzzle.title}» — ${s.piecesPlaced}/${s.piecesTotal} деталей.</p>
+      <button class="btn filled join-table-btn" type="button" data-session="${s.id}">За стол</button>
+    </div>`).join("")
+    + '<h3 class="room-section-title">Начать сборку</h3><div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">Загружаем пазлы…</p></div><div id="roomUploadWrap"></div><p class="state-note" id="sessionLimitNote" hidden></p>';
+  for (const btn of activeEl.querySelectorAll(".join-table-btn")) {
+    btn.addEventListener("click", () => {
+      location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(btn.dataset.session)}`;
     }, { signal });
-  } else {
-    activeEl.innerHTML = '<h3 class="room-section-title">Начать сборку</h3><div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">Загружаем пазлы…</p></div><div id="roomUploadWrap"></div>';
-    let puzzles;
-    try { puzzles = await getPuzzles(); } catch { $(activeEl, "#roomPuzzleGrid").innerHTML = '<p class="state-note">Не удалось загрузить пазлы.</p>'; puzzles = []; }
-    if (signal.aborted) return;
-    const grid = $(activeEl, "#roomPuzzleGrid");
-    grid.innerHTML = "";
-
-    async function playVariant(variant) {
-      try {
-        const sessionId = await startRoomSession(roomId, variant.id);
-        location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
-      } catch { /* ошибка сети — пользователь просто попробует кнопку ещё раз */ }
-    }
-
-    for (const group of groupPuzzles(puzzles)) {
-      grid.appendChild(buildCard(group, { allowDelete: false, onPlay: playVariant }));
-    }
-
-    mountUploadForm($(activeEl, "#roomUploadWrap"), result => {
-      grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { allowDelete: false, onPlay: playVariant }));
-    });
   }
+
+  let puzzles;
+  try { puzzles = await getPuzzles(); } catch { $(activeEl, "#roomPuzzleGrid").innerHTML = '<p class="state-note">Не удалось загрузить пазлы.</p>'; puzzles = []; }
+  if (signal.aborted) return;
+  const grid = $(activeEl, "#roomPuzzleGrid");
+  grid.innerHTML = "";
+
+  async function playVariant(variant) {
+    try {
+      const sessionId = await startRoomSession(roomId, variant.id);
+      location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
+    } catch (e) {
+      if (e.message === "room session limit reached") {
+        const note = $(activeEl, "#sessionLimitNote");
+        note.hidden = false;
+        note.textContent = `Достигнут лимит одновременных сборок в комнате (${MAX_ACTIVE_SESSIONS_PER_ROOM}) — заверши одну, чтобы начать новую.`;
+      }
+      /* иначе — ошибка сети, пользователь просто попробует кнопку ещё раз */
+    }
+  }
+
+  for (const group of groupPuzzles(puzzles)) {
+    grid.appendChild(buildCard(group, { allowDelete: false, onPlay: playVariant }));
+  }
+
+  mountUploadForm($(activeEl, "#roomUploadWrap"), result => {
+    grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { allowDelete: false, onPlay: playVariant }));
+  });
 
   const historyEl = $(root, "#roomHistory");
   const past = sessions.filter(s => s.completedAt);
@@ -1072,9 +1282,15 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">← Комната</a>
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
-        <button class="btn outlined sm" id="shuffleBtn" type="button">Перемешать</button>
-        <button class="btn outlined sm" id="previewBtn" type="button">Показать картинку</button>
-        <button class="btn outlined sm" id="boardThemeBtn" type="button">Светлый фон</button>
+        <button class="btn outlined sm toolbar-btn" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
+          <span class="toolbar-btn-icon" aria-hidden="true">🔀</span><span class="toolbar-btn-label">Перемешать</span>
+        </button>
+        <button class="btn outlined sm toolbar-btn" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
+          <span class="toolbar-btn-icon" aria-hidden="true">🖼</span><span class="toolbar-btn-label">Показать картинку</span>
+        </button>
+        <button class="btn outlined sm toolbar-btn" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
+          <span class="toolbar-btn-icon" aria-hidden="true">☀</span><span class="toolbar-btn-label">Светлый фон</span>
+        </button>
         <div class="presence-bar" id="presenceBar"></div>
         <span class="table-progress" id="tableProgress"></span>
       </div>
@@ -1276,17 +1492,14 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // pieces строится асинхронно в buildBoard() по первому sync — до этого
     // момента стол ещё не собран, перемешивать нечего.
     if (!pieces) return;
-    // Та же поправка, что и в соло: уже собранные детали едут в сообщении
-    // с их ТЕКУЩИМИ координатами и placed:true, не трогаются — переставляются
-    // только несобранные. Риска потерять прогресс нет, confirm не нужен.
-    const unplacedCount = [...pieces.values()].filter(p => !p.placed).length;
-    if (!unplacedCount) return;
-    const fresh = scatterLayout(rows, cols, CELL, pad);
-    let i = 0;
+    // Та же поправка, что и в соло: наибольший уже состыкованный кластер не
+    // трогаем — переставляются только остальные, как жёсткие блоки. Риска
+    // потерять прогресс нет, confirm не нужен.
+    const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE);
+    if (!next) return;
     const arr = [...pieces.values()].map(piece => {
-      if (piece.placed) return { r: piece.r, c: piece.c, x: piece.x, y: piece.y, placed: true };
-      const cell = fresh.cells[i++];
-      return { r: piece.r, c: piece.c, x: cell.x, y: cell.y, placed: false };
+      const pos = next.get(`${piece.r},${piece.c}`);
+      return { r: piece.r, c: piece.c, x: pos ? pos.x : piece.x, y: pos ? pos.y : piece.y, placed: false };
     });
     socket.send({ type: "shuffle", pieces: arr });
   }, { signal });
@@ -1333,33 +1546,35 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const draggingKeys = new Set(); // детали, которые СЕЙЧАС тащит локальный пользователь — resync их не трогает
   let pieces; // Map "r,c" -> piece, строится в buildBoard() по первому sync
   let announced = false; // защита от повторного showWin() при нескольких sync подряд (троттлинг group)
+  let lastClusterEdgeIds = new Set(); // "r,c|r,c" — вспышка только на НОВЫХ стыковках (свой драг и чужой sync)
 
-  const selected = new Set(); // ключи "r,c" — только ещё не собранные детали
+  const selected = new Set(); // ключи "r,c" — текущее ручное выделение (клик/shift-клик)
   function setSelected(keys) {
     selected.clear();
     for (const k of keys) selected.add(k);
     for (const [k, p] of pieces) p.el.classList.toggle("selected", selected.has(k));
   }
 
-  function bindRoomPieceDrag(el, piece, sendMove, sendPlace, sendGroup) {
+  function bindRoomPieceDrag(el, piece, sendMove, sendGroup) {
     let dragging = null;
     let moved = false;
     const key = `${piece.r},${piece.c}`;
 
     el.addEventListener("pointerdown", e => {
-      if (piece.placed) return;
       e.stopPropagation();
       el.setPointerCapture(e.pointerId);
       moved = false;
       if (!(selected.has(key) && selected.size > 1)) setSelected([key]);
-      const group = [...selected];
-      const origins = group.map(k => {
+      const { clusterOf, members } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const groupSet = new Set();
+      for (const k of selected) for (const m of members.get(clusterOf.get(k))) groupSet.add(m);
+      const origins = [...groupSet].map(k => {
         const p = pieces.get(k);
         p.el.classList.add("dragging");
         draggingKeys.add(k);
         return [k, p.x, p.y];
       });
-      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins };
+      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins, draggingKeys: groupSet };
     }, { signal });
 
     el.addEventListener("pointermove", e => {
@@ -1377,7 +1592,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
 
     function finish(e) {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
-      const origins = dragging.origins;
+      const { origins, draggingKeys: groupKeys } = dragging;
       dragging = null;
       for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
       if (!moved) {
@@ -1392,37 +1607,30 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         }
         return;
       }
-      let anySnapped = false;
-      for (const [k] of origins) {
-        const p = pieces.get(k);
-        const dist = Math.hypot(p.x - p.target.x, p.y - p.target.y);
-        if (dist < CELL * 0.28) {
-          p.x = p.target.x; p.y = p.target.y; p.placed = true;
-          applyPieceTransform(p);
-          p.el.classList.add("placed", "just-snapped");
-          setTimeout(() => p.el.classList.remove("just-snapped"), 600);
-          selected.delete(k); p.el.classList.remove("selected");
-          anySnapped = true;
-        }
-        draggingKeys.delete(k);
-      }
-      if (origins.length > 1) sendGroup();
-      else if (anySnapped) sendPlace(piece);
+      window.PuzzleClusters.stitchGroup(pieces, groupKeys, CELL, SNAP_TOLERANCE);
+      for (const k of groupKeys) { applyPieceTransform(pieces.get(k)); draggingKeys.delete(k); }
+      const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
+      lastClusterEdgeIds = nextIds;
+      updateProgressLabel(window.PuzzleClusters.largestClusterSize(members), rows * cols);
+      setSelected([]);
+      // >1 детали тащили или стыковка образовала новое ребро — шлём полную
+      // раскладку группой (сосед должен увидеть весь жёсткий блок за один
+      // sync), иначе — компактный move одной детали.
+      if (origins.length > 1 || newCount > 0) sendGroup();
       else sendMove(piece);
     }
     el.addEventListener("pointerup", finish, { signal });
     el.addEventListener("pointercancel", finish, { signal });
   }
 
-  function reconcilePiece(r, c, x, y, placed) {
+  function reconcilePiece(r, c, x, y) {
     const key = `${r},${c}`;
     if (draggingKeys.has(key)) return;
     const piece = pieces.get(key);
     if (!piece) return;
     piece.x = x; piece.y = y;
-    if (placed !== undefined) piece.placed = placed;
     applyPieceTransform(piece);
-    piece.el.classList.toggle("placed", !!piece.placed);
   }
 
   function buildBoard(initialPieces) {
@@ -1430,19 +1638,17 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     let scatterIdx = 0;
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const target = { x: BOARD_X + c * CELL - pad, y: BOARD_Y + r * CELL - pad };
         const known = initialPieces && initialPieces.find(p => p.r === r && p.c === c);
-        let x, y, placed;
-        if (known) { x = known.x; y = known.y; placed = !!known.placed; }
-        else { const cell = scatter.cells[scatterIdx++]; x = cell.x; y = cell.y; placed = false; }
-        pieces.set(`${r},${c}`, { r, c, x, y, placed, target });
+        let x, y;
+        if (known) { x = known.x; y = known.y; }
+        else { const cell = scatter.cells[scatterIdx++]; x = cell.x; y = cell.y; }
+        pieces.set(`${r},${c}`, { r, c, x, y });
       }
     }
 
     const sendMove = throttle(p => socket.send({ type: "move", r: p.r, c: p.c, x: p.x, y: p.y }), 70);
-    const sendPlace = p => socket.send({ type: "place", r: p.r, c: p.c, x: p.x, y: p.y });
     const sendGroup = throttle(() => {
-      const arr = [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: p.placed }));
+      const arr = [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: false }));
       socket.send({ type: "group", pieces: arr });
     }, 70);
 
@@ -1452,38 +1658,39 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         const el = createPieceEl(puzzle.id, r, c, rows, cols, CELL, pad, edges, puzzle.imageUrl, boardW, boardH);
         piece.el = el;
         applyPieceTransform(piece);
-        if (piece.placed) el.classList.add("placed");
         world.appendChild(el);
-        bindRoomPieceDrag(el, piece, sendMove, sendPlace, sendGroup);
+        bindRoomPieceDrag(el, piece, sendMove, sendGroup);
       }
     }
-    updateProgressLabel([...pieces.values()].filter(p => p.placed).length, rows * cols);
+    const built = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+    lastClusterEdgeIds = clusterEdgeIds(built.edges);
+    updateProgressLabel(window.PuzzleClusters.largestClusterSize(built.members), rows * cols);
 
     // Раскладку никто не задал — эту раскладку и предлагаем как каноническую
     // (см. план: "первый валидный init побеждает", гонка самоисцеляется).
     if (!initialPieces) {
-      socket.send({ type: "init", pieces: [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: p.placed })) });
+      socket.send({ type: "init", pieces: [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: false })) });
     }
   }
 
   function handleSocketMessage(msg) {
     if (msg.type === "sync") {
       if (!pieces) return void buildBoard(msg.pieces);
-      if (msg.pieces) for (const p of msg.pieces) reconcilePiece(p.r, p.c, p.x, p.y, p.placed);
-      updateProgressLabel(msg.piecesPlaced, msg.piecesTotal);
+      if (msg.pieces) for (const p of msg.pieces) reconcilePiece(p.r, p.c, p.x, p.y);
+      // Кластеры/вспышка/прогресс пересчитываются здесь целиком — это ловит
+      // и стыковку своим драгом (эхо своего же group/shuffle), и стыковку
+      // чужим драгом (пришедшую только через sync), одним и тем же путём.
+      const built = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const { nextIds } = flashClusterEdges(pieces, lastClusterEdgeIds, built.edges);
+      lastClusterEdgeIds = nextIds;
+      const placedNow = window.PuzzleClusters.largestClusterSize(built.members);
+      updateProgressLabel(placedNow, msg.piecesTotal);
       updatePresence(msg.members);
-      if (msg.piecesPlaced >= msg.piecesTotal && !announced) { announced = true; showWin(); }
+      if (placedNow >= msg.piecesTotal && !announced) { announced = true; showWin(); }
       return;
     }
     if (msg.type === "presence") return updatePresence(msg.members);
-    if (msg.type === "move") return reconcilePiece(msg.r, msg.c, msg.x, msg.y, undefined);
-    if (msg.type === "place") {
-      reconcilePiece(msg.r, msg.c, msg.x, msg.y, true);
-      const p = pieces.get(`${msg.r},${msg.c}`);
-      if (p && p.el) { p.el.classList.add("just-snapped"); setTimeout(() => p.el.classList.remove("just-snapped"), 600); }
-      updateProgressLabel(msg.piecesPlaced, msg.piecesTotal);
-      if (msg.completed && !announced) { announced = true; showWin(); }
-    }
+    if (msg.type === "move") return reconcilePiece(msg.r, msg.c, msg.x, msg.y);
   }
 
   const socket = connectRoomSocket({

@@ -42,6 +42,7 @@ const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { checkAdminKey, createAdminLog } = require("./admin-internal");
 const ws = require("./ws-server");
+const { buildClusters, largestClusterSize, tolerance } = require("./assets/puzzle-clusters.js");
 
 const PORT = parseInt(process.env.PORT || "8796", 10);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -52,7 +53,17 @@ const ASSETS_DIR = path.join(__dirname, "assets");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
 const PUZZLE_PHOTO_DIR = path.join(DATA_DIR, "puzzle-photos");
 const MAX_PHOTO_BYTES = parseInt(process.env.MAX_PHOTO_BYTES || String(4 * 1024 * 1024), 10);
-const PIECE_PRESETS = [12, 48, 108, 216];
+const PIECE_PRESETS = [12, 48, 108, 216, 300, 480];
+const CELL = 100; // должно совпадать с CELL в assets/app.js
+// Временное послабление (см. план «до 5 параллельных сборок») — потом,
+// когда понадобится, ограничим строже; пока просто константа-потолок,
+// без претензии на финальный дизайн.
+const MAX_ACTIVE_SESSIONS_PER_ROOM = 5;
+const SNAP_TOLERANCE = tolerance(CELL);
+// Прогресс = размер наибольшего связного кластера деталей (см.
+// assets/puzzle-clusters.js), а не поштучный флаг placed из wire-формата —
+// клиентскому placed доверять нельзя, только собственному пересчёту.
+const clusterProgress = pieces => largestClusterSize(buildClusters(pieces, CELL, SNAP_TOLERANCE).members);
 
 const AUTH_ISSUER = (process.env.AUTH_ISSUER || "").replace(/\/+$/, "");
 const AUTH_CLIENT_ID = process.env.AUTH_CLIENT_ID || "puzzle";
@@ -131,11 +142,17 @@ db.exec(`
     completed_at  INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_room_sessions_room ON room_sessions(room_id, started_at);
-
-  -- "Один активный сеанс на комнату" на уровне БД, не только в коде —
-  -- закрывает гонку двух параллельных POST /api/rooms/:id/sessions.
-  CREATE UNIQUE INDEX IF NOT EXISTS idx_room_sessions_active ON room_sessions(room_id) WHERE completed_at IS NULL;
 `);
+
+// Раньше — уникальный partial-индекс ("один активный сеанс на комнату" на
+// уровне БД). Лимит послаблен до MAX_ACTIVE_SESSIONS_PER_ROOM (см. план «до
+// 5 параллельных сборок» — временное послабление, без строгих дальнейших
+// гарантий), поэтому UNIQUE снят: дропаем старый индекс на уже развёрнутых
+// базах (DROP INDEX IF EXISTS не бросает, если индекса нет — тот же приём,
+// что у ALTER TABLE ... ADD COLUMN выше) и создаём заново обычным —
+// он всё равно полезен для быстрого подсчёта активных сеансов по комнате.
+db.exec("DROP INDEX IF EXISTS idx_room_sessions_active");
+db.exec("CREATE INDEX IF NOT EXISTS idx_room_sessions_active ON room_sessions(room_id) WHERE completed_at IS NULL");
 
 // Пост-релизное добавление — таблица puzzles уже существует у всех,
 // кто успел развернуть сервис до этой фичи. ALTER TABLE ... ADD COLUMN
@@ -195,7 +212,7 @@ Object.assign(stmt, {
     INSERT INTO room_members (room_id,user_id,username,name,role,joined_at) VALUES (?,?,?,?,?,?)
     ON CONFLICT(room_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name`),
 
-  activeSession: db.prepare("SELECT * FROM room_sessions WHERE room_id = ? AND completed_at IS NULL"),
+  activeSessions: db.prepare("SELECT * FROM room_sessions WHERE room_id = ? AND completed_at IS NULL ORDER BY started_at DESC"),
   session:       db.prepare("SELECT * FROM room_sessions WHERE id = ?"),
   roomSessions:  db.prepare("SELECT * FROM room_sessions WHERE room_id = ? ORDER BY started_at DESC"),
   insertSession: db.prepare(`
@@ -521,7 +538,7 @@ async function api(req, res, url, user) {
       const pieces = sanitizePieces(body.pieces, puzzle.grid_rows, puzzle.grid_cols);
       if (!pieces) return json(res, 400, { error: "bad pieces" });
       const total = puzzle.grid_rows * puzzle.grid_cols;
-      const placed = pieces.filter(pc => pc.placed).length;
+      const placed = clusterProgress(pieces);
       const existing = stmt.progress.get(user.id, puzzle.id);
       const ts = now();
       // Отметка "Готово" стойкая: однажды выставленный completed_at не
@@ -581,11 +598,10 @@ async function api(req, res, url, user) {
       if (!member) return json(res, 403, { error: "not a member" });
 
       if (seg.length === 3 && m === "GET") {
-        const active = stmt.activeSession.get(roomId);
         return json(res, 200, {
           ...roomPayload(room, member.role),
           members: stmt.roomMembers.all(roomId),
-          activeSession: active ? sessionSummary(active) : null,
+          activeSessions: stmt.activeSessions.all(roomId).map(sessionSummary),
         });
       }
 
@@ -594,19 +610,15 @@ async function api(req, res, url, user) {
       }
 
       if (seg[3] === "sessions" && seg.length === 4 && m === "POST") {
-        const existing = stmt.activeSession.get(roomId);
-        if (existing) return json(res, 409, { error: "session already active", session: sessionSummary(existing) });
+        const activeCount = stmt.activeSessions.all(roomId).length;
+        if (activeCount >= MAX_ACTIVE_SESSIONS_PER_ROOM) {
+          return json(res, 409, { error: "room session limit reached", limit: MAX_ACTIVE_SESSIONS_PER_ROOM });
+        }
         const body = await readJson(req);
         const puzzle = stmt.puzzle.get(body.puzzleId);
         if (!puzzle) return json(res, 400, { error: "bad puzzle" });
         const id = crypto.randomUUID(), ts = now();
-        try {
-          stmt.insertSession.run(id, roomId, puzzle.id, puzzle.grid_rows * puzzle.grid_cols, user.id, ts, ts);
-        } catch (e) {
-          const active = stmt.activeSession.get(roomId);
-          if (active) return json(res, 409, { error: "session already active", session: sessionSummary(active) });
-          throw e;
-        }
+        stmt.insertSession.run(id, roomId, puzzle.id, puzzle.grid_rows * puzzle.grid_cols, user.id, ts, ts);
         return json(res, 200, sessionSummary(stmt.session.get(id)));
       }
 
@@ -652,7 +664,7 @@ function persistSession(state) {
   state.saveTimer = null;
   if (!state.dirty || !state.pieces) return;
   state.dirty = false;
-  const placed = state.pieces.filter(p => p.placed).length;
+  const placed = clusterProgress(state.pieces);
   const ts = now();
   const completedAt = placed >= state.piecesTotal ? ts : null;
   stmt.updateSessionPieces.run(JSON.stringify(state.pieces), placed, ts, completedAt, state.sessionId);
@@ -692,7 +704,7 @@ function attachRoomConnection(sessionId, user, wsConn) {
 
   wsConn.send(JSON.stringify({
     type: "sync", pieces: state.pieces, piecesTotal: state.piecesTotal,
-    piecesPlaced: state.pieces ? state.pieces.filter(p => p.placed).length : 0,
+    piecesPlaced: state.pieces ? clusterProgress(state.pieces) : 0,
     members: presenceList(state),
   }));
   broadcastPresence(state);
@@ -710,7 +722,7 @@ function attachRoomConnection(sessionId, user, wsConn) {
       schedulePersist(state);
       broadcast(state, {
         type: "sync", pieces: state.pieces, piecesTotal: state.piecesTotal,
-        piecesPlaced: pieces.filter(p => p.placed).length, members: presenceList(state),
+        piecesPlaced: clusterProgress(pieces), members: presenceList(state),
       }, null);
       return;
     }
@@ -727,16 +739,18 @@ function attachRoomConnection(sessionId, user, wsConn) {
       const pieces = sanitizePieces(msg.pieces, state.rows, state.cols);
       if (!pieces) return;
       state.pieces = pieces;
+      const placedNow = clusterProgress(pieces);
       schedulePersist(state);
+      if (placedNow >= state.piecesTotal) persistSession(state);
       broadcast(state, {
         type: "sync", pieces: state.pieces, piecesTotal: state.piecesTotal,
-        piecesPlaced: pieces.filter(p => p.placed).length, members: presenceList(state),
+        piecesPlaced: placedNow, members: presenceList(state),
       }, null); // всем, включая отправителя — тот же приём, что у init
       return;
     }
 
     if (!state.pieces) return;
-    if (msg.type !== "move" && msg.type !== "place") return;
+    if (msg.type !== "move") return;
 
     const r = Number(msg.r), c = Number(msg.c), x = Number(msg.x), y = Number(msg.y);
     if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= state.rows || c < 0 || c >= state.cols) return;
@@ -745,17 +759,8 @@ function attachRoomConnection(sessionId, user, wsConn) {
     if (!piece) return;
 
     piece.x = x; piece.y = y;
-    if (msg.type === "place") piece.placed = true;
     schedulePersist(state);
-
-    if (msg.type === "place") {
-      const placed = state.pieces.filter(p => p.placed).length;
-      const completed = placed >= state.piecesTotal;
-      if (completed) persistSession(state);
-      broadcast(state, { type: "place", r, c, x, y, by: user.id, piecesPlaced: placed, piecesTotal: state.piecesTotal, completed }, conn);
-    } else {
-      broadcast(state, { type: "move", r, c, x, y, by: user.id }, conn);
-    }
+    broadcast(state, { type: "move", r, c, x, y, by: user.id }, conn);
   });
 
   wsConn.on("close", () => {

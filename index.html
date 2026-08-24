@@ -52,8 +52,18 @@
       </a>
     </div>
     <div class="spacer"></div>
+    <button class="icon-btn" id="themeBtn" title="Тема" aria-label="Тема"></button>
     <a class="btn text sm" href="#/rooms">Комнаты</a>
-    <div id="authArea" class="auth-area"></div>
+    <!-- Гость видит «Войти», вошедший — иконку-человечка (#accountMenuWrap),
+         открывающую модалку #accountModalBackdrop ниже вместо голого
+         "имя + Выйти" — тот же паттерн, что в остальных сервисах BurningHouse
+         (см. Movies). Видимость переключает renderAuthArea() в app.js. -->
+    <button class="btn tonal sm" id="headerLoginBtn" hidden>Войти</button>
+    <div class="menu-wrap" id="accountMenuWrap" hidden>
+      <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" aria-haspopup="dialog">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>
+      </button>
+    </div>
   </div>
 </div>
 
@@ -74,9 +84,64 @@
   </article>
 </template>
 
+<!-- ===================== МОДАЛКА: АККАУНТ =====================
+     Центральное окно вместо дропдауна — образец: Movies/index.html
+     (accountModalBackdrop). У Puzzle нет концепций «публичный профиль»/
+     «друзья»/«обучение» — модалка тут только «Выйти» + «Управление
+     аккаунтом». -->
+<div class="modal-backdrop hidden" id="accountModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
+    <div class="modal-head">
+      <h2 id="accountModalTitle">Аккаунт</h2>
+      <button class="icon-btn" id="accountModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="menu-user"><b id="accountModalName">—</b><span class="muted" id="accountModalMeta"></span></div>
+    <button class="btn tonal full" id="accountModalManage">Управление аккаунтом →</button>
+    <button class="btn outlined danger full" id="accountModalLogout" style="margin-top:1.1rem">Выйти</button>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: СОЗДАТЬ КОМНАТУ ===================== -->
+<div class="modal-backdrop hidden" id="createRoomModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="createRoomModalTitle">
+    <div class="modal-head">
+      <h2 id="createRoomModalTitle">Создать комнату</h2>
+      <button class="icon-btn" id="createRoomModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="bar">
+      <input class="text-input" type="text" id="newRoomTitle" placeholder="Название комнаты" maxlength="120">
+      <button class="btn filled" id="createRoomBtn" type="button">Создать</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: ПРИСОЕДИНИТЬСЯ К КОМНАТЕ ===================== -->
+<div class="modal-backdrop hidden" id="joinRoomModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="joinRoomModalTitle">
+    <div class="modal-head">
+      <h2 id="joinRoomModalTitle">Присоединиться к комнате</h2>
+      <button class="icon-btn" id="joinRoomModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p class="muted">Код приглашения, которым с вами поделились.</p>
+    <div class="bar">
+      <input class="text-input" type="text" id="joinCodeInput" placeholder="Код комнаты" maxlength="16">
+      <button class="icon-btn tonal" id="joinCodeBtn" title="Найти" aria-label="Найти" type="button">
+        <svg class="icon" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+      </button>
+    </div>
+  </div>
+</div>
+
 <script src="assets/brand.js"></script>
 <script src="assets/auth-client.js"></script>
 <script src="assets/puzzle-shapes.js"></script>
+<script src="assets/puzzle-clusters.js"></script>
 <script src="assets/app.js"></script>
 </body>
 </html>
