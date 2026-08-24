@@ -420,11 +420,27 @@ const MIME = {
   ".js": "application/javascript; charset=utf-8", ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
   ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2",
+  ".txt": "text/plain; charset=utf-8", ".xml": "application/xml; charset=utf-8",
 };
+// Отдельные файлы в корне репозитория рядом с index.html: robots.txt и
+// sitemap.xml роботы по конвенции ищут именно в корне сайта, а не там, куда
+// их реально положили. Каждый добавляется явно сюда И явным COPY в Dockerfile.
+const ROOT_FILES = ["robots.txt", "sitemap.xml"];
 
 /** Отдаём только index.html, assets/ и uploads/ (свои фото). store.db и
  *  server.js снаружи недоступны. */
 function serveStatic(res, pathname) {
+  // Некоторые краулеры/тулы запрашивают /favicon.ico напрямую с корня,
+  // игнорируя <link rel="icon"> в index.html — отдаём тот же файл, что и
+  // из assets/, без отдельного правила ниже.
+  if (pathname === "/favicon.ico") pathname = "/assets/favicon.ico";
+  if (ROOT_FILES.includes(pathname.replace(/^\//, ""))) {
+    const file = path.join(__dirname, pathname.replace(/^\//, ""));
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
+    res.writeHead(200, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" });
+    fs.createReadStream(file).pipe(res);
+    return true;
+  }
   if (pathname.startsWith("/uploads/")) {
     const name = path.basename(pathname);
     if (!/^[\w-]+\.(jpg|png|webp)$/i.test(name)) return false;

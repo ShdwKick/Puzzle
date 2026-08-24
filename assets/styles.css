@@ -196,6 +196,22 @@ a{color:inherit}
   border-radius:6px;pointer-events:none;
 }
 
+/* Рамка вокруг ВСЕЙ перетаскиваемой группы — не только детали, за которую
+   тащат (у той и так есть свой .piece.dragging — см. ниже). При драге
+   больше одной детали читать движение группы как единого блока иначе
+   сложно: у каждой детали свой per-piece filter, они не складываются в
+   общий силуэт. Позиция/размер — JS (updateGroupOutline, assets/app.js),
+   двигается в той же системе координат, что и сами детали (потомок
+   .table-world), поэтому пересчитывать под zoom/pan не нужно — родитель
+   уже это делает через transform. z-index ниже .piece.dragging (1000) —
+   рамка должна быть ПОД перетаскиваемыми деталями, не поверх них. */
+.group-outline{
+  position:absolute;border:2px dashed var(--flame-tip);border-radius:10px;
+  pointer-events:none;z-index:500;
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--flame-tip) 18%, transparent);
+}
+.group-outline[hidden]{display:none}
+
 .piece{
   position:absolute;left:0;top:0;touch-action:none;cursor:grab;
   filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));
@@ -237,11 +253,9 @@ a{color:inherit}
    .table-toolbar, схлопывались в иконки только на узком экране (см. былой
    .toolbar-btn/@media ниже). Теперь всегда иконки, в собственной плашке в
    том же визуальном языке, что .zoom-controls, но в другом углу (нижний
-   левый — .zoom-controls внизу справа, .preview-thumb вверху слева, кнопка
-   присутствия вверху справа, см. .presence-widget), чтобы ничего не
-   перекрывалось. Первой кнопкой в той же плашке — «Назад» (была текстовой
-   ссылкой «← Комната»/«← Библиотека» в .table-toolbar, теперь тоже иконка
-   в стиле кнопок масштаба, см. .board-back). */
+   левый — .zoom-controls внизу справа, .preview-thumb вверху слева (под
+   .board-back, см. ниже), кнопка присутствия вверху справа, см.
+   .presence-widget), чтобы ничего не перекрывалось. */
 .board-tools{
   position:absolute;left:.9rem;bottom:.9rem;display:flex;flex-direction:row;gap:.4rem;
   background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
@@ -249,12 +263,27 @@ a{color:inherit}
 }
 .board-tools .btn{width:2.4rem;height:2.4rem;padding:0}
 
+/* «Назад» — была текстовой ссылкой «← Комната»/«← Библиотека» в
+   .table-toolbar, теперь иконка в стиле кнопок масштаба, в ЛЕВОМ ВЕРХНЕМ
+   углу доски (не рядом с .board-tools внизу — выход со стола логически не
+   относится к инструментам сборки). Тот же угол, что у .preview-thumb —
+   допустимо: кнопка маленькая (2.4rem), картинка-подсказка показывается не
+   всегда и не мешает клику (pointer-events:none). */
+.board-back{
+  position:absolute;left:.9rem;top:.9rem;display:flex;
+  background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
+  border-radius:var(--md-sys-shape-corner-l);padding:.4rem;box-shadow:var(--e1);
+}
+.board-back .btn{width:2.4rem;height:2.4rem;padding:0}
+
 /* Справочная картинка «как должно получиться» — pointer-events:none,
    поэтому её не нужно исключать из панорамы стола отдельно (в отличие от
    .zoom-controls, см. комментарий у pointerdown ниже): клики и драг просто
-   проходят сквозь неё к тому, что под ней. */
+   проходят сквозь неё к тому, что под ней. Тот же угол, что у .board-back —
+   картинка ниже кнопки по документу, но pointer-events:none, так что клику
+   по кнопке не мешает; смещена на высоту кнопки, чтобы не перекрываться. */
 .preview-thumb{
-  position:absolute;left:.9rem;top:.9rem;max-width:min(40vw,14rem);max-height:min(40vh,14rem);
+  position:absolute;left:.9rem;top:3.7rem;max-width:min(40vw,14rem);max-height:min(40vh,14rem);
   object-fit:contain;border-radius:var(--md-sys-shape-corner-l);
   background:var(--md-sys-color-surface-container-lowest);
   border:2px solid var(--md-sys-color-surface);box-shadow:var(--e2);
@@ -385,7 +414,11 @@ select.text-input{cursor:pointer}
    раз»/«Удалить») — space-between расставил бы их неровно, группируем
    текстовые в один блок, а кнопки — в другой. */
 .history-info{display:flex;flex-direction:column;gap:.15rem}
-.history-actions{display:flex;gap:.5rem;flex-wrap:wrap}
+/* align-items:center — без него «Собрать ещё раз» (текстовая .btn.sm,
+   выше) и крестик-удаление (.icon-btn.xs, ниже, фиксированная высота)
+   выравнивались бы по умолчанию (stretch → фактически по верхнему краю
+   строки), а не по центру друг относительно друга. */
+.history-actions{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
 
 /* ===================== КОМНАТЫ: ВСТУПЛЕНИЕ ПО ССЫЛКЕ ===================== */
 .room-join-screen{

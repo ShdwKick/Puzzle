@@ -120,6 +120,22 @@ function stitchGroup(pieces, draggingKeys, cell, tol) {
       }
     }
   }
+  // Довыравнивание после стыковки: rectifyGroup выше чистит только
+  // draggingKeys (перетаскиваемую сторону) — но та же "приклейка по допуску
+  // без явной стыковки" может накопиться и на НЕПОДВИЖНОЙ стороне (например,
+  // деталь вошла в чужой кластер через входящий sync в комнате, без личного
+  // участия в стыковке именно этого шва — см. баг в rectifyGroup выше, он
+  // симметричен для любой из двух сторон). Если стыковка сейчас реально
+  // произошла (resolved непусто) — пересчитываем ВЕСЬ получившийся кластер
+  // (не только draggingKeys) от одной опорной детали, а не только
+  // перетаскиваемую группу: гарантирует, что скрытая неточность неподвижной
+  // стороны тоже не "просочится" в интерфейс криво прицепленным куском.
+  // Если стыковки не было (соседей в допуске не нашлось) — трогать нечего.
+  if (resolved.size > 0) {
+    const { clusterOf, members } = buildClusters(pieces.values(), cell, tol);
+    const anchorKey = draggingKeys.values().next().value;
+    rectifyGroup(pieces, members.get(clusterOf.get(anchorKey)), cell);
+  }
 }
 
 const PuzzleClusters = { tolerance, buildClusters, largestClusterSize, stitchGroup };

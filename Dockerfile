@@ -12,6 +12,8 @@ WORKDIR /app
 # появится дальше. Локальный запускатор dev.mjs сюда не попадает — он .mjs.
 COPY *.js ./
 COPY index.html ./
+COPY robots.txt ./
+COPY sitemap.xml ./
 COPY assets/ ./assets/
 
 # Проверка на этапе сборки: пропавший модуль ломает сборку, а не контейнер на

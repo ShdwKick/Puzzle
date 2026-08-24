@@ -455,6 +455,30 @@ function flashClusterEdges(pieces, prevIds, edges) {
   return { nextIds, newCount };
 }
 
+/** Пунктирная рамка вокруг ВСЕЙ перетаскиваемой группы (не только детали,
+ *  за которую в этот раз тащат) — обновляется на каждый pointermove, пока
+ *  жест активен, скрывается при drag'е из одной детали или когда жест не
+ *  идёт. piece.x/y — левый верхний угол SVG-бокса детали (см.
+ *  applyPieceTransform), сам бокс — cell+2*pad (см. createPieceEl), поэтому
+ *  граница группы — просто min/max по всем деталям с этим отступом. */
+function updateGroupOutline(el, pieces, keys, cell, pad) {
+  if (!keys || keys.size <= 1) { el.hidden = true; return; }
+  const size = cell + 2 * pad;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const k of keys) {
+    const p = pieces.get(k);
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x + size > maxX) maxX = p.x + size;
+    if (p.y + size > maxY) maxY = p.y + size;
+  }
+  el.style.left = minX + "px";
+  el.style.top = minY + "px";
+  el.style.width = (maxX - minX) + "px";
+  el.style.height = (maxY - minY) + "px";
+  el.hidden = false;
+}
+
 /** «Перемешать» с учётом кластеров: наибольший уже собранный кластер (если
  *  в нём больше одной детали — это прогресс) не трогаем, остальные кластеры
  *  раскидываем как жёсткие блоки — внутренние относительные смещения
@@ -559,14 +583,18 @@ async function renderTable(root, puzzleId, signal) {
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
         <img class="preview-thumb" id="previewThumb" alt="" hidden>
-        <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
-             см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
-             углу, чтобы не пересекаться ни с ним, ни с .preview-thumb. Первой —
-             «Назад» (была текстовой ссылкой «← Библиотека» в .table-toolbar). -->
-        <div class="board-tools">
+        <!-- «Назад» — была текстовой ссылкой «← Библиотека» в .table-toolbar,
+             теперь иконка в левом верхнем углу доски (не в .board-tools внизу
+             — выход со стола не инструмент сборки). -->
+        <div class="board-back">
           <a class="btn outlined icon" href="#/" title="Библиотека" aria-label="Библиотека">
             <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
           </a>
+        </div>
+        <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
+             см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
+             углу, чтобы не пересекаться ни с ним, ни с .preview-thumb. -->
+        <div class="board-tools">
           <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
             <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
           </button>
@@ -629,6 +657,13 @@ async function renderTable(root, puzzleId, signal) {
   outline.style.width = boardW + "px";
   outline.style.height = boardH + "px";
   world.appendChild(outline);
+
+  // Рамка вокруг перетаскиваемой ГРУППЫ целиком (не одной детали, за
+  // которую тащат) — см. updateGroupOutline выше.
+  const groupOutlineEl = document.createElement("div");
+  groupOutlineEl.className = "group-outline";
+  groupOutlineEl.hidden = true;
+  world.appendChild(groupOutlineEl);
 
   const pieces = new Map();
   let scatterIdx = 0;
@@ -702,14 +737,15 @@ async function renderTable(root, puzzleId, signal) {
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
   stage.addEventListener("pointerdown", e => {
-    // .zoom-controls (а теперь и .board-tools/.win-overlay/.table-give-up)
-    // тоже исключаем: иначе setPointerCapture ниже перехватывает указатель на
-    // #stage раньше, чем браузер успевает синтезировать click на кнопке —
-    // колесо мыши работало (свой отдельный wheel-хендлер), а кнопки +/−/⤢
-    // (и, отдельно найденный тот же баг, кнопки в окне победы) не реагировали
-    // на клик вовсе.
+    // .zoom-controls (а теперь и .board-tools/.board-back/.win-overlay/
+    // .table-give-up) тоже исключаем: иначе setPointerCapture ниже
+    // перехватывает указатель на #stage раньше, чем браузер успевает
+    // синтезировать click на кнопке — колесо мыши работало (свой отдельный
+    // wheel-хендлер), а кнопки +/−/⤢ (и, отдельно найденный тот же баг,
+    // кнопки в окне победы) не реагировали на клик вовсе.
     if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
-      || e.target.closest(".presence-widget") || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
+      || e.target.closest(".board-back") || e.target.closest(".presence-widget")
+      || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 1) {
@@ -819,6 +855,7 @@ async function renderTable(root, puzzleId, signal) {
       for (const k of selected) for (const m of members.get(clusterOf.get(k))) groupSet.add(m);
       const origins = [...groupSet].map(k => { const p = pieces.get(k); p.el.classList.add("dragging"); return [k, p.x, p.y]; });
       dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins, draggingKeys: groupSet };
+      updateGroupOutline(groupOutlineEl, pieces, groupSet, CELL, pad);
     }, { signal });
 
     el.addEventListener("pointermove", e => {
@@ -831,12 +868,14 @@ async function renderTable(root, puzzleId, signal) {
         p.x = ox + dx; p.y = oy + dy;
         applyPieceTransform(p);
       }
+      updateGroupOutline(groupOutlineEl, pieces, dragging.draggingKeys, CELL, pad);
     }, { signal });
 
     function finish(e) {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
       const { origins, draggingKeys } = dragging;
       dragging = null;
+      groupOutlineEl.hidden = true;
       for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
       if (!moved) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
@@ -1417,15 +1456,19 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
         <img class="preview-thumb" id="previewThumb" alt="" hidden>
-        <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
-             см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
-             углу, чтобы не пересекаться ни с ним, ни с .preview-thumb, ни с
-             кнопкой присутствия ниже. Первой — «Назад» (была текстовой
-             ссылкой «← Комната» в .table-toolbar). -->
-        <div class="board-tools">
+        <!-- «Назад» — была текстовой ссылкой «← Комната» в .table-toolbar,
+             теперь иконка в левом верхнем углу доски (не в .board-tools внизу
+             — выход со стола не инструмент сборки). -->
+        <div class="board-back">
           <a class="btn outlined icon" href="#/room/${encodeURIComponent(roomId)}" title="Комната" aria-label="Комната">
             <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
           </a>
+        </div>
+        <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
+             см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
+             углу, чтобы не пересекаться ни с ним, ни с .preview-thumb, ни с
+             кнопкой присутствия ниже. -->
+        <div class="board-tools">
           <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
             <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
           </button>
@@ -1539,6 +1582,13 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   outline.style.height = boardH + "px";
   world.appendChild(outline);
 
+  // Рамка вокруг перетаскиваемой ГРУППЫ целиком (не одной детали, за
+  // которую тащат) — см. updateGroupOutline выше.
+  const groupOutlineEl = document.createElement("div");
+  groupOutlineEl.className = "group-outline";
+  groupOutlineEl.hidden = true;
+  world.appendChild(groupOutlineEl);
+
   /* ── zoom/pan мирового контейнера — идентично renderTable ── */
   let zoom = 1, panX = 0, panY = 0;
   const ZOOM_MIN = 0.12, ZOOM_MAX = 3.2;
@@ -1576,14 +1626,15 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
   stage.addEventListener("pointerdown", e => {
-    // .zoom-controls (а теперь и .board-tools/.win-overlay/.table-give-up)
-    // тоже исключаем: иначе setPointerCapture ниже перехватывает указатель на
-    // #stage раньше, чем браузер успевает синтезировать click на кнопке —
-    // колесо мыши работало (свой отдельный wheel-хендлер), а кнопки +/−/⤢
-    // (и, отдельно найденный тот же баг, кнопки в окне победы) не реагировали
-    // на клик вовсе.
+    // .zoom-controls (а теперь и .board-tools/.board-back/.win-overlay/
+    // .table-give-up) тоже исключаем: иначе setPointerCapture ниже
+    // перехватывает указатель на #stage раньше, чем браузер успевает
+    // синтезировать click на кнопке — колесо мыши работало (свой отдельный
+    // wheel-хендлер), а кнопки +/−/⤢ (и, отдельно найденный тот же баг,
+    // кнопки в окне победы) не реагировали на клик вовсе.
     if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
-      || e.target.closest(".presence-widget") || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
+      || e.target.closest(".board-back") || e.target.closest(".presence-widget")
+      || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 1) {
@@ -1758,6 +1809,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         return [k, p.x, p.y];
       });
       dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins, draggingKeys: groupSet };
+      updateGroupOutline(groupOutlineEl, pieces, groupSet, CELL, pad);
     }, { signal });
 
     el.addEventListener("pointermove", e => {
@@ -1770,6 +1822,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         p.x = ox + dx; p.y = oy + dy;
         applyPieceTransform(p);
       }
+      updateGroupOutline(groupOutlineEl, pieces, dragging.draggingKeys, CELL, pad);
       if (dragging.origins.length > 1) sendGroup(dragging.draggingKeys); else sendMove(piece);
     }, { signal });
 
@@ -1777,6 +1830,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
       const { origins, draggingKeys: groupKeys } = dragging;
       dragging = null;
+      groupOutlineEl.hidden = true;
       for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
       if (!moved) {
         for (const [k] of origins) draggingKeys.delete(k);

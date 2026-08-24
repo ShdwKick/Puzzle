@@ -5,13 +5,29 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="color-scheme" content="light dark">
 <title>Что собираем? — BurningHouse</title>
-<meta name="description" content="«Что собираем?» — сервис BurningHouse для сборки пазлов онлайн: фигурные детали, зум и панорама стола, сохранение прогресса для вошедших пользователей.">
-<!-- SVG-фавикон подключён (бор, зелёный) — растровые фолбэки (favicon-16/32/180.png,
-     favicon.ico) для индексаторов, которые SVG не читают, ещё не сделаны: их
-     нужно экспортировать из этого же SVG, здесь такого инструмента нет.
-     Визуальная сверка «четыре фавикона рядом» из чек-листа Design/services.md
-     тоже не пройдена — нужны настоящие глаза в панели вкладок. -->
+<meta name="description" content="«Что собираем?» — сервис BurningHouse для сборки пазлов онлайн: библиотека готовых пазлов или свой из любой фотографии, фигурные детали, зум и панорама стола, совместная сборка в комнате с друзьями и сохранение прогресса для вошедших пользователей.">
+<link rel="canonical" href="https://puzzle.burninghouse.ru/">
+<!-- SVG — основная иконка (современные браузеры, вкладка); PNG/ICO — для тех,
+     кто SVG-фавиконы не читает (в т.ч. Яндекс при индексации, см. решение той
+     же проблемы у остальных сервисов). Растеризованы из того же силуэта
+     пламени, что и favicon.svg, просто как PNG, не через var(--flame-*). -->
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="assets/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="assets/favicon-180.png">
+
+<!-- Open Graph / Twitter — чтобы ссылка в поиске и при пересылке в мессенджеры
+     разворачивалась со знаком и описанием, а не голым текстом. -->
+<meta property="og:type" content="website">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:url" content="https://puzzle.burninghouse.ru/">
+<meta property="og:site_name" content="BurningHouse">
+<meta property="og:title" content="Что собираем? — BurningHouse">
+<meta property="og:description" content="«Что собираем?» — сервис BurningHouse для сборки пазлов онлайн: библиотека готовых пазлов или свой из любой фотографии, фигурные детали, зум и панорама стола, совместная сборка в комнате с друзьями и сохранение прогресса для вошедших пользователей.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Что собираем? — BurningHouse">
+<meta name="twitter:description" content="«Что собираем?» — сервис BurningHouse для сборки пазлов онлайн: библиотека готовых пазлов или свой из любой фотографии, фигурные детали, зум и панорама стола, совместная сборка в комнате с друзьями и сохранение прогресса для вошедших пользователей.">
+
 <link rel="stylesheet" href="assets/brand.css">
 <link rel="stylesheet" href="assets/theme.css">
 <link rel="stylesheet" href="assets/styles.css">
