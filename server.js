@@ -31,6 +31,7 @@
  *   ALLOWED_ORIGIN  — источник, которому разрешён доступ к /api/* (CORS).
  *                   Нужен, только если фронтенд отдаётся отдельно (сейчас не так).
  *   ADMIN_INTERNAL_KEY — общий секрет для Admin (/internal/*, см. admin-internal.js).
+ *   MAX_PHOTO_BYTES (по умолчанию 4 МиБ) — потолок размера своего фото на пазл.
  */
 "use strict";
 
@@ -49,6 +50,9 @@ const DB_PATH = path.join(DATA_DIR, "store.db");
 const APP_HTML = path.join(__dirname, "index.html");
 const ASSETS_DIR = path.join(__dirname, "assets");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
+const PUZZLE_PHOTO_DIR = path.join(DATA_DIR, "puzzle-photos");
+const MAX_PHOTO_BYTES = parseInt(process.env.MAX_PHOTO_BYTES || String(4 * 1024 * 1024), 10);
+const PIECE_PRESETS = [12, 48, 108, 216];
 
 const AUTH_ISSUER = (process.env.AUTH_ISSUER || "").replace(/\/+$/, "");
 const AUTH_CLIENT_ID = process.env.AUTH_CLIENT_ID || "puzzle";
@@ -56,6 +60,7 @@ const AUTH_BASE = (process.env.AUTH_BASE || AUTH_ISSUER).replace(/\/+$/, "");
 
 // ───────────────────────── хранилище ─────────────────────────
 fs.mkdirSync(DATA_DIR, { recursive: true });
+fs.mkdirSync(PUZZLE_PHOTO_DIR, { recursive: true });
 
 const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL");   // конкурентные чтения не блокируют запись
@@ -132,6 +137,13 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_room_sessions_active ON room_sessions(room_id) WHERE completed_at IS NULL;
 `);
 
+// Пост-релизное добавление — таблица puzzles уже существует у всех,
+// кто успел развернуть сервис до этой фичи. ALTER TABLE ... ADD COLUMN
+// не бывает "IF NOT EXISTS" в SQLite, поэтому try/catch (тот же приём,
+// что в Trip/server.js для аналогичных догонов схемы).
+try { db.exec("ALTER TABLE puzzles ADD COLUMN owner_user_id TEXT"); } catch {}
+db.exec("CREATE INDEX IF NOT EXISTS idx_puzzles_owner ON puzzles(owner_user_id)");
+
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 
@@ -157,6 +169,14 @@ const stmt = {
       pieces_total = excluded.pieces_total,
       updated_at = excluded.updated_at,
       completed_at = excluded.completed_at`),
+
+  puzzlesPublic:  db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL ORDER BY sort_order, created_at"),
+  puzzlesVisible: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL OR owner_user_id = ? ORDER BY sort_order, created_at"),
+  insertCustomPuzzle: db.prepare(`INSERT INTO puzzles
+      (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id)
+      VALUES (?,?,?,?,?,?,?,?,?)`),
+  sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
+  deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
 };
 
 Object.assign(stmt, {
@@ -230,7 +250,8 @@ const readJson = async (req, limit = 512 * 1024) => JSON.parse((await readBody(r
 function puzzlePayload(p) {
   return {
     id: p.id, title: p.title, gridRows: p.grid_rows, gridCols: p.grid_cols,
-    imageUrl: `/assets/puzzles/${p.image_file}`, seed: p.seed,
+    imageUrl: p.owner_user_id ? `/uploads/${p.image_file}` : `/assets/puzzles/${p.image_file}`,
+    seed: p.seed, ownerUserId: p.owner_user_id || null,
   };
 }
 
@@ -256,6 +277,26 @@ function sanitizePieces(raw, rows, cols) {
   return out;
 }
 
+const PHOTO_MIME = { "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp" };
+
+/** Тип файла определяем по сигнатуре, а не по присланному Content-Type. */
+function sniffImage(buf) {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length > 8 && buf.toString("latin1", 0, 8) === "\x89PNG\r\n\x1a\n") return "image/png";
+  if (buf.length > 12 && buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+
+/** cols/rows из целевого числа деталей и соотношения сторон присланной
+ *  клиентом картинки — держит детали примерно квадратными вместо того,
+ *  чтобы резать любое фото на фиксированную сетку 4:3. */
+function gridForPieceTarget(total, width, height) {
+  const aspect = (width > 0 && height > 0) ? width / height : 4 / 3;
+  const cols = Math.max(2, Math.round(Math.sqrt(total * aspect)));
+  const rows = Math.max(2, Math.round(total / cols));
+  return { rows, cols };
+}
+
 function roomPayload(r, role, membersCount) {
   return { id: r.id, title: r.title, joinCode: r.join_code, createdBy: r.created_by,
     createdAt: r.created_at, updatedAt: r.updated_at, role, membersCount };
@@ -263,7 +304,8 @@ function roomPayload(r, role, membersCount) {
 function sessionSummary(s) {
   return { id: s.id, roomId: s.room_id, puzzleId: s.puzzle_id, startedBy: s.started_by,
     piecesPlaced: s.pieces_placed, piecesTotal: s.pieces_total,
-    startedAt: s.started_at, updatedAt: s.updated_at, completedAt: s.completed_at };
+    startedAt: s.started_at, updatedAt: s.updated_at, completedAt: s.completed_at,
+    puzzle: puzzlePayload(stmt.puzzle.get(s.puzzle_id)) };
 }
 function str(v, max) {
   if (typeof v !== "string") return null;
@@ -298,8 +340,21 @@ const MIME = {
   ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2",
 };
 
-/** Отдаём только index.html и assets/. store.db и server.js снаружи недоступны. */
+/** Отдаём только index.html, assets/ и uploads/ (свои фото). store.db и
+ *  server.js снаружи недоступны. */
 function serveStatic(res, pathname) {
+  if (pathname.startsWith("/uploads/")) {
+    const name = path.basename(pathname);
+    if (!/^[\w-]+\.(jpg|png|webp)$/i.test(name)) return false;
+    const file = path.join(PUZZLE_PHOTO_DIR, name);
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
+    res.writeHead(200, {
+      "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
+      "Cache-Control": "public, max-age=31536000, immutable",
+    });
+    fs.createReadStream(file).pipe(res);
+    return true;
+  }
   if (pathname !== "/index.html" && !pathname.startsWith("/assets/")) return false;
   const file = path.join(__dirname, path.normalize(pathname).replace(/^([\\/])+/, ""));
   if (file !== APP_HTML && !file.startsWith(ASSETS_DIR + path.sep)) return false;
@@ -356,13 +411,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     // Адрес auth отдаём с сервера, чтобы он не был зашит в статику.
-    if (p === "/api/config") return json(res, 200, { authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID });
-
-    // Библиотека пазлов видна без входа целиком — гость играет во встроенные
-    // пазлы без сохранения, это нормальный режим сервиса, не урезанный.
-    if (p === "/api/puzzles" && req.method === "GET") {
-      return json(res, 200, stmt.puzzles.all().map(puzzlePayload));
-    }
+    if (p === "/api/config") return json(res, 200, {
+      authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID,
+      maxPhotoBytes: MAX_PHOTO_BYTES, piecePresets: PIECE_PRESETS,
+    });
 
     if (p.startsWith("/api/")) {
       // Анонимный доступ к /api/* — нормальный режим (гость играет без
@@ -389,6 +441,55 @@ const server = http.createServer(async (req, res) => {
 async function api(req, res, url, user) {
   const seg = url.pathname.split("/").filter(Boolean); // ["api", "puzzles", ":id", "progress"]
   const m = req.method;
+
+  // Библиотека пазлов: без входа — только встроенные (гость играет без
+  // сохранения, это нормальный режим сервиса, не урезанный), вошедшему —
+  // ещё и свои приватные (см. «Ключевые решения»: видимость приватная).
+  if (seg[1] === "puzzles" && seg.length === 2 && m === "GET") {
+    const rows = user ? stmt.puzzlesVisible.all(user.id) : stmt.puzzlesPublic.all();
+    return json(res, 200, rows.map(puzzlePayload));
+  }
+
+  // Загрузка своего фото и генерация пазла из него — см. README «Свои фото».
+  if (seg[1] === "puzzles" && seg.length === 2 && m === "POST") {
+    if (!user) return json(res, 401, { error: "unauthorized" });
+
+    const targetTotal = parseInt(url.searchParams.get("pieces"), 10);
+    if (!PIECE_PRESETS.includes(targetTotal)) return json(res, 400, { error: "bad pieces" });
+    const width = parseInt(url.searchParams.get("w"), 10) || 0;
+    const height = parseInt(url.searchParams.get("h"), 10) || 0;
+    const title = str(url.searchParams.get("title"), 80) || "Мой пазл";
+
+    let buf;
+    try { buf = await readBody(req, MAX_PHOTO_BYTES); }
+    catch (e) { if (e.tooLarge) return json(res, 413, { error: "too large" }); throw e; }
+    const mime = sniffImage(buf);
+    if (!mime) return json(res, 415, { error: "not an image" });
+
+    const { rows, cols } = gridForPieceTarget(targetTotal, width, height);
+    const id = crypto.randomUUID();
+    const file = id + PHOTO_MIME[mime];
+    fs.writeFileSync(path.join(PUZZLE_PHOTO_DIR, file), buf);
+    const seed = crypto.randomInt(1, 2 ** 31 - 1);
+    const ts = now();
+    stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id);
+    return json(res, 200, puzzlePayload(stmt.puzzle.get(id)));
+  }
+
+  // Удаление своего пазла — заблокировано, если им уже играли в комнате
+  // (см. «Ключевые решения»: room_sessions.puzzle_id без ON DELETE CASCADE).
+  if (seg[1] === "puzzles" && seg[2] && seg.length === 3 && m === "DELETE") {
+    if (!user) return json(res, 401, { error: "unauthorized" });
+    const puzzle = stmt.puzzle.get(seg[2]);
+    if (!puzzle) return json(res, 404, { error: "not found" });
+    if (puzzle.owner_user_id !== user.id) return json(res, 403, { error: "not yours" });
+    if (stmt.sessionsForPuzzle.get(puzzle.id)) {
+      return json(res, 409, { error: "in use", message: "Этим пазлом уже играли в комнате — удалить нельзя." });
+    }
+    stmt.deletePuzzle.run(puzzle.id);
+    try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
+    return json(res, 200, { ok: true });
+  }
 
   // ── прогресс по конкретному пазлу: единственное, что требует входа ──
   if (seg[1] === "puzzles" && seg[2] && seg[3] === "progress" && seg.length === 4) {

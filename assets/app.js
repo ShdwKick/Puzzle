@@ -23,10 +23,85 @@ function localProgress(id) {
 /* ───────────────────────── общие данные ───────────────────────── */
 async function getPuzzles() {
   if (puzzlesCache) return puzzlesCache;
-  const res = await fetch("/api/puzzles");
+  const res = auth.isAuthenticated() ? await auth.fetch("/api/puzzles") : await fetch("/api/puzzles");
   if (!res.ok) throw new Error("puzzles fetch failed");
   puzzlesCache = await res.json();
   return puzzlesCache;
+}
+
+/** Верхний потолок стороны выше, чем у фото Trip (2000 против 1600) —
+ *  картинка режется на десятки кусков и разглядывается вблизи при зуме. */
+async function shrinkForPuzzle(file) {
+  const bitmap = await createImageBitmap(file);
+  const MAX_SIDE = 2000;
+  const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height));
+  const w = Math.round(bitmap.width * scale), h = Math.round(bitmap.height * scale);
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+  const blob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", 0.86));
+  return { blob, width: w, height: h };
+}
+
+async function uploadPuzzlePhoto(file, pieces, title) {
+  const { blob, width, height } = await shrinkForPuzzle(file);
+  const qs = new URLSearchParams({ pieces: String(pieces), w: String(width), h: String(height), title: title || "Мой пазл" });
+  const res = await auth.fetch(`/api/puzzles?${qs}`, {
+    method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "upload failed");
+  puzzlesCache = null; // библиотека изменилась — старый кэш врёт
+  return data;
+}
+
+async function deletePuzzle(id) {
+  const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || data.error || "delete failed");
+  puzzlesCache = null;
+}
+
+/** Вставляет форму загрузки в контейнер, вызывает onDone(puzzle) при
+ *  успехе. Используется и в библиотеке (renderLibrary), и в пикере
+ *  комнаты (renderRoom) — с разным onDone: один переходит на #/table/:id,
+ *  другой стартует сеанс. */
+function mountUploadForm(container, onDone) {
+  container.innerHTML = `
+    <form class="upload-form" id="uploadForm">
+      <input class="text-input" id="uploadTitle" type="text" maxlength="80" placeholder="Название — необязательно">
+      <select class="text-input" id="uploadPieces">
+        <option value="12">Легко · 12 деталей</option>
+        <option value="48" selected>Средне · 48 деталей</option>
+        <option value="108">Сложно · 108 деталей</option>
+        <option value="216">Эксперт · 216 деталей</option>
+      </select>
+      <input type="file" id="uploadFile" accept="image/*" required>
+      <button class="btn filled" type="submit">Собрать из фото</button>
+      <p class="state-note" id="uploadError" hidden></p>
+    </form>`;
+  const form = $(container, "#uploadForm");
+  const errEl = $(container, "#uploadError");
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    errEl.hidden = true;
+    const file = $(form, "#uploadFile").files[0];
+    if (!file) { errEl.textContent = "Выберите файл"; errEl.hidden = false; return; }
+    const submitBtn = $(form, "button[type=submit]");
+    submitBtn.disabled = true;
+    try {
+      const pieces = parseInt($(form, "#uploadPieces").value, 10);
+      const title = $(form, "#uploadTitle").value.trim();
+      const puzzle = await uploadPuzzlePhoto(file, pieces, title);
+      onDone(puzzle);
+    } catch (err) {
+      errEl.textContent = err.message === "not an image" ? "Файл не похож на изображение (JPEG/PNG/WebP)."
+        : err.message === "too large" ? "Файл слишком большой даже после сжатия."
+        : "Не удалось загрузить — попробуйте ещё раз.";
+      errEl.hidden = false;
+      submitBtn.disabled = false;
+    }
+  });
 }
 
 /** Прогресс по пазлу для карточки библиотеки: сервер для вошедшего, localStorage для гостя. */
@@ -71,7 +146,7 @@ function renderAuthArea() {
 }
 
 /* ───────────────────────── библиотека ───────────────────────── */
-function buildCard(p) {
+function buildCard(p, opts = {}) {
   const tpl = document.getElementById("tplPuzzleCard");
   const node = tpl.content.firstElementChild.cloneNode(true);
   const img = $(node, "img");
@@ -79,6 +154,19 @@ function buildCard(p) {
   img.alt = p.title;
   $(node, ".puzzle-card-title").textContent = p.title;
   $(node, ".puzzle-card-meta").textContent = `${p.gridCols}×${p.gridRows} · ${p.gridCols * p.gridRows} деталей`;
+  const mine = p.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === p.ownerUserId;
+  if (mine && opts.allowDelete !== false) {
+    const del = document.createElement("button");
+    del.className = "btn text sm puzzle-card-delete";
+    del.type = "button"; del.textContent = "Удалить";
+    del.addEventListener("click", async ev => {
+      ev.stopPropagation();
+      if (!confirm(`Удалить пазл «${p.title}»?`)) return;
+      try { await deletePuzzle(p.id); node.remove(); }
+      catch (err) { alert(err.message === "in use" ? "Этим пазлом уже играли в комнате — удалить нельзя." : "Не удалось удалить."); }
+    });
+    $(node, ".puzzle-card-body").appendChild(del);
+  }
   $(node, ".puzzle-card-play").addEventListener("click", () => {
     location.hash = `#/table/${encodeURIComponent(p.id)}`;
   });
@@ -110,6 +198,7 @@ async function renderLibrary(root, signal) {
       <p>Собирайте встроенные пазлы прямо в браузере — детали фигурные, стол зумится и таскается. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
     </div>
     <div id="guestNoteWrap"></div>
+    <div id="uploadWrap"></div>
     <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
 
   if (!auth.isAuthenticated()) {
@@ -123,6 +212,10 @@ async function renderLibrary(root, signal) {
     btn.addEventListener("click", () => auth.login());
     note.append(span, btn);
     $(root, "#guestNoteWrap").appendChild(note);
+  } else {
+    mountUploadForm($(root, "#uploadWrap"), puzzle => {
+      location.hash = `#/table/${encodeURIComponent(puzzle.id)}`;
+    });
   }
 
   let puzzles;
@@ -725,21 +818,21 @@ async function renderRoom(root, roomId, signal) {
   if (room.activeSession) {
     activeEl.innerHTML = `
       <div class="room-active-card">
-        <p>Сейчас за столом собирают пазл «${room.activeSession.puzzleId}» — ${room.activeSession.piecesPlaced}/${room.activeSession.piecesTotal} деталей.</p>
+        <p>Сейчас за столом собирают пазл «${room.activeSession.puzzle.title}» — ${room.activeSession.piecesPlaced}/${room.activeSession.piecesTotal} деталей.</p>
         <button class="btn filled" id="joinTableBtn" type="button">За стол</button>
       </div>`;
     $(activeEl, "#joinTableBtn").addEventListener("click", () => {
       location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(room.activeSession.id)}`;
     }, { signal });
   } else {
-    activeEl.innerHTML = '<h3 class="room-section-title">Начать сборку</h3><div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">Загружаем пазлы…</p></div>';
+    activeEl.innerHTML = '<h3 class="room-section-title">Начать сборку</h3><div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">Загружаем пазлы…</p></div><div id="roomUploadWrap"></div>';
     let puzzles;
     try { puzzles = await getPuzzles(); } catch { $(activeEl, "#roomPuzzleGrid").innerHTML = '<p class="state-note">Не удалось загрузить пазлы.</p>'; puzzles = []; }
     if (signal.aborted) return;
     const grid = $(activeEl, "#roomPuzzleGrid");
     grid.innerHTML = "";
     for (const p of puzzles) {
-      const node = buildCard(p);
+      const node = buildCard(p, { allowDelete: false });
       // Внутри комнаты клик по карточке стартует общий сеанс, а не сольный
       // стол — заменяем обработчик, повесленный buildCard на "#/table/:id".
       const playBtn = $(node, ".puzzle-card-play");
@@ -764,6 +857,14 @@ async function renderRoom(root, roomId, signal) {
       }, { signal });
       grid.appendChild(node);
     }
+
+    mountUploadForm($(activeEl, "#roomUploadWrap"), async puzzle => {
+      const res = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId: puzzle.id }),
+      });
+      const data = await res.json();
+      if (res.ok) location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(data.id)}`;
+    });
   }
 
   const historyEl = $(root, "#roomHistory");
@@ -776,7 +877,7 @@ async function renderRoom(root, roomId, signal) {
       const row = document.createElement("div");
       row.className = "history-row";
       row.innerHTML = `<span class="history-puzzle"></span><span class="history-meta"></span>`;
-      $(row, ".history-puzzle").textContent = s.puzzleId;
+      $(row, ".history-puzzle").textContent = s.puzzle.title;
       $(row, ".history-meta").textContent = `${s.piecesTotal} деталей · собран ${fmtDate(s.completedAt)}`;
       historyEl.appendChild(row);
     }
@@ -842,22 +943,17 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
 
   if (!auth.isAuthenticated()) { stage.innerHTML = '<p class="state-note">Войдите, чтобы сесть за стол комнаты.</p>'; return; }
 
-  let session, puzzles;
+  let session;
   try {
-    const [sessionRes, puzzleList] = await Promise.all([
-      auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`),
-      getPuzzles(),
-    ]);
+    const sessionRes = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`);
     if (!sessionRes.ok) throw new Error("session fetch failed");
     session = await sessionRes.json();
-    puzzles = puzzleList;
   } catch {
     if (!signal.aborted) stage.innerHTML = '<p class="state-note">Не удалось открыть стол — обновите страницу.</p>';
     return;
   }
   if (signal.aborted) return;
-  const puzzle = puzzles.find(p => p.id === session.puzzleId);
-  if (!puzzle) { stage.innerHTML = '<p class="state-note">Такого пазла нет.</p>'; return; }
+  const puzzle = session.puzzle;
   $(root, "#tableTitle").textContent = puzzle.title;
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;

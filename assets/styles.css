@@ -87,6 +87,15 @@ a{color:inherit}
 .puzzle-card-title{font-size:1.05rem;font-weight:650}
 .puzzle-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);flex:1}
 .puzzle-card-play{align-self:flex-start;margin-top:.2rem}
+.puzzle-card-delete{align-self:flex-start;color:var(--md-sys-color-error)}
+
+/* ===================== ЗАГРУЗКА СВОЕГО ФОТО ===================== */
+.upload-form{
+  display:flex;flex-direction:column;gap:.7rem;margin-bottom:1.4rem;max-width:26rem;
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
+  padding:1rem 1.1rem;box-shadow:var(--e1);
+}
+.upload-form .btn{align-self:flex-start}
 
 /* ===================== ГОСТЕВАЯ ПОДСКАЗКА ===================== */
 .guest-note{
