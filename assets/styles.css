@@ -39,10 +39,13 @@ a{color:inherit}
 .muted{color:var(--md-sys-color-on-surface-variant);font-size:.85rem}
 
 /* ===================== APPBAR ===================== */
-.appbar{position:sticky;top:0;z-index:10;backdrop-filter:blur(10px);
+/* height/z-index — как в остальных сервисах BurningHouse (см. Movies) —
+   .table-screen ниже вычитает высоту шапки через calc(), проверено, что
+   64px укладывается в уже заложенный запас (4.6rem). */
+.appbar{position:sticky;top:0;z-index:20;height:64px;backdrop-filter:blur(10px);
   background:color-mix(in srgb, var(--md-sys-color-surface) 78%, transparent);
   border-bottom:1px solid var(--md-sys-color-outline-variant)}
-.appbar-inner{max-width:76rem;margin:0 auto;padding:.7rem 1.1rem;display:flex;align-items:center;gap:1rem}
+.appbar-inner{max-width:76rem;height:100%;margin:0 auto;padding:0 1.1rem;display:flex;align-items:center;gap:1rem}
 .spacer{flex:1}
 .auth-area{display:flex;align-items:center;gap:.6rem}
 .auth-user{display:flex;align-items:center;gap:.5rem;font-size:.92rem}
