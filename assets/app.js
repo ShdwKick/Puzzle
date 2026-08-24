@@ -58,6 +58,36 @@ function bindModal(backdropId, openBtnId, closeBtnId) {
   });
 }
 
+/* ───────────────────────── модалка выбора сложности ─────────────────────────
+ * Общая на все карточки пазлов (библиотека и комната), не привязана к
+ * конкретному рендеру — buildCard() ниже всегда показывает одну кнопку
+ * «За стол»; если у пазла больше одного уровня сложности, клик открывает
+ * эту модалку с выпадающим списком, выбор происходит ПОСЛЕ клика на «За
+ * стол», а не вместо него (раньше — ряд мелких кнопок прямо на карточке). */
+let pendingDifficultyChoice = null; // {variants, onPlay} между открытием модалки и подтверждением выбора
+function openDifficultyModal(title, variants, onPlay) {
+  document.getElementById("difficultyModalTitle").textContent = `Выберите сложность — «${title}»`;
+  const select = document.getElementById("difficultySelect");
+  select.innerHTML = "";
+  variants.forEach((v, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.textContent = DIFFICULTY_LABELS[i] || `${v.gridRows * v.gridCols} деталей`;
+    select.appendChild(opt);
+  });
+  pendingDifficultyChoice = { variants, onPlay };
+  openModal("difficultyModalBackdrop");
+}
+bindModal("difficultyModalBackdrop", null, "difficultyModalClose");
+document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
+  if (!pendingDifficultyChoice) return;
+  const { variants, onPlay } = pendingDifficultyChoice;
+  const idx = Number(document.getElementById("difficultySelect").value);
+  closeModal("difficultyModalBackdrop");
+  pendingDifficultyChoice = null;
+  onPlay(variants[idx]);
+});
+
 /* ───────────────────────── хранилище гостя ───────────────────────── */
 const localKey = id => `puzzle_progress_${id}`;
 function localProgress(id) {
@@ -88,7 +118,11 @@ const DIFFICULTY_LABELS = ["Легко", "Средне", "Сложно", "Экс
 function groupPuzzles(list) {
   const groups = new Map();
   for (const p of list) {
-    const key = p.ownerUserId ? `${p.ownerUserId}:${p.imageUrl}` : p.id;
+    // imageUrl всегда, не p.id: у встроенных пазлов (Холмы/Лес/Горы) теперь
+    // тоже несколько уровней сложности (см. server.js, BUILTIN_IMAGES), у
+    // каждого свой уникальный id, но общий imageUrl — тот же общий ключ
+    // группировки, что уже работал для своих фото.
+    const key = p.ownerUserId ? `${p.ownerUserId}:${p.imageUrl}` : p.imageUrl;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(p);
   }
@@ -142,6 +176,18 @@ async function deletePuzzle(id) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || data.error || "delete failed");
   puzzlesCache = null;
+}
+
+/** DELETE /api/rooms/:id/sessions/:sessionId — освобождает слот из лимита
+ *  MAX_ACTIVE_SESSIONS_PER_ROOM (активный, но пустой сеанс) или убирает
+ *  завершённый сеанс из истории. Сервер отбивает 409-м, если сеанс сейчас
+ *  активный и за столом реально кто-то есть — тогда бросаем понятную ошибку,
+ *  вызывающий код (renderRoom) ловит её текстом. */
+async function deleteRoomSession(roomId, sessionId) {
+  const res = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  if (res.status === 409) throw new Error("table not empty");
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "delete session failed");
 }
 
 /** Вставляет форму загрузки в контейнер, вызывает onDone({title, variants})
@@ -235,7 +281,7 @@ function buildCard(p, opts = {}) {
   $(node, ".puzzle-card-title").textContent = p.title;
   const variants = p.variants || [p];
   $(node, ".puzzle-card-meta").textContent = variants.length > 1
-    ? `${variants.length} уровня сложности`
+    ? `${variants.length} ${plural(variants.length, "уровень", "уровня", "уровней")} сложности`
     : `${p.gridCols}×${p.gridRows} · ${p.gridCols * p.gridRows} деталей`;
   const mine = p.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === p.ownerUserId;
   if (mine && opts.allowDelete !== false) {
@@ -252,21 +298,13 @@ function buildCard(p, opts = {}) {
   }
   const playBtn = $(node, ".puzzle-card-play");
   const onPlay = opts.onPlay || (v => { location.hash = `#/table/${encodeURIComponent(v.id)}`; });
-  if (variants.length > 1) {
-    const picker = document.createElement("div");
-    picker.className = "difficulty-picker";
-    variants.forEach((v, i) => {
-      const b = document.createElement("button");
-      b.className = "btn outlined sm";
-      b.type = "button";
-      b.textContent = DIFFICULTY_LABELS[i] || `${v.gridRows * v.gridCols}`;
-      b.addEventListener("click", () => onPlay(v));
-      picker.appendChild(b);
-    });
-    playBtn.replaceWith(picker);
-  } else {
-    playBtn.addEventListener("click", () => onPlay(variants[0]));
-  }
+  // Всегда одна кнопка «За стол» — выбор сложности (если вариантов больше
+  // одного) происходит ПОСЛЕ клика, в общей модалке (см. openDifficultyModal
+  // выше), не рядом мелких кнопок прямо на карточке.
+  playBtn.addEventListener("click", () => {
+    if (variants.length > 1) openDifficultyModal(p.title, variants, onPlay);
+    else onPlay(variants[0]);
+  });
   return node;
 }
 
@@ -320,10 +358,13 @@ async function renderLibrary(root, signal) {
   if (signal.aborted) return;
 
   // Свои фото — только в комнатах (см. README «Свои фото»), соло-библиотека
-  // видит исключительно встроенные пазлы.
+  // видит исключительно встроенные пазлы. groupPuzzles сводит все уровни
+  // сложности одного изображения (общий imageUrl) в одну карточку — иначе
+  // Холмы/Лес/Горы показались бы по 6 раз каждый (см. server.js, BUILTIN_IMAGES).
   const grid = $(root, "#puzzleGrid");
   grid.innerHTML = "";
-  const cards = puzzles.filter(p => !p.ownerUserId).map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
+  const cards = groupPuzzles(puzzles.filter(p => !p.ownerUserId))
+    .map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
   for (const { p, node } of cards) applyBadge(node, p);
 }
 
@@ -1201,6 +1242,7 @@ async function renderRoom(root, roomId, signal) {
     <div class="room-active-card">
       <p>Сейчас за столом собирают пазл «${s.puzzle.title}» — ${s.piecesPlaced}/${s.piecesTotal} деталей.</p>
       <button class="btn filled join-table-btn" type="button" data-session="${s.id}">За стол</button>
+      <button class="btn outlined sm delete-session-btn" type="button" data-session="${s.id}" data-title="${s.puzzle.title}">Удалить</button>
     </div>`).join("")
     + '<div class="room-section-head"><h3 class="room-section-title">Начать сборку</h3>'
     + '<button class="icon-btn tonal" id="addPuzzleBtn" type="button" title="Добавить пазл" aria-label="Добавить пазл">'
@@ -1209,6 +1251,24 @@ async function renderRoom(root, roomId, signal) {
   for (const btn of activeEl.querySelectorAll(".join-table-btn")) {
     btn.addEventListener("click", () => {
       location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(btn.dataset.session)}`;
+    }, { signal });
+  }
+  // «Лишний» сеанс, начатый по ошибке — освобождает слот из лимита
+  // MAX_ACTIVE_SESSIONS_PER_ROOM. Сервер отобьёт 409-м, если за столом
+  // сейчас реально кто-то сидит (см. deleteRoomSession) — в этом случае
+  // просто сообщаем и оставляем карточку на месте.
+  for (const btn of activeEl.querySelectorAll(".delete-session-btn")) {
+    btn.addEventListener("click", async () => {
+      const { session: sid, title } = btn.dataset;
+      if (!confirm(`Удалить сеанс сборки «${title}»?`)) return;
+      btn.disabled = true;
+      try {
+        await deleteRoomSession(roomId, sid);
+        btn.closest(".room-active-card").remove();
+      } catch (e) {
+        btn.disabled = false;
+        alert(e.message === "table not empty" ? "За этим столом сейчас кто-то сидит — сначала все должны выйти." : "Не удалось удалить.");
+      }
     }, { signal });
   }
 
@@ -1261,7 +1321,10 @@ async function renderRoom(root, roomId, signal) {
           <span class="history-puzzle"></span>
           <span class="history-meta"></span>
         </div>
-        <button class="btn outlined sm history-replay" type="button">Собрать ещё раз</button>`;
+        <div class="history-actions">
+          <button class="btn outlined sm history-replay" type="button">Собрать ещё раз</button>
+          <button class="btn outlined sm history-delete" type="button">Удалить</button>
+        </div>`;
       $(row, ".history-puzzle").textContent = s.puzzle.title;
       $(row, ".history-meta").textContent = `${s.piecesTotal} деталей · собран ${fmtDate(s.completedAt)}`;
       // Доступна и когда сейчас уже идёт другой активный сеанс —
@@ -1272,6 +1335,18 @@ async function renderRoom(root, roomId, signal) {
           const newId = await startRoomSession(roomId, s.puzzle.id);
           location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`;
         } catch { e.target.disabled = false; }
+      }, { signal });
+      // Завершённый сеанс — за столом никого уже нет (completedAt выставлен),
+      // 409 здесь в норме не встречается, но deleteRoomSession всё равно
+      // корректно её обработает, если что-то поменялось между рендером и кликом.
+      $(row, ".history-delete").addEventListener("click", async e => {
+        if (!confirm(`Удалить сеанс сборки «${s.puzzle.title}»?`)) return;
+        e.target.disabled = true;
+        try { await deleteRoomSession(roomId, s.id); row.remove(); }
+        catch (err) {
+          e.target.disabled = false;
+          alert(err.message === "table not empty" ? "За этим столом сейчас кто-то сидит — сначала все должны выйти." : "Не удалось удалить.");
+        }
       }, { signal });
       historyEl.appendChild(row);
     }

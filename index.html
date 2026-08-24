@@ -155,6 +155,27 @@
   </div>
 </div>
 
+<!-- ===================== МОДАЛКА: ВЫБОР СЛОЖНОСТИ =====================
+     Общая на все карточки пазлов (и библиотека, и комната) — buildCard()
+     всегда показывает одну кнопку «За стол»; если у пазла больше одного
+     уровня сложности, клик по ней открывает эту модалку с выпадающим
+     списком вместо прежнего ряда мелких кнопок на самой карточке (см.
+     openDifficultyModal в assets/app.js). -->
+<div class="modal-backdrop hidden" id="difficultyModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="difficultyModalTitle">
+    <div class="modal-head">
+      <h2 id="difficultyModalTitle">Выберите сложность</h2>
+      <button class="icon-btn" id="difficultyModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <div class="bar">
+      <select class="text-input" id="difficultySelect"></select>
+      <button class="btn filled" id="difficultyPlayBtn" type="button">Играть</button>
+    </div>
+  </div>
+</div>
+
 <script src="assets/brand.js"></script>
 <script src="assets/auth-client.js"></script>
 <script src="assets/puzzle-shapes.js"></script>

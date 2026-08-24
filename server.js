@@ -220,23 +220,8 @@ Object.assign(stmt, {
     VALUES (?,?,?,NULL,0,?,?,?,?,NULL)`),
   updateSessionPieces: db.prepare(`
     UPDATE room_sessions SET pieces = ?, pieces_placed = ?, updated_at = ?, completed_at = ? WHERE id = ?`),
+  deleteSession: db.prepare("DELETE FROM room_sessions WHERE id = ?"),
 });
-
-// ───────────────────────── манифест встроенных пазлов ─────────────────────────
-// Картинки — SVG-заглушки в assets/puzzles/ (см. README «Картинки для
-// встроенных пазлов»): загрузка через Admin — отдельная задача, пока три
-// фиксированных пазла, накатываются INSERT OR IGNORE при каждом старте. Seed
-// зашит здесь и не должен меняться — см. схему выше и комментарий в плане:
-// если понадобится другой размер сетки, заводить новый id, а не менять
-// grid_rows/grid_cols у существующего — сломает уже сохранённый pieces JSON.
-const PUZZLE_MANIFEST = [
-  { id: "hills",     title: "Холмы",  file: "hills.svg",     rows: 4,  cols: 3, seed: 20260501, order: 1 },
-  { id: "forest",    title: "Лес",    file: "forest.svg",    rows: 8,  cols: 6, seed: 20260502, order: 2 },
-  { id: "mountains", title: "Горы",   file: "mountains.svg", rows: 12, cols: 9, seed: 20260503, order: 3 },
-];
-for (const p of PUZZLE_MANIFEST) {
-  stmt.insertPuzzle.run(p.id, p.title, p.file, p.rows, p.cols, p.seed, p.order, Date.now());
-}
 
 // ───────────────────────── мелкие утилиты ─────────────────────────
 const now = () => Date.now();
@@ -264,7 +249,8 @@ const readJson = async (req, limit = 512 * 1024) => JSON.parse((await readBody(r
 // gridCols,imageUrl}), но без него клиент не сможет детерминированно
 // построить те же формы деталей на разных устройствах/сессиях — buildEdges
 // в assets/puzzle-shapes.js требует seed на вход. Значение из БД, зашитое
-// один раз при вставке (см. PUZZLE_MANIFEST) и никогда не меняющееся.
+// один раз при вставке (см. BUILTIN_IMAGES ниже и insertCustomPuzzle для
+// своих фото) и никогда не меняющееся.
 function puzzlePayload(p) {
   return {
     id: p.id, title: p.title, gridRows: p.grid_rows, gridCols: p.grid_cols,
@@ -337,6 +323,60 @@ function gridForPieceTarget(total, width, height) {
   const cols = Math.max(2, Math.round(Math.sqrt(total * aspect)));
   const rows = Math.max(2, Math.round(total / cols));
   return { rows, cols };
+}
+
+// ───────────────────────── манифест встроенных пазлов ─────────────────────────
+// Картинки — SVG-заглушки в assets/puzzles/ (см. README «Картинки для
+// встроенных пазлов»): загрузка через Admin — отдельная задача, пока три
+// фиксированных изображения, каждое сразу заводит все PIECE_PRESETS уровней
+// сложности (тот же приём, что у своих фото — см. POST /api/puzzles ниже),
+// накатываются INSERT OR IGNORE при каждом старте.
+//
+// Раньше (до появления уровней сложности у встроенных пазлов) здесь было
+// по одной записи на изображение с rows/cols, подобранными вручную:
+// hills 4×3 (12 деталей), forest 8×6 (48), mountains 12×9 (108). Эти три
+// числа — ТОЧНЫЙ результат gridForPieceTarget(total, 3, 4) (aspect=3/4=0.75)
+// для тех же total — то есть картинки-плейсхолдеры действительно 3:4, и
+// исходная сетка была подобрана именно этой формулой. Поэтому недостающие
+// уровни (216/300/480 из PIECE_PRESETS) считаем той же функцией с тем же
+// aspect, а не подбираем вручную заново.
+//
+// id/seed трёх «старых» вариантов (12/48/108) — уже сохранённые прогрессы
+// существующих пользователей (puzzle_progress завязан на puzzle_id) и
+// ссылки вида #/table/hills — их нельзя менять. Новые уровни получают
+// новые стабильные id (`hills-216` и т.п.) и новый, но детерминированный на
+// каждый рестарт seed (baseSeed + total) — тот же общий file, что и у
+// базового изображения, чтобы клиент сгруппировал варианты в одну карточку
+// (см. groupPuzzles в assets/app.js, ключ группировки — imageUrl).
+const BUILTIN_IMAGES = [
+  { key: "hills",     title: "Холмы",  file: "hills.svg",     order: 1, baseSeed: 20260501 },
+  { key: "forest",    title: "Лес",    file: "forest.svg",    order: 2, baseSeed: 20260502 },
+  { key: "mountains", title: "Горы",   file: "mountains.svg", order: 3, baseSeed: 20260503 },
+];
+const LEGACY_BUILTIN_TOTALS = { hills: 12, forest: 48, mountains: 108 }; // уже созданы под старыми id, не трогаем
+const LEGACY_BUILTIN_SEEDS = { hills: 20260501, forest: 20260502, mountains: 20260503 }; // старые точные значения, не пересчитывать
+for (const img of BUILTIN_IMAGES) {
+  const legacyTotal = LEGACY_BUILTIN_TOTALS[img.key];
+  for (const total of PIECE_PRESETS) {
+    const isLegacy = total === legacyTotal;
+    const id = isLegacy ? img.key : `${img.key}-${total}`;
+    const seed = isLegacy ? LEGACY_BUILTIN_SEEDS[img.key] : img.baseSeed + total;
+    const { rows, cols } = gridForPieceTarget(total, 3, 4);
+    stmt.insertPuzzle.run(id, img.title, img.file, rows, cols, seed, img.order, Date.now());
+  }
+}
+// Защита от тихой регрессии: если когда-нибудь поменяется aspect в
+// gridForPieceTarget, порядок PIECE_PRESETS или что-то ещё в формуле выше,
+// три исходные записи (hills/forest/mountains) не должны молча разъехаться
+// с уже сохранённым в БД pieces JSON (формы деталей завязаны на rows/cols
+// через seed) — падаем сразу при старте вместо того, чтобы визуально
+// сломать чей-то уже собранный/начатый пазл.
+const EXPECTED_LEGACY_GRID = { hills: [4, 3], forest: [8, 6], mountains: [12, 9] };
+for (const [key, [rows, cols]] of Object.entries(EXPECTED_LEGACY_GRID)) {
+  const row = stmt.puzzle.get(key);
+  if (!row || row.grid_rows !== rows || row.grid_cols !== cols) {
+    throw new Error(`Встроенный пазл "${key}": ожидалась сетка ${rows}×${cols}, получено ${row ? `${row.grid_rows}×${row.grid_cols}` : "запись не найдена"}. Останавливаюсь, чтобы не сломать уже сохранённый прогресс.`);
+  }
 }
 
 function roomPayload(r, role, membersCount) {
@@ -421,7 +461,7 @@ const server = http.createServer(async (req, res) => {
 
   if (ALLOWED_ORIGIN && p.startsWith("/api/")) {
     res.setHeader("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
     if (req.method === "OPTIONS") { res.writeHead(204); return res.end(); }
   }
@@ -650,6 +690,27 @@ async function api(req, res, url, user) {
         const session = stmt.session.get(seg[4]);
         if (!session || session.room_id !== roomId) return json(res, 404, { error: "not found" });
         return json(res, 200, sessionSummary(session));
+      }
+
+      // Удаление сеанса — освобождает слот из MAX_ACTIVE_SESSIONS_PER_ROOM
+      // (см. константу выше), если кто-то по ошибке начал лишнюю сборку и
+      // ушёл. Членство в комнате уже проверено выше (member). Нельзя удалить
+      // сеанс, за которым сейчас реально кто-то сидит за столом — только
+      // "активный, но пустой" или уже завершённый.
+      if (seg[3] === "sessions" && seg[4] && seg.length === 5 && m === "DELETE") {
+        const session = stmt.session.get(seg[4]);
+        if (!session || session.room_id !== roomId) return json(res, 404, { error: "not found" });
+        const live = liveSessions.get(session.id);
+        if (!session.completed_at && live && live.conns.size > 0) {
+          return json(res, 409, { error: "table not empty" });
+        }
+        stmt.deleteSession.run(session.id);
+        // Объект RoomState мог остаться в карте с нулём подключений (сеанс
+        // был активным, но никто не сидел за столом) — убираем ссылку на
+        // теперь уже удалённую строку БД, чтобы persistSession/schedulePersist
+        // не воскресили её обратно записью в никуда.
+        if (live) liveSessions.delete(session.id);
+        return json(res, 200, { ok: true });
       }
     }
 

@@ -99,9 +99,11 @@ const sessionId = r.body.id, piecesTotal = r.body.piecesTotal;
 // план п.3) — тот же puzzleId на разные сеансы допустим, схема этого не
 // запрещает. Стартуем ещё 4 (итого 5 активных), все должны создаться
 // успешно, 6-й должен быть отбит лимитом.
+const extraSessionIds = []; // к ним никто по WS не подключался — пригодятся для теста DELETE
 for (let i = 2; i <= 5; i++) {
   r = await asJson(tokenA, `/rooms/${roomId}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
   ok(`сеанс №${i} стартовал`, r.status === 200, JSON.stringify(r.body));
+  if (r.body.id) extraSessionIds.push(r.body.id);
 }
 r = await asJson(tokenA, `/rooms/${roomId}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
 ok("6-й сеанс отбит лимитом", r.status === 409 && r.body.error === "room session limit reached", JSON.stringify(r.body));
@@ -147,7 +149,7 @@ await waitMessage(wsB, m => m.type === "sync");
 // наибольшего связного кластера (см. assets/puzzle-clusters.js, CELL=100
 // там же и в server.js). Тип "place" убран из протокола целиком — клиент
 // стыкует детали только через геометрию, сервер отдельно её пересчитывает.
-const ROWS = 4, COLS = 3, PUZZLE_CELL = 100; // «hills» — 4×3, см. PUZZLE_MANIFEST в server.js
+const ROWS = 4, COLS = 3, PUZZLE_CELL = 100; // «hills» — 4×3 (12 деталей), см. BUILTIN_IMAGES в server.js
 // Шаг 500, не CELL=100 — заведомо несмежная раскладка: каждая деталь сама
 // себе кластер размера 1, largest === 1 независимо от общего числа деталей.
 function scatteredPieces() {
@@ -258,7 +260,30 @@ ok("конкурентные partial-group от двух участников н
 ok("итог гонки — два независимых кластера по 2 детали, piecesPlaced===2", raceSync.piecesPlaced === 2, JSON.stringify({ piecesPlaced: raceSync.piecesPlaced }));
 ok("длина pieces не меняется при частичном group", raceSync.pieces.length === piecesTotal, String(raceSync.pieces.length));
 
+// ───────── удаление сеанса (DELETE /api/rooms/:id/sessions/:sessionId) ─────────
+// Активный сеанс без живых подключений — extraSessionIds[0], к которому
+// никто ни разу не подключался по WS (см. цикл создания 5 параллельных
+// сборок выше) — удаление должно пройти, и GET /sessions больше не должен
+// его возвращать.
+const deletableId = extraSessionIds[0];
+r = await asJson(tokenA, `/rooms/${roomId}/sessions/${deletableId}`, { method: "DELETE" });
+ok("активный сеанс без живых подключений удаляется", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+r = await asJson(tokenA, `/rooms/${roomId}/sessions`);
+ok("удалённый сеанс больше не в списке", r.status === 200 && !r.body.some(s => s.id === deletableId), JSON.stringify(r.body.map(s => s.id)));
+
+// Активный сеанс, за столом которого сейчас реально кто-то есть (wsC/wsD
+// ещё подключены к raceSessionId) — удалять нельзя, 409.
+r = await asJson(tokenA, `/rooms/${roomId}/sessions/${raceSessionId}`, { method: "DELETE" });
+ok("активный сеанс с живым подключением НЕЛЬЗЯ удалить — 409", r.status === 409, JSON.stringify(r.body));
+
 wsC.close(); wsD.close();
 wsA.close(); wsB.close();
+await sleep(300); // дать серверу обработать close (state.conns.delete → liveSessions.delete)
+
+// После ухода последнего участника со стола (пустой активный сеанс) —
+// удаление снова разрешено.
+r = await asJson(tokenA, `/rooms/${roomId}/sessions/${raceSessionId}`, { method: "DELETE" });
+ok("после ухода всех со стола сеанс снова можно удалить", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);
