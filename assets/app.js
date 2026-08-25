@@ -186,6 +186,19 @@ async function deletePuzzle(id) {
   puzzlesCache.clear();
 }
 
+/** Скрывает встроенный пазл (все уровни сложности сразу — variants) ИМЕННО
+ *  в этой комнате — не удаляет его самого, он остаётся видимым во всех
+ *  остальных комнатах и в соло-библиотеке (см. server.js, room_hidden_puzzles).
+ *  Своих фото это не касается — для них есть настоящее удаление, deletePuzzle
+ *  выше. */
+async function hidePuzzleInRoom(roomId, variants) {
+  await Promise.all(variants.map(v => auth.fetch(
+    `/api/rooms/${encodeURIComponent(roomId)}/hidden-puzzles`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId: v.id }) },
+  )));
+  puzzlesCache.clear();
+}
+
 /** DELETE /api/rooms/:id/sessions/:sessionId — освобождает слот из лимита
  *  MAX_ACTIVE_SESSIONS_PER_ROOM (активный, но пустой сеанс) или убирает
  *  завершённый сеанс из истории. Сервер отбивает 409-м, если сеанс сейчас
@@ -293,16 +306,29 @@ function buildCard(p, opts = {}) {
     ? `${variants.length} ${plural(variants.length, "уровень", "уровня", "уровней")} сложности`
     : `${p.gridCols}×${p.gridRows} · ${p.gridCols * p.gridRows} деталей`;
   const mine = p.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === p.ownerUserId;
-  if (mine && opts.allowDelete !== false) {
+  // Встроенный пазл (ownerUserId===null) внутри комнаты (opts.roomId задан
+  // только в renderRoom) — можно скрыть из ЭТОЙ комнаты, доступно любому
+  // участнику, не только владельцу комнаты (это общая настройка комнаты, не
+  // личная вещь). В соло-библиотеке (opts.roomId нет) встроенные пазлы
+  // по-прежнему не удаляются никак — крестика там для них не будет.
+  const canHideDefault = !p.ownerUserId && opts.roomId && auth.isAuthenticated();
+  if ((mine || canHideDefault) && opts.allowDelete !== false) {
     const del = document.createElement("button");
     del.className = "icon-btn xs puzzle-card-delete";
-    del.type = "button"; del.title = "Удалить"; del.setAttribute("aria-label", "Удалить");
+    del.type = "button"; del.title = mine ? "Удалить" : "Скрыть из этой комнаты";
+    del.setAttribute("aria-label", del.title);
     del.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
     del.addEventListener("click", async ev => {
       ev.stopPropagation();
-      if (!confirm(`Удалить пазл «${p.title}»?`)) return;
-      try { await deletePuzzle(p.id); node.remove(); }
-      catch (err) { alert(err.message === "in use" ? "Этим пазлом уже играли в комнате — удалить нельзя." : "Не удалось удалить."); }
+      if (mine) {
+        if (!confirm(`Удалить пазл «${p.title}»?`)) return;
+        try { await deletePuzzle(p.id); node.remove(); }
+        catch (err) { alert(err.message === "in use" ? "Этим пазлом уже играли в комнате — удалить нельзя." : "Не удалось удалить."); }
+      } else {
+        if (!confirm(`Скрыть пазл «${p.title}» из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.`)) return;
+        try { await hidePuzzleInRoom(opts.roomId, variants); node.remove(); }
+        catch { alert("Не удалось скрыть."); }
+      }
     });
     const thumb = $(node, ".puzzle-card-thumb");
     thumb.classList.add("has-delete");
@@ -574,6 +600,13 @@ function createPieceEl(puzzleId, r, c, rows, cols, cell, pad, edges, imageUrl, b
   wrap.dataset.r = String(r);
   wrap.dataset.c = String(c);
   wrap.appendChild(svg);
+  // <image> внутри — по умолчанию нативно перетаскиваемый браузером элемент
+  // (как обычная картинка): при достаточно долгом/дальнем драге (особенно
+  // заметно у групп — жест длиннее) браузер может перехватить его в СВОЙ
+  // HTML5 drag-and-drop поверх нашего pointer-based — курсор "нельзя"
+  // означает именно это, а не что-то в bindPieceDrag. dragstart тут не
+  // связан с Pointer Events вообще, глушим его отдельно.
+  wrap.addEventListener("dragstart", e => e.preventDefault());
   return wrap;
 }
 
@@ -1539,11 +1572,12 @@ async function renderRoom(root, roomId, signal) {
     }
   }
 
-  // allowDelete НЕ передан (по умолчанию разрешено) — buildCard сам
-  // покажет крестик только владельцу (ownerUserId === текущий пользователь);
-  // встроенные пазлы (ownerUserId===null) — не удаляются в любом случае.
+  // allowDelete НЕ передан (по умолчанию разрешено) — buildCard сам решает,
+  // кому показать крестик: владельцу своего фото — «удалить», любому
+  // участнику комнаты (roomId передан) на встроенном пазле — «скрыть из
+  // этой комнаты» (см. canHideDefault в buildCard).
   for (const group of groupPuzzles(puzzles)) {
-    grid.appendChild(buildCard(group, { onPlay: playVariant }));
+    grid.appendChild(buildCard(group, { onPlay: playVariant, roomId }));
   }
 
   $(activeEl, "#addPuzzleBtn").addEventListener("click", () => openModal("uploadPuzzleModalBackdrop"), { signal });
@@ -1553,7 +1587,7 @@ async function renderRoom(root, roomId, signal) {
   // перезаписывает innerHTML контейнера, повторный вызов при новом рендере не
   // накапливает старые формы/обработчики.
   mountUploadForm(document.getElementById("uploadPuzzleFormMount"), roomId, result => {
-    grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { onPlay: playVariant }));
+    grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { onPlay: playVariant, roomId }));
     closeModal("uploadPuzzleModalBackdrop");
   });
 

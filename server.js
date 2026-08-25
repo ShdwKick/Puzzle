@@ -177,6 +177,24 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_puzzles_room ON puzzles(room_id)");
 // флаг живёт на сеансе, а не в puzzles.
 try { db.exec("ALTER TABLE room_sessions ADD COLUMN asymmetric_shape INTEGER NOT NULL DEFAULT 0"); } catch {}
 
+// Встроенные пазлы (Холмы/Лес/Горы) видны во ВСЕХ комнатах сразу (owner_user_id
+// IS NULL — см. puzzlesForRoom) — не всем участникам конкретной комнаты они
+// нужны. Скрытие ЛОКАЛЬНО для комнаты (не удаление самого пазла: он остаётся
+// глобально доступным везде ещё) — новая таблица, не колонка на puzzles,
+// потому что это отношение many-to-many (один и тот же встроенный пазл можно
+// скрыть в одной комнате и оставить видимым в другой). ON DELETE CASCADE у
+// обоих внешних ключей — запись сама уберётся, если комнату или пазл когда-
+// нибудь удалят.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS room_hidden_puzzles (
+    room_id    TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    puzzle_id  TEXT NOT NULL REFERENCES puzzles(id) ON DELETE CASCADE,
+    hidden_by  TEXT NOT NULL,
+    hidden_at  INTEGER NOT NULL,
+    PRIMARY KEY (room_id, puzzle_id)
+  );
+`);
+
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 
@@ -204,16 +222,32 @@ const stmt = {
       completed_at = excluded.completed_at`),
 
   puzzlesPublic:  db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL ORDER BY sort_order, created_at"),
-  // Встроенные + СВОИ ФОТО ИМЕННО ЭТОЙ КОМНАТЫ (room_id) — не все фото
-  // владельца по всем его комнатам (см. комментарий у ALTER TABLE room_id
-  // выше). Публикация «для всех» пока не реализована.
-  puzzlesForRoom: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL OR room_id = ? ORDER BY sort_order, created_at"),
+  // Встроенные (кроме скрытых ИМЕННО в этой комнате — см. room_hidden_puzzles)
+  // + СВОИ ФОТО ИМЕННО ЭТОЙ КОМНАТЫ (room_id) — не все фото владельца по всем
+  // его комнатам (см. комментарий у ALTER TABLE room_id выше). Публикация
+  // «для всех» пока не реализована. roomId передаётся дважды — раз на свою
+  // область видимости (room_id = ?), раз на фильтр скрытых.
+  puzzlesForRoom: db.prepare(`
+    SELECT * FROM puzzles
+    WHERE (owner_user_id IS NULL OR room_id = ?)
+      AND id NOT IN (SELECT puzzle_id FROM room_hidden_puzzles WHERE room_id = ?)
+    ORDER BY sort_order, created_at`),
   insertCustomPuzzle: db.prepare(`INSERT INTO puzzles
       (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id,room_id)
       VALUES (?,?,?,?,?,?,?,?,?,?)`),
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
   puzzlesByImage: db.prepare("SELECT * FROM puzzles WHERE image_file = ? AND owner_user_id = ?"),
+  // Скрытие встроенного пазла в конкретной комнате (не удаление — см. схему
+  // room_hidden_puzzles) — доступно любому участнику комнаты, не только
+  // владельцу: это общая настройка «что показываем в ЭТОЙ комнате», не личная
+  // вещь одного участника. DO NOTHING — повторное скрытие уже скрытого не
+  // должно падать ошибкой (идемпотентно).
+  hidePuzzleInRoom: db.prepare(`
+    INSERT INTO room_hidden_puzzles (room_id,puzzle_id,hidden_by,hidden_at) VALUES (?,?,?,?)
+    ON CONFLICT(room_id,puzzle_id) DO NOTHING`),
+  unhidePuzzleInRoom: db.prepare("DELETE FROM room_hidden_puzzles WHERE room_id = ? AND puzzle_id = ?"),
+  hiddenPuzzlesForRoom: db.prepare("SELECT puzzle_id FROM room_hidden_puzzles WHERE room_id = ?"),
 };
 
 Object.assign(stmt, {
@@ -570,7 +604,7 @@ async function api(req, res, url, user) {
     if (roomId) {
       if (!user) return json(res, 401, { error: "unauthorized" });
       if (!stmt.roomMember.get(roomId, user.id)) return json(res, 403, { error: "not a member" });
-      return json(res, 200, stmt.puzzlesForRoom.all(roomId).map(puzzlePayload));
+      return json(res, 200, stmt.puzzlesForRoom.all(roomId, roomId).map(puzzlePayload));
     }
     return json(res, 200, stmt.puzzlesPublic.all().map(puzzlePayload));
   }
@@ -759,6 +793,26 @@ async function api(req, res, url, user) {
         // теперь уже удалённую строку БД, чтобы persistSession/schedulePersist
         // не воскресили её обратно записью в никуда.
         if (live) liveSessions.delete(session.id);
+        return json(res, 200, { ok: true });
+      }
+
+      // Скрыть встроенный пазл ИМЕННО в этой комнате (не удалить сам пазл —
+      // он остаётся видимым во всех остальных комнатах и в соло-библиотеке,
+      // см. room_hidden_puzzles). Доступно любому участнику (member уже
+      // проверен выше) — это общая настройка комнаты, не личная. Своё фото
+      // сюда не годится — для него уже есть настоящее удаление (DELETE
+      // /api/puzzles/:id, только владельцем).
+      if (seg[3] === "hidden-puzzles" && seg.length === 4 && m === "POST") {
+        const body = await readJson(req);
+        const puzzle = stmt.puzzle.get(body.puzzleId);
+        if (!puzzle) return json(res, 404, { error: "not found" });
+        if (puzzle.owner_user_id !== null) return json(res, 400, { error: "not a default puzzle" });
+        stmt.hidePuzzleInRoom.run(roomId, puzzle.id, user.id, now());
+        return json(res, 200, { ok: true });
+      }
+
+      if (seg[3] === "hidden-puzzles" && seg[4] && seg.length === 5 && m === "DELETE") {
+        stmt.unhidePuzzleInRoom.run(roomId, seg[4]);
         return json(res, 200, { ok: true });
       }
     }

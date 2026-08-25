@@ -342,5 +342,32 @@ r = await asJson(tokenA, `/rooms/${roomId2}/sessions/${asymSessionId}`, { method
 r = await asJson(tokenA, `/rooms/${roomId2}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
 ok("сеанс без флага — asymmetricShape===false", r.status === 200 && r.body.asymmetricShape === false, JSON.stringify(r.body));
 
+// ───────── скрытие встроенного пазла ИМЕННО в комнате (не удаление) ─────────
+// roomId — тут состоят оба (tokenA и tokenB), значит подходит проверить, что
+// скрытое одним видно скрытым и другому (общая настройка комнаты, не личная).
+r = await asJson(tokenA, `/rooms/${roomId}/hidden-puzzles`, { method: "POST", body: { puzzleId: "hills" } });
+ok("скрытие встроенного пазла в комнате прошло", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
+ok("скрытый пазл не виден владельцу скрытия в этой комнате", r.status === 200 && !r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+
+r = await asJson(tokenB, `/puzzles?roomId=${roomId}`);
+ok("скрытый пазл не виден и другому участнику той же комнаты", r.status === 200 && !r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+
+r = await asJson(tokenA, "/puzzles");
+ok("скрытие не задело соло-библиотеку — пазл там виден", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+
+r = await asJson(tokenA, `/puzzles?roomId=${roomId2}`);
+ok("скрытие не задело другую комнату — пазл там виден", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+
+// Повторное скрытие уже скрытого — идемпотентно, не падает.
+r = await asJson(tokenA, `/rooms/${roomId}/hidden-puzzles`, { method: "POST", body: { puzzleId: "hills" } });
+ok("повторное скрытие того же пазла не падает", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${roomId}/hidden-puzzles/hills`, { method: "DELETE" });
+ok("восстановление скрытого пазла проходит", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
+ok("после восстановления пазл снова виден в комнате", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);
