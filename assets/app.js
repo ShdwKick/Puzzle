@@ -390,11 +390,19 @@ async function renderLibrary(root, signal) {
  * детали не стояли идеально ровным строем. Область (margin) при нехватке
  * места под все детали расширяется — так это работает и для 12 деталей, и
  * для 108 без ручной подгонки под каждый пазл.
+ *
+ * count — сколько ячеек реально нужно (по умолчанию rows*cols, как при
+ * начальной раскладке всех деталей). planShuffle передаёт сюда РЕАЛЬНОЕ
+ * число одиночных деталей, а не rows*cols — margin растёт, только пока не
+ * наберётся нужное количество ячеек именно под них, поэтому при решаффле
+ * (когда большая часть уже состыкована и трогать её не нужно) россыпь
+ * получается заметно теснее к рамке доски, а не растянутой на весь запас
+ * под полный пазл.
  */
-function scatterLayout(rows, cols, cell, pad) {
+function scatterLayout(rows, cols, cell, pad, count = rows * cols) {
   const pieceSize = cell + 2 * pad;
   const boardW = cols * cell, boardH = rows * cell;
-  const total = rows * cols;
+  const total = count;
   let margin = pieceSize * 1.4;
   let cells = [];
   for (let attempt = 0; attempt < 8; attempt++) {
@@ -478,35 +486,26 @@ function clusterMembersOf(pieces, key) {
   return members.get(clusterOf.get(key));
 }
 
-/** «Перемешать» с учётом кластеров: наибольший уже собранный кластер (если
- *  в нём больше одной детали — это прогресс) не трогаем, остальные кластеры
- *  раскидываем как жёсткие блоки — внутренние относительные смещения
- *  сохраняются, меняется только позиция опорной детали (минимальная (r,c)
- *  в кластере). Возвращает Map "r,c" -> {x,y} новых позиций или null, если
- *  мешать нечего (всё уже в одном кластере). */
+/** «Перемешать» с учётом кластеров: ЛЮБОЙ уже состыкованный кластер (от двух
+ *  деталей — это уже прогресс, не только самый большой) не трогаем,
+ *  расшвыриваем только одиночные, ещё ни с кем не соединённые детали.
+ *  Раскладка под них считается по их реальному числу (scatterLayout(...,
+ *  count)), не по rows*cols — россыпь ложится плотнее к рамке доски, а не
+ *  на весь запас места под полный пазл. Возвращает Map "r,c" -> {x,y} новых
+ *  позиций или null, если мешать нечего (все детали уже хоть с кем-то
+ *  состыкованы). */
 function planShuffle(pieces, rows, cols, cell, pad, tol) {
   const { members } = window.PuzzleClusters.buildClusters(pieces.values(), cell, tol);
-  let mainId = null, mainSize = 0;
-  for (const [id, keys] of members) if (keys.size > mainSize) { mainSize = keys.size; mainId = id; }
-  const preserveMain = mainSize > 1;
-  const toScatter = [...members.entries()].filter(([id]) => !(preserveMain && id === mainId));
+  const toScatter = [...members.values()].filter(keys => keys.size <= 1);
   if (!toScatter.length) return null;
 
-  const fresh = scatterLayout(rows, cols, cell, pad);
-  let cellIdx = 0;
+  const fresh = scatterLayout(rows, cols, cell, pad, toScatter.length);
   const next = new Map();
-  for (const [, keys] of toScatter) {
-    const arr = [...keys];
-    const ref = arr.reduce((best, k) => {
-      const [br, bc] = best.split(",").map(Number), [kr, kc] = k.split(",").map(Number);
-      return (kr < br || (kr === br && kc < bc)) ? k : best;
-    });
-    const anchor = fresh.cells[cellIdx];
-    cellIdx = Math.min(cellIdx + arr.length, fresh.cells.length - 1);
-    const refPiece = pieces.get(ref);
-    const dx = anchor.x - refPiece.x, dy = anchor.y - refPiece.y;
-    for (const k of arr) { const p = pieces.get(k); next.set(k, { x: p.x + dx, y: p.y + dy }); }
-  }
+  toScatter.forEach((keys, i) => {
+    const [key] = keys;
+    const anchor = fresh.cells[Math.min(i, fresh.cells.length - 1)];
+    next.set(key, { x: anchor.x, y: anchor.y });
+  });
   return next;
 }
 
@@ -988,9 +987,9 @@ async function renderTable(root, puzzleId, signal, queryString) {
   }, { signal });
 
   $(root, "#shuffleBtn").addEventListener("click", () => {
-    // Уже состыкованный наибольший кластер не трогаем — «встряхнуть
-    // оставшуюся кучу», а не собрать заново с нуля. Риска потерять прогресс
-    // нет, подтверждение (confirm) не нужно.
+    // Любую уже состыкованную пару/кластер (не только самый большой) не
+    // трогаем — «встряхнуть оставшуюся кучу», а не собрать заново с нуля.
+    // Риска потерять прогресс нет, подтверждение (confirm) не нужно.
     const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE);
     if (!next) return; // всё уже в одном кластере — мешать нечего
     for (const [k, pos] of next) {
@@ -1992,8 +1991,8 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // pieces строится асинхронно в buildBoard() по первому sync — до этого
     // момента стол ещё не собран, перемешивать нечего.
     if (!pieces) return;
-    // Та же поправка, что и в соло: наибольший уже состыкованный кластер не
-    // трогаем — переставляются только остальные, как жёсткие блоки. Риска
+    // Та же поправка, что и в соло: любая уже состыкованная пара/кластер не
+    // трогается — переставляются только ещё не соединённые одиночки. Риска
     // потерять прогресс нет, confirm не нужен.
     const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE);
     if (!next) return;
