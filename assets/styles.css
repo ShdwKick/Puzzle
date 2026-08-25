@@ -152,7 +152,16 @@ a{color:inherit}
 .puzzle-card-title{font-size:1.05rem;font-weight:650}
 .puzzle-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);flex:1}
 .puzzle-card-play{align-self:flex-start;margin-top:.2rem}
-.puzzle-card-delete{align-self:flex-start;color:var(--md-sys-color-error)}
+/* Крестик "Удалить" — поверх превью, в правом верхнем углу карточки (не в
+   .puzzle-card-body: там он утекал в конец flex-колонки, к низу карточки). */
+.puzzle-card-delete{
+  position:absolute;top:.5rem;right:.5rem;z-index:2;
+  background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 82%, transparent);
+  color:var(--md-sys-color-inverse-on-surface);
+}
+.puzzle-card-delete:hover::after{opacity:.16}
+/* Если на той же карточке ещё и бейдж прогресса — не дать им наложиться. */
+.puzzle-card-thumb.has-delete .puzzle-card-badge{right:2.6rem}
 
 /* ===================== ЗАГРУЗКА СВОЕГО ФОТО ===================== */
 .upload-form{
@@ -255,9 +264,10 @@ a{color:inherit}
 /* «Назад» — была текстовой ссылкой «← Комната»/«← Библиотека» в
    .table-toolbar, теперь иконка в стиле кнопок масштаба, в ЛЕВОМ ВЕРХНЕМ
    углу доски (не рядом с .board-tools внизу — выход со стола логически не
-   относится к инструментам сборки). Тот же угол, что у .preview-thumb —
-   допустимо: кнопка маленькая (2.4rem), картинка-подсказка показывается не
-   всегда и не мешает клику (pointer-events:none). */
+   относится к инструментам сборки). Тот же угол, что у .preview-panel —
+   допустимо: кнопка маленькая (2.4rem), панель смещена ниже неё по
+   умолчанию (см. .preview-panel), а начальное перекрытие неважно — панель
+   можно оттащить. */
 .board-back{
   position:absolute;left:.9rem;top:.9rem;display:flex;
   background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
@@ -265,20 +275,38 @@ a{color:inherit}
 }
 .board-back .btn{width:2.4rem;height:2.4rem;padding:0}
 
-/* Справочная картинка «как должно получиться» — pointer-events:none,
-   поэтому её не нужно исключать из панорамы стола отдельно (в отличие от
-   .zoom-controls, см. комментарий у pointerdown ниже): клики и драг просто
-   проходят сквозь неё к тому, что под ней. Тот же угол, что у .board-back —
-   картинка ниже кнопки по документу, но pointer-events:none, так что клику
-   по кнопке не мешает; смещена на высоту кнопки, чтобы не перекрываться. */
+/* Справочная картинка «как должно получиться» — плавающая панель поверх
+   стола: не просто статичная подсказка (раньше pointer-events:none,
+   drag/клик проходили сквозь неё к деталям под ней), теперь можно оттащить
+   с дороги за саму картинку и подрастянуть за кружок в углу — логика в
+   bindPreviewThumb (assets/app.js), общая для соло и комнаты. Позиция/
+   размер — инлайн left/top/width, которые ставит JS поверх этих
+   дефолтов при первом перетаскивании/резайзе. Живёт в .table-stage, а не
+   в #world — панорама/зум доски на неё не действует. Исключена из
+   панорамы стола отдельно через .preview-panel (см. pointerdown ниже),
+   как и .zoom-controls/.board-tools — иначе стол начинал бы панориться
+   вместо перетаскивания панели. */
+.preview-panel{
+  position:absolute;left:.9rem;top:3.7rem;width:14rem;max-width:90%;
+  touch-action:none;
+}
+.preview-panel[hidden]{display:none}
 .preview-thumb{
-  position:absolute;left:.9rem;top:3.7rem;max-width:min(40vw,14rem);max-height:min(40vh,14rem);
-  object-fit:contain;border-radius:var(--md-sys-shape-corner-l);
+  display:block;width:100%;height:auto;border-radius:var(--md-sys-shape-corner-l);
   background:var(--md-sys-color-surface-container-lowest);
   border:2px solid var(--md-sys-color-surface);box-shadow:var(--e2);
-  pointer-events:none;
+  cursor:grab;
 }
-.preview-thumb[hidden]{display:none}
+.preview-thumb:active{cursor:grabbing}
+/* Кружок в правом нижнем углу панели — тянешь по диагонали, ширина панели
+   меняется, высота следует автоматически (height:auto на .preview-thumb
+   сохраняет пропорции картинки без object-fit). */
+.preview-resize-handle{
+  position:absolute;right:-.35rem;bottom:-.35rem;width:1.1rem;height:1.1rem;
+  border-radius:50%;background:var(--md-sys-color-primary);
+  border:2px solid var(--md-sys-color-surface);box-shadow:var(--e1);
+  cursor:nwse-resize;touch-action:none;
+}
 
 .win-overlay{
   position:absolute;inset:0;display:flex;align-items:center;justify-content:center;

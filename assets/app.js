@@ -304,7 +304,9 @@ function buildCard(p, opts = {}) {
       try { await deletePuzzle(p.id); node.remove(); }
       catch (err) { alert(err.message === "in use" ? "Этим пазлом уже играли в комнате — удалить нельзя." : "Не удалось удалить."); }
     });
-    $(node, ".puzzle-card-body").appendChild(del);
+    const thumb = $(node, ".puzzle-card-thumb");
+    thumb.classList.add("has-delete");
+    thumb.appendChild(del);
   }
   const playBtn = $(node, ".puzzle-card-play");
   const onPlay = opts.onPlay || ((v, asymmetric) => {
@@ -560,6 +562,67 @@ function applyPieceTransform(piece) {
   piece.el.style.transform = `translate(${piece.x}px, ${piece.y}px)`;
 }
 
+/** Превью-картинка «как должно получиться» на столе — раньше была чисто
+ *  декоративной подсказкой (pointer-events:none, фиксированные место и
+ *  размер в углу), теперь плавающая панель: можно оттащить с дороги и
+ *  подрастянуть, если мелко видно детали. Общая для соло и комнаты — это
+ *  чисто локальный UI, сети не касается (в отличие от bindPieceDrag/
+ *  bindRoomPieceDrag, которые из-за этого разделены). Живёт прямо в
+ *  .table-stage, а не в #world — панорама/зум доски (translate+scale на
+ *  #world) на неё не действует, поэтому дельты драга/резайза берутся в
+ *  чистых экранных пикселях, без деления на zoom. */
+function bindPreviewThumb(stage, panel, img, handle, toggleBtn, imageUrl, title, signal) {
+  img.src = imageUrl;
+  img.alt = `Как должно получиться: ${title}`;
+
+  const MIN_W = 96;
+  const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+  toggleBtn.addEventListener("click", () => {
+    panel.hidden = !panel.hidden;
+  }, { signal });
+
+  let drag = null;
+  img.addEventListener("pointerdown", e => {
+    e.stopPropagation(); // не даём фону начать панораму стола
+    img.setPointerCapture(e.pointerId);
+    const box = panel.getBoundingClientRect(), sBox = stage.getBoundingClientRect();
+    drag = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, startLeft: box.left - sBox.left, startTop: box.top - sBox.top };
+  }, { signal });
+  img.addEventListener("pointermove", e => {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    const sBox = stage.getBoundingClientRect(), box = panel.getBoundingClientRect();
+    panel.style.left = `${clamp(drag.startLeft + (e.clientX - drag.startX), 0, sBox.width - box.width)}px`;
+    panel.style.top = `${clamp(drag.startTop + (e.clientY - drag.startY), 0, sBox.height - box.height)}px`;
+  }, { signal });
+  function finishDrag(e) {
+    if (!drag || e.pointerId !== drag.pointerId) return;
+    drag = null;
+  }
+  img.addEventListener("pointerup", finishDrag, { signal });
+  img.addEventListener("pointercancel", finishDrag, { signal });
+  img.addEventListener("lostpointercapture", finishDrag, { signal });
+
+  let resize = null;
+  handle.addEventListener("pointerdown", e => {
+    e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
+    resize = { pointerId: e.pointerId, startX: e.clientX, startWidth: panel.getBoundingClientRect().width };
+  }, { signal });
+  handle.addEventListener("pointermove", e => {
+    if (!resize || e.pointerId !== resize.pointerId) return;
+    const maxW = stage.getBoundingClientRect().width * 0.9;
+    panel.style.width = `${clamp(resize.startWidth + (e.clientX - resize.startX), MIN_W, maxW)}px`;
+  }, { signal });
+  function finishResize(e) {
+    if (!resize || e.pointerId !== resize.pointerId) return;
+    resize = null;
+  }
+  handle.addEventListener("pointerup", finishResize, { signal });
+  handle.addEventListener("pointercancel", finishResize, { signal });
+  handle.addEventListener("lostpointercapture", finishResize, { signal });
+}
+
 async function renderTable(root, puzzleId, signal, queryString) {
   root.innerHTML = `
     <div class="table-screen">
@@ -570,7 +633,10 @@ async function renderTable(root, puzzleId, signal, queryString) {
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
-        <img class="preview-thumb" id="previewThumb" alt="" hidden>
+        <div class="preview-panel" id="previewPanel" hidden>
+          <img class="preview-thumb" id="previewThumb" alt="">
+          <div class="preview-resize-handle" id="previewResizeHandle" title="Изменить размер" aria-hidden="true"></div>
+        </div>
         <!-- «Назад» — была текстовой ссылкой «← Библиотека» в .table-toolbar,
              теперь иконка в левом верхнем углу доски (не в .board-tools внизу
              — выход со стола не инструмент сборки). -->
@@ -734,7 +800,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     // wheel-хендлер), а кнопки +/−/⤢ (и, отдельно найденный тот же баг,
     // кнопки в окне победы) не реагировали на клик вовсе.
     if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
-      || e.target.closest(".board-back") || e.target.closest(".presence-widget")
+      || e.target.closest(".board-back") || e.target.closest(".presence-widget") || e.target.closest(".preview-panel")
       || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -800,12 +866,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
 
-  const previewThumb = $(root, "#previewThumb");
-  previewThumb.src = puzzle.imageUrl;
-  previewThumb.alt = `Как должно получиться: ${puzzle.title}`;
-  $(root, "#previewBtn").addEventListener("click", () => {
-    previewThumb.hidden = !previewThumb.hidden;
-  }, { signal });
+  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzle.title, signal);
 
   // Светлый фон стола — постоянно фиксированные светлые тона, не тема
   // сайта: тёмная деталь на тёмной (в тёмной теме) доске почти не видна
@@ -1449,7 +1510,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
-        <img class="preview-thumb" id="previewThumb" alt="" hidden>
+        <div class="preview-panel" id="previewPanel" hidden>
+          <img class="preview-thumb" id="previewThumb" alt="">
+          <div class="preview-resize-handle" id="previewResizeHandle" title="Изменить размер" aria-hidden="true"></div>
+        </div>
         <!-- «Назад» — была текстовой ссылкой «← Комната» в .table-toolbar,
              теперь иконка в левом верхнем углу доски (не в .board-tools внизу
              — выход со стола не инструмент сборки). -->
@@ -1622,7 +1686,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // wheel-хендлер), а кнопки +/−/⤢ (и, отдельно найденный тот же баг,
     // кнопки в окне победы) не реагировали на клик вовсе.
     if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
-      || e.target.closest(".board-back") || e.target.closest(".presence-widget")
+      || e.target.closest(".board-back") || e.target.closest(".presence-widget") || e.target.closest(".preview-panel")
       || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -1688,12 +1752,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
 
-  const previewThumb = $(root, "#previewThumb");
-  previewThumb.src = puzzle.imageUrl;
-  previewThumb.alt = `Как должно получиться: ${puzzle.title}`;
-  $(root, "#previewBtn").addEventListener("click", () => {
-    previewThumb.hidden = !previewThumb.hidden;
-  }, { signal });
+  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzle.title, signal);
 
   // Светлый фон стола — постоянно фиксированные светлые тона, не тема
   // сайта: тёмная деталь на тёмной (в тёмной теме) доске почти не видна
