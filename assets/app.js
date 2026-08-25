@@ -12,7 +12,7 @@ let currentRouteAbort = null;
 
 const $ = (root, sel) => root.querySelector(sel);
 const CELL = 100;          // размер ячейки сетки в «мировых» пикселях (масштаб — зумом), должно совпадать с CELL в server.js
-const PAD_FACTOR = 0.32;   // тот же коэффициент, что зашит в buildPiecePath — держим один здесь и там
+const PAD_FACTOR = 0.4;    // тот же коэффициент, что зашит в buildPiecePath — держим один здесь и там
 const SNAP_TOLERANCE = window.PuzzleClusters.tolerance(CELL); // допуск стыковки — общий модуль с сервером
 const MAX_ACTIVE_SESSIONS_PER_ROOM = 5; // только для текста ошибки лимита — сервер решает сам, см. playVariant
 
@@ -75,6 +75,7 @@ function openDifficultyModal(title, variants, onPlay) {
     opt.textContent = DIFFICULTY_LABELS[i] || `${v.gridRows * v.gridCols} деталей`;
     select.appendChild(opt);
   });
+  document.getElementById("difficultyAsymmetric").checked = false; // не запоминаем между открытиями — осознанный выбор каждый раз
   pendingDifficultyChoice = { variants, onPlay };
   openModal("difficultyModalBackdrop");
 }
@@ -83,9 +84,10 @@ document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
   if (!pendingDifficultyChoice) return;
   const { variants, onPlay } = pendingDifficultyChoice;
   const idx = Number(document.getElementById("difficultySelect").value);
+  const asymmetric = document.getElementById("difficultyAsymmetric").checked;
   closeModal("difficultyModalBackdrop");
   pendingDifficultyChoice = null;
-  onPlay(variants[idx]);
+  onPlay(variants[idx], asymmetric);
 });
 
 /* ───────────────────────── хранилище гостя ───────────────────────── */
@@ -167,9 +169,9 @@ async function uploadPuzzlePhoto(file, title, roomId) {
 /** POST /api/rooms/:id/sessions с готовой обработкой гонки (кто-то уже
  *  начал сеанс раньше) — редиректит на уже существующий вместо ошибки.
  *  Общий код для пикера, формы загрузки, экрана «уже собран» и истории. */
-async function startRoomSession(roomId, puzzleId) {
+async function startRoomSession(roomId, puzzleId, asymmetric) {
   const res = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId, asymmetric: !!asymmetric }),
   });
   const data = await res.json();
   if (res.status === 409 && data.session) return data.session.id;
@@ -305,7 +307,9 @@ function buildCard(p, opts = {}) {
     $(node, ".puzzle-card-body").appendChild(del);
   }
   const playBtn = $(node, ".puzzle-card-play");
-  const onPlay = opts.onPlay || (v => { location.hash = `#/table/${encodeURIComponent(v.id)}`; });
+  const onPlay = opts.onPlay || ((v, asymmetric) => {
+    location.hash = `#/table/${encodeURIComponent(v.id)}${asymmetric ? "?shape=asym" : "?shape=normal"}`;
+  });
   // Всегда одна кнопка «За стол» — выбор сложности (если вариантов больше
   // одного) происходит ПОСЛЕ клика, в общей модалке (см. openDifficultyModal
   // выше), не рядом мелких кнопок прямо на карточке.
@@ -589,7 +593,7 @@ function applyPieceTransform(piece) {
   piece.el.style.transform = `translate(${piece.x}px, ${piece.y}px)`;
 }
 
-async function renderTable(root, puzzleId, signal) {
+async function renderTable(root, puzzleId, signal, queryString) {
   root.innerHTML = `
     <div class="table-screen">
       <div class="table-toolbar">
@@ -645,7 +649,16 @@ async function renderTable(root, puzzleId, signal) {
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
   const pad = CELL * PAD_FACTOR;
   const boardW = cols * CELL, boardH = rows * CELL;
-  const edges = window.PuzzleShapes.buildEdges(puzzle.seed, rows, cols);
+  // Форма — чисто визуальный выбор конкретной попытки (см. index.html,
+  // difficultyAsymmetric), не хранится на сервере для соло — держим в
+  // localStorage по puzzleId, чтобы при возврате на уже начатый пазл форма
+  // не «прыгала» между обычной и ассиметричной от захода к заходу.
+  const shapeKey = `puzzle_shape_${puzzleId}`;
+  const asymmetric = queryString
+    ? new URLSearchParams(queryString).get("shape") === "asym"
+    : localStorage.getItem(shapeKey) === "asym";
+  localStorage.setItem(shapeKey, asymmetric ? "asym" : "normal");
+  const edges = window.PuzzleShapes.buildEdges(puzzle.seed, rows, cols, { asymmetric });
 
   // ── прогресс: сервер для вошедшего, localStorage для гостя ──
   let saved = null;
@@ -1350,9 +1363,9 @@ async function renderRoom(root, roomId, signal) {
   const grid = $(activeEl, "#roomPuzzleGrid");
   grid.innerHTML = "";
 
-  async function playVariant(variant) {
+  async function playVariant(variant, asymmetric) {
     try {
-      const sessionId = await startRoomSession(roomId, variant.id);
+      const sessionId = await startRoomSession(roomId, variant.id, asymmetric);
       location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
     } catch (e) {
       if (e.message === "room session limit reached") {
@@ -1568,7 +1581,9 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
   const pad = CELL * PAD_FACTOR;
   const boardW = cols * CELL, boardH = rows * CELL;
-  const edges = window.PuzzleShapes.buildEdges(puzzle.seed, rows, cols);
+  // Форма зафиксирована на СЕАНСЕ (см. server.js, asymmetric_shape) — общая
+  // для всех участников комнаты, а не выбор каждого зрителя по отдельности.
+  const edges = window.PuzzleShapes.buildEdges(puzzle.seed, rows, cols, { asymmetric: session.asymmetricShape });
 
   const world = $(root, "#world");
   const progressEl = $(root, "#tableProgress");
@@ -1989,7 +2004,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
 /* ───────────────────────── роутер ───────────────────────── */
 function route() {
   const hash = location.hash.replace(/^#/, "") || "/";
-  const tableMatch = hash.match(/^\/table\/(.+)$/);
+  // ([^?]+) — id отдельно от необязательного ?shape=asym (см. buildCard,
+  // клетка «Ассиметричная форма» в модалке выбора сложности): жадный (.+)
+  // раньше забирал бы весь query в сам id.
+  const tableMatch = hash.match(/^\/table\/([^?]+)(?:\?(.*))?$/);
   const roomTableMatch = hash.match(/^\/room\/([^/]+)\/table\/([^/]+)$/);
   const roomJoinMatch = hash.match(/^\/rooms\/join\/([^/]+)$/);
   const roomMatch = hash.match(/^\/room\/([^/]+)$/);
@@ -2004,7 +2022,7 @@ function route() {
     : roomJoinMatch ? renderRoomJoin(root, decodeURIComponent(roomJoinMatch[1]), signal)
     : roomMatch ? renderRoom(root, decodeURIComponent(roomMatch[1]), signal)
     : hash === "/rooms" ? renderRoomsList(root, signal)
-    : tableMatch ? renderTable(root, decodeURIComponent(tableMatch[1]), signal)
+    : tableMatch ? renderTable(root, decodeURIComponent(tableMatch[1]), signal, tableMatch[2])
     : renderLibrary(root, signal);
   run.catch(e => {
     if (signal.aborted) return;

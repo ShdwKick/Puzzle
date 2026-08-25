@@ -191,6 +191,15 @@
       <select class="text-input" id="difficultySelect"></select>
       <button class="btn filled" id="difficultyPlayBtn" type="button">Играть</button>
     </div>
+    <!-- «Экстремальный» уровень (см. README) — та же сетка и картинка, но
+         форма деталей ассиметричная (см. assets/puzzle-shapes.js, режим
+         asymmetric): выступы смещены от центра грани и разного размера с
+         каждой стороны, а не аккуратный «пег» по центру. Выбор ПОПЫТКИ, не
+         пазла — тот же уровень сложности можно переиграть и обычной формой. -->
+    <label class="checkbox-row">
+      <input type="checkbox" id="difficultyAsymmetric">
+      <span>Ассиметричная форма деталей — сложнее, детали неровные</span>
+    </label>
   </div>
 </div>
 

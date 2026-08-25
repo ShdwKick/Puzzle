@@ -327,5 +327,20 @@ ok("удаление своего фото проходит", r.status === 200 &
 r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
 ok("после удаления фото пропало из комнаты", r.status === 200 && !r.body.some(p => p.id === uploadedId), JSON.stringify(r.body.map(p => p.id)));
 
+// ───────── ассиметричная форма — флаг сеанса, не пазла ─────────
+// Выбор в модалке сложности (assets/app.js, difficultyAsymmetric) должен
+// дойти до всех участников комнаты через сам сеанс (см. sessionSummary,
+// asymmetricShape), а не потеряться/остаться локальным для того, кто
+// нажал «Играть».
+r = await asJson(tokenA, `/rooms/${roomId2}/sessions`, { method: "POST", body: { puzzleId: "hills", asymmetric: true } });
+ok("сеанс с ассиметричной формой стартовал", r.status === 200 && r.body.asymmetricShape === true, JSON.stringify(r.body));
+const asymSessionId = r.body.id;
+r = await asJson(tokenA, `/rooms/${roomId2}/sessions/${asymSessionId}`);
+ok("флаг формы виден через GET сеанса (как увидят остальные участники)", r.status === 200 && r.body.asymmetricShape === true, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${roomId2}/sessions/${asymSessionId}`, { method: "DELETE" });
+r = await asJson(tokenA, `/rooms/${roomId2}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+ok("сеанс без флага — asymmetricShape===false", r.status === 200 && r.body.asymmetricShape === false, JSON.stringify(r.body));
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

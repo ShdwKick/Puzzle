@@ -171,6 +171,12 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_puzzles_owner ON puzzles(owner_user_id)"
 try { db.exec("ALTER TABLE puzzles ADD COLUMN room_id TEXT"); } catch {}
 db.exec("CREATE INDEX IF NOT EXISTS idx_puzzles_room ON puzzles(room_id)");
 
+// «Ассиметричная форма» (см. assets/puzzle-shapes.js, buildEdges options.asymmetric)
+// — выбор конкретной ПОПЫТКИ сборки, не свойство самого пазла: тот же
+// puzzle_id можно переиграть и с обычной, и с ассиметричной формой, поэтому
+// флаг живёт на сеансе, а не в puzzles.
+try { db.exec("ALTER TABLE room_sessions ADD COLUMN asymmetric_shape INTEGER NOT NULL DEFAULT 0"); } catch {}
+
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 
@@ -229,8 +235,8 @@ Object.assign(stmt, {
   session:       db.prepare("SELECT * FROM room_sessions WHERE id = ?"),
   roomSessions:  db.prepare("SELECT * FROM room_sessions WHERE room_id = ? ORDER BY started_at DESC"),
   insertSession: db.prepare(`
-    INSERT INTO room_sessions (id,room_id,puzzle_id,pieces,pieces_placed,pieces_total,started_by,started_at,updated_at,completed_at)
-    VALUES (?,?,?,NULL,0,?,?,?,?,NULL)`),
+    INSERT INTO room_sessions (id,room_id,puzzle_id,pieces,pieces_placed,pieces_total,started_by,started_at,updated_at,completed_at,asymmetric_shape)
+    VALUES (?,?,?,NULL,0,?,?,?,?,NULL,?)`),
   updateSessionPieces: db.prepare(`
     UPDATE room_sessions SET pieces = ?, pieces_placed = ?, updated_at = ?, completed_at = ? WHERE id = ?`),
   deleteSession: db.prepare("DELETE FROM room_sessions WHERE id = ?"),
@@ -400,6 +406,7 @@ function sessionSummary(s) {
   return { id: s.id, roomId: s.room_id, puzzleId: s.puzzle_id, startedBy: s.started_by,
     piecesPlaced: s.pieces_placed, piecesTotal: s.pieces_total,
     startedAt: s.started_at, updatedAt: s.updated_at, completedAt: s.completed_at,
+    asymmetricShape: !!s.asymmetric_shape,
     puzzle: puzzlePayload(stmt.puzzle.get(s.puzzle_id)) };
 }
 function str(v, max) {
@@ -724,7 +731,7 @@ async function api(req, res, url, user) {
         const puzzle = stmt.puzzle.get(body.puzzleId);
         if (!puzzle) return json(res, 400, { error: "bad puzzle" });
         const id = crypto.randomUUID(), ts = now();
-        stmt.insertSession.run(id, roomId, puzzle.id, puzzle.grid_rows * puzzle.grid_cols, user.id, ts, ts);
+        stmt.insertSession.run(id, roomId, puzzle.id, puzzle.grid_rows * puzzle.grid_cols, user.id, ts, ts, body.asymmetric ? 1 : 0);
         return json(res, 200, sessionSummary(stmt.session.get(id)));
       }
 
