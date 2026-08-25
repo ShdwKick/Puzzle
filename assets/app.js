@@ -462,6 +462,16 @@ function flashClusterEdges(pieces, prevIds, edges) {
   return { nextIds, newCount };
 }
 
+/** Ключи всей связанной группы, в которую входит key (см. buildClusters) —
+ *  клик по одной детали выделяет весь уже собранный сегмент целиком, а не
+ *  только саму деталь: тащить всё равно будет весь кластер (см. groupSet в
+ *  pointerdown), выделение теперь просто отражает это заранее, а не только
+ *  во время самого драга. */
+function clusterMembersOf(pieces, key) {
+  const { clusterOf, members } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+  return members.get(clusterOf.get(key));
+}
+
 /** Пунктирная рамка вокруг ВСЕЙ перетаскиваемой группы (не только детали,
  *  за которую в этот раз тащат) — обновляется на каждый pointermove, пока
  *  жест активен, скрывается при drag'е из одной детали или когда жест не
@@ -856,8 +866,12 @@ async function renderTable(root, puzzleId, signal) {
       e.stopPropagation(); // не даём фону начать панораму
       el.setPointerCapture(e.pointerId);
       moved = false;
-      if (!(selected.has(key) && selected.size > 1)) setSelected([key]);
+      // Клик по детали выделяет весь уже собранный сегмент, в который она
+      // входит (не только саму деталь) — тащить всё равно будет весь
+      // кластер целиком (groupSet ниже строится тем же buildClusters),
+      // выделение теперь отражает это сразу, а не только во время драга.
       const { clusterOf, members } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      if (!(selected.has(key) && selected.size > 1)) setSelected(members.get(clusterOf.get(key)));
       const groupSet = new Set();
       for (const k of selected) for (const m of members.get(clusterOf.get(k))) groupSet.add(m);
       const origins = [...groupSet].map(k => { const p = pieces.get(k); p.el.classList.add("dragging"); return [k, p.x, p.y]; });
@@ -891,7 +905,7 @@ async function renderTable(root, puzzleId, signal) {
           if (next.has(key)) next.delete(key); else next.add(key);
           setSelected(next);
         } else {
-          setSelected([key]);
+          setSelected(clusterMembersOf(pieces, key));
         }
         return;
       }
@@ -1808,8 +1822,12 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       e.stopPropagation();
       el.setPointerCapture(e.pointerId);
       moved = false;
-      if (!(selected.has(key) && selected.size > 1)) setSelected([key]);
+      // Клик по детали выделяет весь уже собранный сегмент, в который она
+      // входит (не только саму деталь) — тащить всё равно будет весь
+      // кластер целиком (groupSet ниже строится тем же buildClusters),
+      // выделение теперь отражает это сразу, а не только во время драга.
       const { clusterOf, members } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      if (!(selected.has(key) && selected.size > 1)) setSelected(members.get(clusterOf.get(key)));
       const groupSet = new Set();
       for (const k of selected) for (const m of members.get(clusterOf.get(k))) groupSet.add(m);
       const origins = [...groupSet].map(k => {
@@ -1850,7 +1868,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
           if (next.has(key)) next.delete(key); else next.add(key);
           setSelected(next);
         } else {
-          setSelected([key]);
+          setSelected(clusterMembersOf(pieces, key));
         }
         return;
       }
