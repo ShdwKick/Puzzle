@@ -205,6 +205,19 @@ a{color:inherit}
 .table-stage.panning{cursor:grabbing}
 .table-world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
 
+/* Массовое выделение рамкой (Shift+тяни по пустому месту доски, см.
+   pointerdown ниже) — экранные координаты, а не мировые: рисуется прямо в
+   .table-stage, а не в #world, поэтому не нужно пересчитывать под zoom/pan
+   (родитель не трогает этот элемент своим transform). Сама логика
+   пересечения с деталями — в JS (updateMarqueeSelection), тут только
+   визуал. */
+.marquee-select{
+  position:absolute;border:1.5px dashed var(--flame-tip);border-radius:4px;
+  background:color-mix(in srgb, var(--flame-tip) 14%, transparent);
+  pointer-events:none;z-index:5;
+}
+.marquee-select[hidden]{display:none}
+
 .board-outline{
   position:absolute;left:0;top:0;border:2px dashed var(--md-sys-color-outline-variant);
   border-radius:6px;pointer-events:none;
@@ -264,6 +277,12 @@ a{color:inherit}
   border-radius:var(--md-sys-shape-corner-l);padding:.4rem;box-shadow:var(--e1);
 }
 .board-tools .btn{width:2.4rem;height:2.4rem;padding:0}
+/* #selectModeBtn, пока включён (aria-pressed="true") — иначе снаружи не
+   видно, что один палец по пустому месту сейчас рисует рамку, а не таскает
+   доску (на десктопе то же самое видно и так, по Shift). */
+.board-tools .btn[aria-pressed="true"]{
+  background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);border-color:transparent;
+}
 
 /* «Назад» — была текстовой ссылкой «← Комната»/«← Библиотека» в
    .table-toolbar, теперь иконка в стиле кнопок масштаба, в ЛЕВОМ ВЕРХНЕМ

@@ -633,6 +633,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
+        <div class="marquee-select" id="marqueeSelect" hidden></div>
         <div class="preview-panel" id="previewPanel" hidden>
           <img class="preview-thumb" id="previewThumb" alt="">
           <div class="preview-resize-handle" id="previewResizeHandle" title="Изменить размер" aria-hidden="true"></div>
@@ -657,6 +658,13 @@ async function renderTable(root, puzzleId, signal, queryString) {
           </button>
           <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
             <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
+               (тянуть рамку по пустому месту вместо панорамы), пока включён,
+               одним пальцем. На десктопе Shift+тяни работает и без него —
+               кнопка просто альтернативный способ включить то же самое. -->
+          <button class="btn outlined icon" id="selectModeBtn" type="button" title="Режим выделения" aria-label="Режим выделения" aria-pressed="false">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
           </button>
         </div>
         <div class="zoom-controls">
@@ -836,6 +844,37 @@ async function renderTable(root, puzzleId, signal, queryString) {
   const midOf = m => { const p = [...m.values()]; return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 }; };
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
+  /* ── массовое выделение рамкой (Shift+тяни по пустому месту доски, или
+     тоггл #selectModeBtn для тач — там нет Shift) ──
+     Обычный (без Shift/тоггла) драг по фону — панорама, как и был; Shift
+     или включённый selectMode меняют смысл жеста на «выделить рамкой», по
+     аналогии с тем, что Shift+клик по детали уже означает «добавить к
+     выделению» (bindPieceDrag/finish) — тут та же клавиша и то же
+     значение, просто для множества деталей сразу. Рамка — в экранных
+     координатах (пиксели относительно stage), проверка пересечения с
+     деталями — в мировых (screenToWorld), поэтому работает корректно на
+     любом zoom/pan. */
+  let selectMode = false;
+  let marqueeState = null; // { pointerId, startX, startY, baseSelected }
+  const marqueeEl = $(root, "#marqueeSelect");
+  function updateMarqueeRect(x0, y0, x1, y1) {
+    const r = stage.getBoundingClientRect();
+    marqueeEl.style.left = `${Math.min(x0, x1) - r.left}px`;
+    marqueeEl.style.top = `${Math.min(y0, y1) - r.top}px`;
+    marqueeEl.style.width = `${Math.abs(x1 - x0)}px`;
+    marqueeEl.style.height = `${Math.abs(y1 - y0)}px`;
+  }
+  function updateMarqueeSelection(x0, y0, x1, y1) {
+    const w0 = screenToWorld(Math.min(x0, x1), Math.min(y0, y1));
+    const w1 = screenToWorld(Math.max(x0, x1), Math.max(y0, y1));
+    const size = CELL + 2 * pad; // полный размер SVG детали (с запасом под выступы), см. createPieceEl
+    const next = new Set(marqueeState.baseSelected);
+    for (const [k, p] of pieces) {
+      if (p.x < w1.x && p.x + size > w0.x && p.y < w1.y && p.y + size > w0.y) next.add(k);
+    }
+    setSelected(next);
+  }
+
   stage.addEventListener("pointerdown", e => {
     // .zoom-controls (а теперь и .board-tools/.board-back/.win-overlay/
     // .table-give-up) тоже исключаем: иначе setPointerCapture ниже
@@ -849,11 +888,20 @@ async function renderTable(root, puzzleId, signal, queryString) {
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 1) {
-      panState = { startX: e.clientX, startY: e.clientY, originX: panX, originY: panY };
-      stage.classList.add("panning");
-      clickCandidate = { x: e.clientX, y: e.clientY };
+      if (e.shiftKey || selectMode) {
+        marqueeState = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, baseSelected: new Set(selected) };
+        marqueeEl.hidden = false;
+        updateMarqueeRect(e.clientX, e.clientY, e.clientX, e.clientY);
+        clickCandidate = null;
+      } else {
+        panState = { startX: e.clientX, startY: e.clientY, originX: panX, originY: panY };
+        stage.classList.add("panning");
+        clickCandidate = { x: e.clientX, y: e.clientY };
+      }
     } else if (active.size === 2) {
       panState = null;
+      marqueeState = null;
+      marqueeEl.hidden = true;
       pinchState = { lastDist: distOf(active), lastMid: midOf(active) };
       clickCandidate = null;
     }
@@ -863,6 +911,11 @@ async function renderTable(root, puzzleId, signal, queryString) {
     if (clickCandidate && Math.hypot(e.clientX - clickCandidate.x, e.clientY - clickCandidate.y) > 4) clickCandidate = null;
     if (!active.has(e.pointerId)) return;
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (marqueeState && e.pointerId === marqueeState.pointerId) {
+      updateMarqueeRect(marqueeState.startX, marqueeState.startY, e.clientX, e.clientY);
+      updateMarqueeSelection(marqueeState.startX, marqueeState.startY, e.clientX, e.clientY);
+      return;
+    }
     if (active.size === 2) {
       const mid = midOf(active), dist = distOf(active);
       if (pinchState) {
@@ -885,6 +938,12 @@ async function renderTable(root, puzzleId, signal, queryString) {
 
   function endPointer(e) {
     active.delete(e.pointerId);
+    if (marqueeState && e.pointerId === marqueeState.pointerId) {
+      marqueeState = null;
+      marqueeEl.hidden = true;
+      clickCandidate = null;
+      return;
+    }
     if (active.size === 1) {
       const [, p] = [...active.entries()][0];
       panState = { startX: p.x, startY: p.y, originX: panX, originY: panY };
@@ -918,6 +977,14 @@ async function renderTable(root, puzzleId, signal, queryString) {
   // светлая сейчас тема интерфейса или нет.
   $(root, "#boardThemeBtn").addEventListener("click", () => {
     stage.classList.toggle("light-board");
+  }, { signal });
+
+  // Тач-замена Shift для рамки выделения — см. комментарий у marqueeState
+  // выше. На десктопе не нужна (там уже работает Shift+тяни), но не мешает
+  // ей — оба способа включают одно и то же условие в pointerdown.
+  $(root, "#selectModeBtn").addEventListener("click", e => {
+    selectMode = !selectMode;
+    e.currentTarget.setAttribute("aria-pressed", String(selectMode));
   }, { signal });
 
   $(root, "#shuffleBtn").addEventListener("click", () => {
@@ -1568,6 +1635,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
+        <div class="marquee-select" id="marqueeSelect" hidden></div>
         <div class="preview-panel" id="previewPanel" hidden>
           <img class="preview-thumb" id="previewThumb" alt="">
           <div class="preview-resize-handle" id="previewResizeHandle" title="Изменить размер" aria-hidden="true"></div>
@@ -1593,6 +1661,13 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
           </button>
           <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
             <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor" stroke="none"/></svg>
+          </button>
+          <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
+               (тянуть рамку по пустому месту вместо панорамы), пока включён,
+               одним пальцем. На десктопе Shift+тяни работает и без него —
+               кнопка просто альтернативный способ включить то же самое. -->
+          <button class="btn outlined icon" id="selectModeBtn" type="button" title="Режим выделения" aria-label="Режим выделения" aria-pressed="false">
+            <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
           </button>
         </div>
         <!-- Присутствующие за столом — раньше постоянно видимая строка чипов
@@ -1777,6 +1852,30 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const midOf = m => { const p = [...m.values()]; return { x: (p[0].x + p[1].x) / 2, y: (p[0].y + p[1].y) / 2 }; };
   const distOf = m => { const p = [...m.values()]; return Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y); };
 
+  /* ── массовое выделение рамкой (Shift+тяни по пустому месту доски, или
+     тоггл #selectModeBtn для тач) — см. подробный комментарий в
+     renderTable, механика идентична. ── */
+  let selectMode = false;
+  let marqueeState = null; // { pointerId, startX, startY, baseSelected }
+  const marqueeEl = $(root, "#marqueeSelect");
+  function updateMarqueeRect(x0, y0, x1, y1) {
+    const r = stage.getBoundingClientRect();
+    marqueeEl.style.left = `${Math.min(x0, x1) - r.left}px`;
+    marqueeEl.style.top = `${Math.min(y0, y1) - r.top}px`;
+    marqueeEl.style.width = `${Math.abs(x1 - x0)}px`;
+    marqueeEl.style.height = `${Math.abs(y1 - y0)}px`;
+  }
+  function updateMarqueeSelection(x0, y0, x1, y1) {
+    const w0 = screenToWorld(Math.min(x0, x1), Math.min(y0, y1));
+    const w1 = screenToWorld(Math.max(x0, x1), Math.max(y0, y1));
+    const size = CELL + 2 * pad; // полный размер SVG детали (с запасом под выступы), см. createPieceEl
+    const next = new Set(marqueeState.baseSelected);
+    for (const [k, p] of pieces) {
+      if (p.x < w1.x && p.x + size > w0.x && p.y < w1.y && p.y + size > w0.y) next.add(k);
+    }
+    setSelected(next);
+  }
+
   stage.addEventListener("pointerdown", e => {
     // .zoom-controls (а теперь и .board-tools/.board-back/.win-overlay/
     // .table-give-up) тоже исключаем: иначе setPointerCapture ниже
@@ -1790,11 +1889,20 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (active.size === 1) {
-      panState = { startX: e.clientX, startY: e.clientY, originX: panX, originY: panY };
-      stage.classList.add("panning");
-      clickCandidate = { x: e.clientX, y: e.clientY };
+      if (e.shiftKey || selectMode) {
+        marqueeState = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, baseSelected: new Set(selected) };
+        marqueeEl.hidden = false;
+        updateMarqueeRect(e.clientX, e.clientY, e.clientX, e.clientY);
+        clickCandidate = null;
+      } else {
+        panState = { startX: e.clientX, startY: e.clientY, originX: panX, originY: panY };
+        stage.classList.add("panning");
+        clickCandidate = { x: e.clientX, y: e.clientY };
+      }
     } else if (active.size === 2) {
       panState = null;
+      marqueeState = null;
+      marqueeEl.hidden = true;
       pinchState = { lastDist: distOf(active), lastMid: midOf(active) };
       clickCandidate = null;
     }
@@ -1804,6 +1912,11 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     if (clickCandidate && Math.hypot(e.clientX - clickCandidate.x, e.clientY - clickCandidate.y) > 4) clickCandidate = null;
     if (!active.has(e.pointerId)) return;
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (marqueeState && e.pointerId === marqueeState.pointerId) {
+      updateMarqueeRect(marqueeState.startX, marqueeState.startY, e.clientX, e.clientY);
+      updateMarqueeSelection(marqueeState.startX, marqueeState.startY, e.clientX, e.clientY);
+      return;
+    }
     if (active.size === 2) {
       const mid = midOf(active), dist = distOf(active);
       if (pinchState) {
@@ -1826,6 +1939,12 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
 
   function endPointer(e) {
     active.delete(e.pointerId);
+    if (marqueeState && e.pointerId === marqueeState.pointerId) {
+      marqueeState = null;
+      marqueeEl.hidden = true;
+      clickCandidate = null;
+      return;
+    }
     if (active.size === 1) {
       const [, p] = [...active.entries()][0];
       panState = { startX: p.x, startY: p.y, originX: panX, originY: panY };
@@ -1859,6 +1978,14 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   // светлая сейчас тема интерфейса или нет.
   $(root, "#boardThemeBtn").addEventListener("click", () => {
     stage.classList.toggle("light-board");
+  }, { signal });
+
+  // Тач-замена Shift для рамки выделения — см. комментарий у marqueeState
+  // выше. На десктопе не нужна (там уже работает Shift+тяни), но не мешает
+  // ей — оба способа включают одно и то же условие в pointerdown.
+  $(root, "#selectModeBtn").addEventListener("click", e => {
+    selectMode = !selectMode;
+    e.currentTarget.setAttribute("aria-pressed", String(selectMode));
   }, { signal });
 
   $(root, "#shuffleBtn").addEventListener("click", () => {
