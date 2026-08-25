@@ -476,30 +476,6 @@ function clusterMembersOf(pieces, key) {
   return members.get(clusterOf.get(key));
 }
 
-/** Пунктирная рамка вокруг ВСЕЙ перетаскиваемой группы (не только детали,
- *  за которую в этот раз тащат) — обновляется на каждый pointermove, пока
- *  жест активен, скрывается при drag'е из одной детали или когда жест не
- *  идёт. piece.x/y — левый верхний угол SVG-бокса детали (см.
- *  applyPieceTransform), сам бокс — cell+2*pad (см. createPieceEl), поэтому
- *  граница группы — просто min/max по всем деталям с этим отступом. */
-function updateGroupOutline(el, pieces, keys, cell, pad) {
-  if (!keys || keys.size <= 1) { el.hidden = true; return; }
-  const size = cell + 2 * pad;
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const k of keys) {
-    const p = pieces.get(k);
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x + size > maxX) maxX = p.x + size;
-    if (p.y + size > maxY) maxY = p.y + size;
-  }
-  el.style.left = minX + "px";
-  el.style.top = minY + "px";
-  el.style.width = (maxX - minX) + "px";
-  el.style.height = (maxY - minY) + "px";
-  el.hidden = false;
-}
-
 /** «Перемешать» с учётом кластеров: наибольший уже собранный кластер (если
  *  в нём больше одной детали — это прогресс) не трогаем, остальные кластеры
  *  раскидываем как жёсткие блоки — внутренние относительные смещения
@@ -569,15 +545,6 @@ function createPieceEl(puzzleId, r, c, rows, cols, cell, pad, edges, imageUrl, b
   img.setAttribute("preserveAspectRatio", "none");
   img.setAttribute("clip-path", `url(#${clipId})`);
   svg.appendChild(img);
-
-  // Тонкая обводка контура поверх картинки — стык виден и на однотонных
-  // участках, где иначе фигурная деталь читалась бы как обычный квадрат.
-  const outline = document.createElementNS(NS, "path");
-  outline.setAttribute("d", d);
-  outline.setAttribute("fill", "none");
-  outline.setAttribute("stroke", "rgba(0,0,0,.18)");
-  outline.setAttribute("stroke-width", "1.2");
-  svg.appendChild(outline);
 
   const wrap = document.createElement("div");
   wrap.className = "piece";
@@ -687,13 +654,6 @@ async function renderTable(root, puzzleId, signal, queryString) {
   outline.style.width = boardW + "px";
   outline.style.height = boardH + "px";
   world.appendChild(outline);
-
-  // Рамка вокруг перетаскиваемой ГРУППЫ целиком (не одной детали, за
-  // которую тащат) — см. updateGroupOutline выше.
-  const groupOutlineEl = document.createElement("div");
-  groupOutlineEl.className = "group-outline";
-  groupOutlineEl.hidden = true;
-  world.appendChild(groupOutlineEl);
 
   const pieces = new Map();
   let scatterIdx = 0;
@@ -889,7 +849,6 @@ async function renderTable(root, puzzleId, signal, queryString) {
       for (const k of selected) for (const m of members.get(clusterOf.get(k))) groupSet.add(m);
       const origins = [...groupSet].map(k => { const p = pieces.get(k); p.el.classList.add("dragging"); return [k, p.x, p.y]; });
       dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins, draggingKeys: groupSet };
-      updateGroupOutline(groupOutlineEl, pieces, groupSet, CELL, pad);
     }, { signal });
 
     el.addEventListener("pointermove", e => {
@@ -902,14 +861,12 @@ async function renderTable(root, puzzleId, signal, queryString) {
         p.x = ox + dx; p.y = oy + dy;
         applyPieceTransform(p);
       }
-      updateGroupOutline(groupOutlineEl, pieces, dragging.draggingKeys, CELL, pad);
     }, { signal });
 
     function finish(e) {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
       const { origins, draggingKeys } = dragging;
       dragging = null;
-      groupOutlineEl.hidden = true;
       for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
       if (!moved) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
@@ -1621,13 +1578,6 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   outline.style.height = boardH + "px";
   world.appendChild(outline);
 
-  // Рамка вокруг перетаскиваемой ГРУППЫ целиком (не одной детали, за
-  // которую тащат) — см. updateGroupOutline выше.
-  const groupOutlineEl = document.createElement("div");
-  groupOutlineEl.className = "group-outline";
-  groupOutlineEl.hidden = true;
-  world.appendChild(groupOutlineEl);
-
   /* ── zoom/pan мирового контейнера — идентично renderTable ── */
   let zoom = 1, panX = 0, panY = 0;
   const ZOOM_MIN = 0.12, ZOOM_MAX = 3.2;
@@ -1852,7 +1802,6 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         return [k, p.x, p.y];
       });
       dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins, draggingKeys: groupSet };
-      updateGroupOutline(groupOutlineEl, pieces, groupSet, CELL, pad);
     }, { signal });
 
     el.addEventListener("pointermove", e => {
@@ -1865,7 +1814,6 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         p.x = ox + dx; p.y = oy + dy;
         applyPieceTransform(p);
       }
-      updateGroupOutline(groupOutlineEl, pieces, dragging.draggingKeys, CELL, pad);
       if (dragging.origins.length > 1) sendGroup(dragging.draggingKeys); else sendMove(piece);
     }, { signal });
 
@@ -1873,7 +1821,6 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       if (!dragging || e.pointerId !== dragging.pointerId) return;
       const { origins, draggingKeys: groupKeys } = dragging;
       dragging = null;
-      groupOutlineEl.hidden = true;
       for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
       if (!moved) {
         for (const [k] of origins) draggingKeys.delete(k);

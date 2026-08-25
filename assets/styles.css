@@ -201,22 +201,6 @@ a{color:inherit}
   border-radius:6px;pointer-events:none;
 }
 
-/* Рамка вокруг ВСЕЙ перетаскиваемой группы — не только детали, за которую
-   тащат (у той и так есть свой .piece.dragging — см. ниже). При драге
-   больше одной детали читать движение группы как единого блока иначе
-   сложно: у каждой детали свой per-piece filter, они не складываются в
-   общий силуэт. Позиция/размер — JS (updateGroupOutline, assets/app.js),
-   двигается в той же системе координат, что и сами детали (потомок
-   .table-world), поэтому пересчитывать под zoom/pan не нужно — родитель
-   уже это делает через transform. z-index ниже .piece.dragging (1000) —
-   рамка должна быть ПОД перетаскиваемыми деталями, не поверх них. */
-.group-outline{
-  position:absolute;border:2px dashed var(--flame-tip);border-radius:10px;
-  pointer-events:none;z-index:500;
-  box-shadow:0 0 0 3px color-mix(in srgb, var(--flame-tip) 18%, transparent);
-}
-.group-outline[hidden]{display:none}
-
 .piece{
   position:absolute;left:0;top:0;touch-action:none;cursor:grab;
   filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));
