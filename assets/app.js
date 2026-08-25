@@ -779,6 +779,50 @@ async function renderTable(root, puzzleId, signal, queryString) {
   }
   fitView();
 
+  /* ── авто-панорама к краю доски во время драга детали ──
+     bindPieceDrag ниже двигает деталь только по факту pointermove — если
+     курсор/палец замерли у самого края stage, новых событий не будет, а
+     доска должна продолжать ехать сама. Поэтому отдельный rAF-тик: пока
+     activeDrag не пуст и курсор в приграничной полосе, каждый кадр сам
+     двигает panX/panY и пересчитывает мировую позицию детали под
+     ПОСЛЕДНИМ известным курсором (screenToWorld) — деталь остаётся
+     приклеенной к курсору, а не едет вместе с панорамой (простое "накопить
+     дельту от старта драга", как было раньше, не учитывало бы смену panX
+     во время автоскролла — деталь укатилась бы мимо курсора). */
+  const EDGE_MARGIN = 56, EDGE_MAX_SPEED = 16;
+  function screenToWorld(clientX, clientY) {
+    const r = stage.getBoundingClientRect();
+    return { x: (clientX - r.left - panX) / zoom, y: (clientY - r.top - panY) / zoom };
+  }
+  let activeDrag = null;
+  function applyActiveDragPositions() {
+    const w = screenToWorld(activeDrag.lastClientX, activeDrag.lastClientY);
+    for (const [k, ox, oy] of activeDrag.offsets) {
+      const p = pieces.get(k);
+      p.x = w.x + ox; p.y = w.y + oy;
+      applyPieceTransform(p);
+    }
+  }
+  let edgePanRAF = null;
+  function edgePanTick() {
+    if (!activeDrag) { edgePanRAF = null; return; }
+    const r = stage.getBoundingClientRect();
+    const x = activeDrag.lastClientX - r.left, y = activeDrag.lastClientY - r.top;
+    const push = (pos, size) => pos < EDGE_MARGIN ? clamp(1 - pos / EDGE_MARGIN, 0, 1)
+      : pos > size - EDGE_MARGIN ? -clamp(1 - (size - pos) / EDGE_MARGIN, 0, 1) : 0;
+    const vx = push(x, r.width) * EDGE_MAX_SPEED, vy = push(y, r.height) * EDGE_MAX_SPEED;
+    if (vx || vy) {
+      panX += vx; panY += vy;
+      applyWorldTransform();
+      applyActiveDragPositions();
+    }
+    edgePanRAF = requestAnimationFrame(edgePanTick);
+  }
+  signal.addEventListener("abort", () => {
+    activeDrag = null;
+    if (edgePanRAF !== null) { cancelAnimationFrame(edgePanRAF); edgePanRAF = null; }
+  });
+
   stage.addEventListener("wheel", e => {
     e.preventDefault();
     const factor = Math.pow(1.0016, -e.deltaY);
@@ -890,9 +934,11 @@ async function renderTable(root, puzzleId, signal, queryString) {
     scheduleSave();
   }, { signal });
 
-  /* ── перетаскивание детали: группа = объединение кластеров текущего выделения ── */
+  /* ── перетаскивание детали: группа = объединение кластеров текущего выделения ──
+     activeDrag — общее (не per-piece) состояние, см. блок авто-панорамы
+     выше: rAF-тику edgePanTick нужно знать о текущем драге независимо от
+     того, какая именно деталь его начала. */
   function bindPieceDrag(el, piece) {
-    let dragging = null;
     let moved = false;
     const key = `${piece.r},${piece.c}`;
 
@@ -908,27 +954,39 @@ async function renderTable(root, puzzleId, signal, queryString) {
       if (!(selected.has(key) && selected.size > 1)) setSelected(members.get(clusterOf.get(key)));
       const groupSet = new Set();
       for (const k of selected) for (const m of members.get(clusterOf.get(k))) groupSet.add(m);
-      const origins = [...groupSet].map(k => { const p = pieces.get(k); p.el.classList.add("dragging"); return [k, p.x, p.y]; });
-      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins, draggingKeys: groupSet };
+      // Смещение каждой детали от мировой точки под курсором в момент
+      // начала драга (не от абсолютной позиции детали) — так деталь
+      // остаётся под курсором даже если panX/panY поменяются во время
+      // драга без единого pointermove (см. edgePanTick).
+      const w0 = screenToWorld(e.clientX, e.clientY);
+      const offsets = [...groupSet].map(k => {
+        const p = pieces.get(k);
+        p.el.classList.add("dragging");
+        return [k, p.x - w0.x, p.y - w0.y];
+      });
+      activeDrag = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, offsets, draggingKeys: groupSet, lastClientX: e.clientX, lastClientY: e.clientY };
+      if (edgePanRAF === null) edgePanRAF = requestAnimationFrame(edgePanTick);
     }, { signal });
 
     el.addEventListener("pointermove", e => {
-      if (!dragging || e.pointerId !== dragging.pointerId) return;
-      const dx0 = e.clientX - dragging.startX, dy0 = e.clientY - dragging.startY;
+      if (!activeDrag || e.pointerId !== activeDrag.pointerId) return;
+      const dx0 = e.clientX - activeDrag.startX, dy0 = e.clientY - activeDrag.startY;
       if (!moved && Math.hypot(dx0, dy0) > 4) moved = true;
-      const dx = dx0 / zoom, dy = dy0 / zoom;
-      for (const [k, ox, oy] of dragging.origins) {
-        const p = pieces.get(k);
-        p.x = ox + dx; p.y = oy + dy;
-        applyPieceTransform(p);
-      }
+      activeDrag.lastClientX = e.clientX; activeDrag.lastClientY = e.clientY;
+      applyActiveDragPositions();
     }, { signal });
 
     function finish(e) {
-      if (!dragging || e.pointerId !== dragging.pointerId) return;
-      const { origins, draggingKeys } = dragging;
-      dragging = null;
-      for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
+      if (!activeDrag || e.pointerId !== activeDrag.pointerId) return;
+      const { offsets, draggingKeys } = activeDrag;
+      activeDrag = null;
+      // Отменяем ещё не сработавший кадр авто-панорамы явно, а не ждём,
+      // пока edgePanTick сам себя погасит увидев activeDrag===null — иначе
+      // при очень быстром повторном драге (новый pointerdown раньше, чем
+      // успел прийти предыдущий rAF) сработает "if (edgePanRAF === null)"
+      // в pointerdown и НЕ запустит новый цикл, решив, что старый ещё жив.
+      if (edgePanRAF !== null) { cancelAnimationFrame(edgePanRAF); edgePanRAF = null; }
+      for (const [k] of offsets) pieces.get(k).el.classList.remove("dragging");
       if (!moved) {
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (additive) {
@@ -956,7 +1014,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     // завершении жеста (потеря фокуса окна, вкладка свёрнута, ОС перехватила
     // жест) — lostpointercapture по спецификации срабатывает ВСЕГДА, когда
     // элемент теряет захват указателя, каким бы ни был повод, поэтому это
-    // надёжная точка для финального finish() и очистки draggingKeys/dragging.
+    // надёжная точка для финального finish() и очистки activeDrag.
     el.addEventListener("lostpointercapture", finish, { signal });
   }
 
@@ -1667,6 +1725,47 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   }
   fitView();
 
+  /* ── авто-панорама к краю доски во время драга детали — см. подробный
+     комментарий в renderTable, механика идентична. Тут дополнительно на
+     каждый тик (не только на реальный pointermove) шлём move/group —
+     иначе для остальных участников деталь «телепортировалась» бы только
+     в момент отпускания, а не ехала бы плавно вместе с автоскроллом. ── */
+  const EDGE_MARGIN = 56, EDGE_MAX_SPEED = 16;
+  function screenToWorld(clientX, clientY) {
+    const r = stage.getBoundingClientRect();
+    return { x: (clientX - r.left - panX) / zoom, y: (clientY - r.top - panY) / zoom };
+  }
+  let activeDrag = null;
+  function applyActiveDragPositions() {
+    const w = screenToWorld(activeDrag.lastClientX, activeDrag.lastClientY);
+    for (const [k, ox, oy] of activeDrag.offsets) {
+      const p = pieces.get(k);
+      p.x = w.x + ox; p.y = w.y + oy;
+      applyPieceTransform(p);
+    }
+    if (activeDrag.offsets.length > 1) activeDrag.sendGroup(activeDrag.draggingKeys);
+    else activeDrag.sendMove(activeDrag.piece);
+  }
+  let edgePanRAF = null;
+  function edgePanTick() {
+    if (!activeDrag) { edgePanRAF = null; return; }
+    const r = stage.getBoundingClientRect();
+    const x = activeDrag.lastClientX - r.left, y = activeDrag.lastClientY - r.top;
+    const push = (pos, size) => pos < EDGE_MARGIN ? clamp(1 - pos / EDGE_MARGIN, 0, 1)
+      : pos > size - EDGE_MARGIN ? -clamp(1 - (size - pos) / EDGE_MARGIN, 0, 1) : 0;
+    const vx = push(x, r.width) * EDGE_MAX_SPEED, vy = push(y, r.height) * EDGE_MAX_SPEED;
+    if (vx || vy) {
+      panX += vx; panY += vy;
+      applyWorldTransform();
+      applyActiveDragPositions();
+    }
+    edgePanRAF = requestAnimationFrame(edgePanTick);
+  }
+  signal.addEventListener("abort", () => {
+    activeDrag = null;
+    if (edgePanRAF !== null) { cancelAnimationFrame(edgePanRAF); edgePanRAF = null; }
+  });
+
   stage.addEventListener("wheel", e => {
     e.preventDefault();
     const factor = Math.pow(1.0016, -e.deltaY);
@@ -1837,8 +1936,12 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     for (const [k, p] of pieces) p.el.classList.toggle("selected", selected.has(k));
   }
 
+  /* activeDrag — общее (не per-piece) состояние, см. блок авто-панорамы
+     выше: rAF-тику edgePanTick нужно знать о текущем драге независимо от
+     того, какая именно деталь его начала. Не путать с draggingKeys —
+     тот отдельный набор живёт снаружи (см. выше) и защищает от resync
+     поверх ещё не подтверждённого сервером локального хода. */
   function bindRoomPieceDrag(el, piece, sendMove, sendGroup) {
-    let dragging = null;
     let moved = false;
     const key = `${piece.r},${piece.c}`;
 
@@ -1854,35 +1957,39 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       if (!(selected.has(key) && selected.size > 1)) setSelected(members.get(clusterOf.get(key)));
       const groupSet = new Set();
       for (const k of selected) for (const m of members.get(clusterOf.get(k))) groupSet.add(m);
-      const origins = [...groupSet].map(k => {
+      // Смещение каждой детали от мировой точки под курсором в момент
+      // начала драга (не от абсолютной позиции детали) — так деталь
+      // остаётся под курсором даже если panX/panY поменяются во время
+      // драга без единого pointermove (см. edgePanTick).
+      const w0 = screenToWorld(e.clientX, e.clientY);
+      const offsets = [...groupSet].map(k => {
         const p = pieces.get(k);
         p.el.classList.add("dragging");
         draggingKeys.add(k);
-        return [k, p.x, p.y];
+        return [k, p.x - w0.x, p.y - w0.y];
       });
-      dragging = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, origins, draggingKeys: groupSet };
+      activeDrag = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, offsets, draggingKeys: groupSet, lastClientX: e.clientX, lastClientY: e.clientY, piece, sendMove, sendGroup };
+      if (edgePanRAF === null) edgePanRAF = requestAnimationFrame(edgePanTick);
     }, { signal });
 
     el.addEventListener("pointermove", e => {
-      if (!dragging || e.pointerId !== dragging.pointerId) return;
-      const dx0 = e.clientX - dragging.startX, dy0 = e.clientY - dragging.startY;
+      if (!activeDrag || e.pointerId !== activeDrag.pointerId) return;
+      const dx0 = e.clientX - activeDrag.startX, dy0 = e.clientY - activeDrag.startY;
       if (!moved && Math.hypot(dx0, dy0) > 4) moved = true;
-      const dx = dx0 / zoom, dy = dy0 / zoom;
-      for (const [k, ox, oy] of dragging.origins) {
-        const p = pieces.get(k);
-        p.x = ox + dx; p.y = oy + dy;
-        applyPieceTransform(p);
-      }
-      if (dragging.origins.length > 1) sendGroup(dragging.draggingKeys); else sendMove(piece);
+      activeDrag.lastClientX = e.clientX; activeDrag.lastClientY = e.clientY;
+      applyActiveDragPositions();
     }, { signal });
 
     function finish(e) {
-      if (!dragging || e.pointerId !== dragging.pointerId) return;
-      const { origins, draggingKeys: groupKeys } = dragging;
-      dragging = null;
-      for (const [k] of origins) pieces.get(k).el.classList.remove("dragging");
+      if (!activeDrag || e.pointerId !== activeDrag.pointerId) return;
+      const { offsets, draggingKeys: groupKeys } = activeDrag;
+      activeDrag = null;
+      // См. комментарий у аналогичной строки в renderTable/bindPieceDrag —
+      // отменяем ещё не сработавший кадр авто-панорамы явно.
+      if (edgePanRAF !== null) { cancelAnimationFrame(edgePanRAF); edgePanRAF = null; }
+      for (const [k] of offsets) pieces.get(k).el.classList.remove("dragging");
       if (!moved) {
-        for (const [k] of origins) draggingKeys.delete(k);
+        for (const [k] of offsets) draggingKeys.delete(k);
         const additive = e.shiftKey || e.ctrlKey || e.metaKey;
         if (additive) {
           const next = new Set(selected);
@@ -1906,7 +2013,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       // пристыковались, не входят в groupKeys и не пересылаются — их
       // координаты не менялись), иначе — компактный move одной детали. Не
       // весь борд: см. разбор гонки group/shuffle в server.js.
-      if (origins.length > 1 || newCount > 0) sendGroup(groupKeys);
+      if (offsets.length > 1 || newCount > 0) sendGroup(groupKeys);
       else sendMove(piece);
     }
     el.addEventListener("pointerup", finish, { signal });
@@ -1916,7 +2023,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // завершении жеста (потеря фокуса окна, вкладка свёрнута, ОС перехватила
     // жест) — lostpointercapture по спецификации срабатывает ВСЕГДА, когда
     // элемент теряет захват указателя, каким бы ни был повод, поэтому это
-    // надёжная точка для финального finish() и очистки draggingKeys/dragging.
+    // надёжная точка для финального finish() и очистки draggingKeys/activeDrag.
     el.addEventListener("lostpointercapture", finish, { signal });
   }
 

@@ -236,8 +236,12 @@ a{color:inherit}
 .piece.selected{
   filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 4px var(--flame-tip)) drop-shadow(0 0 4px var(--flame-tip));
 }
+/* Во время самого драга — БЕЗ огонькового ободка выделения (только тень
+   "приподнятости", как у .piece.dragging): ободок вокруг каждой детали
+   группы во время движения читался как лишний шум, а не как полезная
+   информация — то, что деталь тащится, и так видно по тени и курсору. */
 .piece.selected.dragging{
-  filter:drop-shadow(0 6px 14px rgba(0,0,0,.35)) drop-shadow(0 0 4px var(--flame-tip)) drop-shadow(0 0 4px var(--flame-tip));
+  filter:drop-shadow(0 6px 14px rgba(0,0,0,.35));
 }
 
 .zoom-controls{
