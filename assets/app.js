@@ -398,22 +398,37 @@ async function renderLibrary(root, signal) {
  * (когда большая часть уже состыкована и трогать её не нужно) россыпь
  * получается заметно теснее к рамке доски, а не растянутой на весь запас
  * под полный пазл.
+ *
+ * origin — где РЕАЛЬНО стоит доска в мировых координатах ({x,y}, обычно
+ * BOARD_X/BOARD_Y из renderTable/renderRoomTable). Без него (начальная
+ * раскладка) доска считается стоящей в (margin,margin) — так было и раньше,
+ * margin растёт вместе с "миром", который тогда ещё не существует. С явным
+ * origin (решафл: доска давно стоит на месте, мир уже фиксированного
+ * размера) сетка кандидатов строится ТЕСНЫМ кольцом вокруг РЕАЛЬНОЙ позиции
+ * доски, а не от нуля мировых координат — без этого при меньшем margin
+ * (см. выше) кольцо кандидатов оставалось привязано к margin=0 в углу
+ * мира, а не к настоящей доске, и россыпь после решафла оказывалась не
+ * вокруг доски, а смещённой к краю мира (баг: "решафл собирает левее
+ * рамки").
  */
-function scatterLayout(rows, cols, cell, pad, count = rows * cols) {
+function scatterLayout(rows, cols, cell, pad, count = rows * cols, origin = null) {
   const pieceSize = cell + 2 * pad;
   const boardW = cols * cell, boardH = rows * cell;
   const total = count;
   let margin = pieceSize * 1.4;
   let cells = [];
   for (let attempt = 0; attempt < 8; attempt++) {
-    const worldW = boardW + 2 * margin, worldH = boardH + 2 * margin;
     const step = pieceSize * 1.08;
-    const gw = Math.max(1, Math.floor(worldW / step)), gh = Math.max(1, Math.floor(worldH / step));
-    const bx0 = margin - pad * 0.3, bx1 = margin + boardW + pad * 0.3;
-    const by0 = margin - pad * 0.3, by1 = margin + boardH + pad * 0.3;
+    const originX = origin ? origin.x : margin, originY = origin ? origin.y : margin;
+    const bx0 = originX - pad * 0.3, bx1 = originX + boardW + pad * 0.3;
+    const by0 = originY - pad * 0.3, by1 = originY + boardH + pad * 0.3;
+    const gx0 = origin ? Math.max(0, Math.floor((originX - margin) / step)) : 0;
+    const gy0 = origin ? Math.max(0, Math.floor((originY - margin) / step)) : 0;
+    const gx1 = origin ? Math.ceil((originX + boardW + margin) / step) : Math.max(1, Math.floor((boardW + 2 * margin) / step));
+    const gy1 = origin ? Math.ceil((originY + boardH + margin) / step) : Math.max(1, Math.floor((boardH + 2 * margin) / step));
     cells = [];
-    for (let gy = 0; gy < gh; gy++) {
-      for (let gx = 0; gx < gw; gx++) {
+    for (let gy = gy0; gy < gy1; gy++) {
+      for (let gx = gx0; gx < gx1; gx++) {
         const cx = gx * step + step / 2, cy = gy * step + step / 2;
         if (cx > bx0 && cx < bx1 && cy > by0 && cy < by1) continue; // область доски — не рассыпаем сюда
         cells.push({ x: gx * step, y: gy * step });
@@ -428,7 +443,8 @@ function scatterLayout(rows, cols, cell, pad, count = rows * cols) {
     x: p.x + (Math.random() * 2 - 1) * jitter,
     y: p.y + (Math.random() * 2 - 1) * jitter,
   }));
-  return { margin, worldW: boardW + 2 * margin, worldH: boardH + 2 * margin, cells: picked };
+  const originX = origin ? origin.x : margin, originY = origin ? origin.y : margin;
+  return { margin, worldW: originX + boardW + margin, worldH: originY + boardH + margin, cells: picked };
 }
 function shuffleInPlace(arr) {
   for (let i = arr.length - 1; i > 0; i--) {
@@ -491,15 +507,19 @@ function clusterMembersOf(pieces, key) {
  *  расшвыриваем только одиночные, ещё ни с кем не соединённые детали.
  *  Раскладка под них считается по их реальному числу (scatterLayout(...,
  *  count)), не по rows*cols — россыпь ложится плотнее к рамке доски, а не
- *  на весь запас места под полный пазл. Возвращает Map "r,c" -> {x,y} новых
- *  позиций или null, если мешать нечего (все детали уже хоть с кем-то
- *  состыкованы). */
-function planShuffle(pieces, rows, cols, cell, pad, tol) {
+ *  на весь запас места под полный пазл. boardX/boardY — РЕАЛЬНАЯ позиция
+ *  доски в мировых координатах (BOARD_X/BOARD_Y у вызывающего) — без неё
+ *  scatterLayout считала бы, что доска стоит в (margin,margin) с НОВЫМ,
+ *  обычно куда меньшим margin, чем настоящий — россыпь оказывалась смещена
+ *  относительно реальной доски (баг «решафл собирает левее рамки»).
+ *  Возвращает Map "r,c" -> {x,y} новых позиций или null, если мешать
+ *  нечего (все детали уже хоть с кем-то состыкованы). */
+function planShuffle(pieces, rows, cols, cell, pad, tol, boardX, boardY) {
   const { members } = window.PuzzleClusters.buildClusters(pieces.values(), cell, tol);
   const toScatter = [...members.values()].filter(keys => keys.size <= 1);
   if (!toScatter.length) return null;
 
-  const fresh = scatterLayout(rows, cols, cell, pad, toScatter.length);
+  const fresh = scatterLayout(rows, cols, cell, pad, toScatter.length, { x: boardX, y: boardY });
   const next = new Map();
   toScatter.forEach((keys, i) => {
     const [key] = keys;
@@ -990,7 +1010,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     // Любую уже состыкованную пару/кластер (не только самый большой) не
     // трогаем — «встряхнуть оставшуюся кучу», а не собрать заново с нуля.
     // Риска потерять прогресс нет, подтверждение (confirm) не нужно.
-    const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE);
+    const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE, BOARD_X, BOARD_Y);
     if (!next) return; // всё уже в одном кластере — мешать нечего
     for (const [k, pos] of next) {
       const p = pieces.get(k);
@@ -1994,7 +2014,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // Та же поправка, что и в соло: любая уже состыкованная пара/кластер не
     // трогается — переставляются только ещё не соединённые одиночки. Риска
     // потерять прогресс нет, confirm не нужен.
-    const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE);
+    const next = planShuffle(pieces, rows, cols, CELL, pad, SNAP_TOLERANCE, BOARD_X, BOARD_Y);
     if (!next) return;
     // Шлём только реально переставленные детали (ключи next), а не весь
     // борд — см. разбор гонки group/shuffle в server.js: полный снимок
