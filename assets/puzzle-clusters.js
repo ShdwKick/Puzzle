@@ -77,6 +77,16 @@ function largestClusterSize(members) {
  * r/c однозначно задают положение внутри идеального кластера, поэтому
  * ректификация не требует обхода рёбер — просто пересчитываем всех
  * участников группы от произвольной опорной детали.
+ *
+ * ВАЖНО: draggingKeys должна быть уже РЕАЛЬНО состыкованной группой (или
+ * содержать только уже правильно стоящих друг относительно друга соседей) —
+ * функция слепо расставляет всех по r/c от анкера, ничего не проверяя. Если
+ * позвать её на произвольный набор физически НЕ связанных деталей (с
+ * появлением выделения рамкой — см. bindPieceDrag — таскать теперь можно и
+ * несколько случайных одиночек разом), их раскидает по "правильным" местам
+ * сетки относительно анкера — визуально телепорт при отпускании. Вызывающий
+ * код (stitchGroup ниже) поэтому ректифицирует не весь draggingKeys целиком,
+ * а только его настоящие связные подгруппы.
  */
 function rectifyGroup(pieces, draggingKeys, cell) {
   let anchor = null;
@@ -88,7 +98,12 @@ function rectifyGroup(pieces, draggingKeys, cell) {
   }
 }
 
-function stitchGroup(pieces, draggingKeys, cell, tol) {
+/**
+ * Стыковка ОДНОЙ настоящей связной группы (см. stitchGroup ниже, который
+ * разбивает произвольную draggingKeys на такие группы и гоняет это для
+ * каждой независимо). Сама логика — как раньше, один в один.
+ */
+function stitchOneGroup(pieces, draggingKeys, cell, tol) {
   rectifyGroup(pieces, draggingKeys, cell);
   const DIRS = [[0, 1], [0, -1], [1, 0], [-1, 0]];
   const resolved = new Set();
@@ -136,6 +151,27 @@ function stitchGroup(pieces, draggingKeys, cell, tol) {
     const anchorKey = draggingKeys.values().next().value;
     rectifyGroup(pieces, members.get(clusterOf.get(anchorKey)), cell);
   }
+}
+
+/**
+ * Стыкует перетаскиваемую группу draggingKeys с её соседями по сетке.
+ * draggingKeys БОЛЬШЕ НЕ обязана быть одной настоящей связной группой — с
+ * выделением рамкой (см. bindPieceDrag) одним жестом можно тащить сразу
+ * несколько физически НЕ связанных друг с другом деталей/кластеров.
+ * Поэтому сперва разбиваем draggingKeys на настоящие связные подгруппы
+ * (buildClusters по самим перетаскиваемым деталям, без остального борда —
+ * иначе можно случайно склеить с посторонним куском ДО стыковки) и гоняем
+ * stitchOneGroup для КАЖДОЙ НЕЗАВИСИМО. Это принципиально — если стыковку
+ * гонять по всей draggingKeys разом, срабатывание стыковки для ОДНОЙ
+ * подгруппы (через `for (const k of draggingKeys) p.x += errX...` внутри
+ * stitchOneGroup) сдвинуло бы вообще ВСЕ перетаскиваемые детали, включая
+ * те, что к этому шву отношения не имеют, — снаружи это выглядит как
+ * телепорт всей группы в момент отпускания.
+ */
+function stitchGroup(pieces, draggingKeys, cell, tol) {
+  const draggingPieces = [...draggingKeys].map(k => pieces.get(k));
+  const { members: subgroups } = buildClusters(draggingPieces, cell, tol);
+  for (const subKeys of subgroups.values()) stitchOneGroup(pieces, subKeys, cell, tol);
 }
 
 const PuzzleClusters = { tolerance, buildClusters, largestClusterSize, stitchGroup };

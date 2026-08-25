@@ -137,8 +137,26 @@ function edgeCommand(A, B, n, edge) {
   const neckR = edge.neckR !== undefined ? edge.neckR : 1;
   const armL = edge.armL !== undefined ? edge.armL : 1;
   const armR = edge.armR !== undefined ? edge.armR : 1;
-  const hL = edge.neck * L * neckL;
-  const hR = edge.neck * L * neckR;
+  let hL = edge.neck * L * neckL;
+  let hR = edge.neck * L * neckR;
+  // В ассиметричном режиме offset/neck*neckL·R могут в сумме подвести N1/N2
+  // почти вплотную к углу грани — а контрольная точка C1/C4 уходит ещё на
+  // 0.3·h ДАЛЬШЕ вдоль грани (см. формулы ниже), то есть реальный охват
+  // выступа у угла — не h, а h·REACH. Если он не умещается до угла с запасом
+  // GAP, контур этой грани заходит на территорию соседней грани у ТОГО ЖЕ
+  // угла, и они самопересекаются — на глаз это «оторванный лоскуток» у угла
+  // детали (обнаружено стресс-тестом на самопересечение контура, см.
+  // find-glitch.mjs; без клампа ловится примерно у 0.5% деталей). Клампим
+  // САМИ hL/hR (а не N1/N2 постфактум) — так C1..C4 остаются согласованы с
+  // новым N1/N2, без излома кривой. Симметрию относительно reverseEdge не
+  // ломает: GAP/REACH зависят только от L, не от направления обхода.
+  // GAP=0.22 подобран стресс-тестом (tune-gap.mjs) — 0 самопересечений на
+  // 288 000 деталей (8000 сидов); меньшие значения (0.16–0.20) снижали частоту,
+  // но не убирали её полностью (единичные случаи на сотни тысяч).
+  const GAP = L * 0.22, REACH = 1.3;
+  const mid0 = L / 2 + offset;
+  hL = Math.min(hL, Math.max(0, (mid0 - GAP) / REACH));
+  hR = Math.min(hR, Math.max(0, (L - GAP - mid0) / REACH));
   const r = edge.knob * L * edge.sign;
   const mid = { x: (A.x + B.x) / 2 + ux * offset, y: (A.y + B.y) / 2 + uy * offset };
   const N1 = { x: mid.x - ux * hL, y: mid.y - uy * hL };
