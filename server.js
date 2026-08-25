@@ -161,6 +161,16 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_room_sessions_active ON room_sessions(ro
 try { db.exec("ALTER TABLE puzzles ADD COLUMN owner_user_id TEXT"); } catch {}
 db.exec("CREATE INDEX IF NOT EXISTS idx_puzzles_owner ON puzzles(owner_user_id)");
 
+// Своя картинка была видна владельцу во ВСЕХ его комнатах — баг, не задумка
+// (см. README): загруженное в одной комнате протекало в другую просто по
+// владению, без всякой привязки к конкретной комнате. room_id — граница
+// видимости: NULL у встроенных (видны всем и всегда), заполнен у своих фото
+// (видны только за столом ЭТОЙ комнаты). Публикация «для всех» — отдельная,
+// сознательно отложенная задача (см. README «Свои фото»); пока опубликовать
+// нельзя, значит границы room_id достаточно.
+try { db.exec("ALTER TABLE puzzles ADD COLUMN room_id TEXT"); } catch {}
+db.exec("CREATE INDEX IF NOT EXISTS idx_puzzles_room ON puzzles(room_id)");
+
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 
@@ -188,10 +198,13 @@ const stmt = {
       completed_at = excluded.completed_at`),
 
   puzzlesPublic:  db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL ORDER BY sort_order, created_at"),
-  puzzlesVisible: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL OR owner_user_id = ? ORDER BY sort_order, created_at"),
+  // Встроенные + СВОИ ФОТО ИМЕННО ЭТОЙ КОМНАТЫ (room_id) — не все фото
+  // владельца по всем его комнатам (см. комментарий у ALTER TABLE room_id
+  // выше). Публикация «для всех» пока не реализована.
+  puzzlesForRoom: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL OR room_id = ? ORDER BY sort_order, created_at"),
   insertCustomPuzzle: db.prepare(`INSERT INTO puzzles
-      (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id)
-      VALUES (?,?,?,?,?,?,?,?,?)`),
+      (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id,room_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?)`),
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
   puzzlesByImage: db.prepare("SELECT * FROM puzzles WHERE image_file = ? AND owner_user_id = ?"),
@@ -540,20 +553,33 @@ async function api(req, res, url, user) {
   const seg = url.pathname.split("/").filter(Boolean); // ["api", "puzzles", ":id", "progress"]
   const m = req.method;
 
-  // Библиотека пазлов: без входа — только встроенные (гость играет без
-  // сохранения, это нормальный режим сервиса, не урезанный), вошедшему —
-  // ещё и свои приватные (см. «Ключевые решения»: видимость приватная).
+  // Библиотека пазлов: без входа или без ?roomId= — только встроенные
+  // (гость играет без сохранения, это нормальный режим сервиса, не
+  // урезанный; своих фото соло-библиотека не показывает вовсе — см.
+  // README «Свои фото»). С ?roomId= — ещё и свои фото ИМЕННО этой комнаты,
+  // при условии членства в ней (иначе можно было бы подглядеть чужие).
   if (seg[1] === "puzzles" && seg.length === 2 && m === "GET") {
-    const rows = user ? stmt.puzzlesVisible.all(user.id) : stmt.puzzlesPublic.all();
-    return json(res, 200, rows.map(puzzlePayload));
+    const roomId = url.searchParams.get("roomId");
+    if (roomId) {
+      if (!user) return json(res, 401, { error: "unauthorized" });
+      if (!stmt.roomMember.get(roomId, user.id)) return json(res, 403, { error: "not a member" });
+      return json(res, 200, stmt.puzzlesForRoom.all(roomId).map(puzzlePayload));
+    }
+    return json(res, 200, stmt.puzzlesPublic.all().map(puzzlePayload));
   }
 
   // Загрузка своего фото и генерация пазла из него — см. README «Свои фото».
   // Один аплоад сразу заводит все варианты сложности (PIECE_PRESETS) —
-  // свой id/сетка/seed на каждый, но общий файл картинки и владелец, чтобы
-  // клиент мог собрать их в одну карточку (groupPuzzles в app.js).
+  // свой id/сетка/seed на каждый, но общий файл картинки, владелец И комната
+  // (room_id — граница видимости, не протекает в другие комнаты того же
+  // владельца), чтобы клиент мог собрать их в одну карточку (groupPuzzles
+  // в app.js) и показать только за столом этой комнаты.
   if (seg[1] === "puzzles" && seg.length === 2 && m === "POST") {
     if (!user) return json(res, 401, { error: "unauthorized" });
+
+    const roomId = str(url.searchParams.get("roomId"), 64);
+    if (!roomId) return json(res, 400, { error: "roomId required" });
+    if (!stmt.roomMember.get(roomId, user.id)) return json(res, 403, { error: "not a member" });
 
     const width = parseInt(url.searchParams.get("w"), 10) || 0;
     const height = parseInt(url.searchParams.get("h"), 10) || 0;
@@ -573,7 +599,7 @@ async function api(req, res, url, user) {
       const { rows, cols } = gridForPieceTarget(total, width, height);
       const id = crypto.randomUUID();
       const seed = crypto.randomInt(1, 2 ** 31 - 1);
-      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id);
+      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId);
       return puzzlePayload(stmt.puzzle.get(id));
     });
     return json(res, 200, { title, variants });

@@ -285,5 +285,47 @@ await sleep(300); // дать серверу обработать close (state.c
 r = await asJson(tokenA, `/rooms/${roomId}/sessions/${raceSessionId}`, { method: "DELETE" });
 ok("после ухода всех со стола сеанс снова можно удалить", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
 
+// ───────── свои фото — граница видимости по комнате (не по владельцу) ─────────
+// Раньше загруженное в ОДНОЙ комнате владельца было видно и в ДРУГОЙ его же
+// комнате — баг (см. ALTER TABLE room_id в server.js). Проверяем, что фото,
+// загруженное в roomId, видно ИМЕННО там и нигде больше — ни во второй
+// комнате того же владельца, ни в соло-библиотеке (без ?roomId=).
+const callRaw = (token, p, body, contentType) => fetch(PUZZLE + "/api" + p, {
+  method: "POST", headers: { Authorization: "Bearer " + token, "Content-Type": contentType }, body,
+});
+const PNG_MAGIC = Buffer.from("\x89PNG\r\n\x1a\n", "latin1");
+const fakePng = Buffer.concat([PNG_MAGIC, Buffer.alloc(64)]);
+
+r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Вторая комната того же владельца" } });
+ok("вторая комната создана", r.status === 200, JSON.stringify(r.body));
+const roomId2 = r.body.id;
+
+let ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&title=${encodeURIComponent("Тестовое фото")}`, fakePng, "image/png");
+const upload = { status: ur.status, body: await ur.json().catch(() => ({})) };
+ok("загрузка фото в комнату прошла", upload.status === 200 && Array.isArray(upload.body.variants) && upload.body.variants.length === 6, JSON.stringify(upload.body).slice(0, 200));
+const uploadedId = upload.body.variants[0].id;
+
+r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
+ok("фото видно в комнате, где загружено", r.status === 200 && r.body.some(p => p.id === uploadedId), JSON.stringify(r.body.map(p => p.id)));
+
+r = await asJson(tokenA, `/puzzles?roomId=${roomId2}`);
+ok("фото НЕ видно в другой комнате того же владельца", r.status === 200 && !r.body.some(p => p.id === uploadedId), JSON.stringify(r.body.map(p => p.id)));
+
+r = await asJson(tokenA, "/puzzles");
+ok("фото НЕ видно в соло-библиотеке (без roomId)", r.status === 200 && !r.body.some(p => p.id === uploadedId), JSON.stringify(r.body.map(p => p.id)));
+
+// Загрузка в комнату, где не состоишь — 403 (иначе можно было бы подсунуть
+// фото в чужую комнату).
+ur = await callRaw(tokenB, `/puzzles?roomId=${roomId2}&w=300&h=400`, fakePng, "image/png");
+ok("загрузка в чужую комнату отбита 403", ur.status === 403, String(ur.status));
+
+// Удаление — доступно из комнаты (buildCard теперь показывает крестик
+// владельцу), проверяем сам эндпоинт: после удаления фото пропадает и там,
+// где было видно.
+r = await asJson(tokenA, `/puzzles/${uploadedId}`, { method: "DELETE" });
+ok("удаление своего фото проходит", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
+ok("после удаления фото пропало из комнаты", r.status === 200 && !r.body.some(p => p.id === uploadedId), JSON.stringify(r.body.map(p => p.id)));
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

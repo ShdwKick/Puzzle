@@ -7,7 +7,7 @@
  */
 
 let auth = null;
-let puzzlesCache = null;
+let puzzlesCache = new Map(); // ключ — roomId ("" для соло), см. getPuzzles()
 let currentRouteAbort = null;
 
 const $ = (root, sel) => root.querySelector(sel);
@@ -95,12 +95,18 @@ function localProgress(id) {
 }
 
 /* ───────────────────────── общие данные ───────────────────────── */
-async function getPuzzles() {
-  if (puzzlesCache) return puzzlesCache;
-  const res = auth.isAuthenticated() ? await auth.fetch("/api/puzzles") : await fetch("/api/puzzles");
+// Кэш по ключу roomId (пустая строка — соло/без комнаты): свои фото видны
+// только в комнате, где загружены (см. server.js, ALTER TABLE room_id) —
+// общий кэш без ключа отдавал бы список одной комнаты в другую.
+async function getPuzzles(roomId) {
+  const key = roomId || "";
+  if (puzzlesCache.has(key)) return puzzlesCache.get(key);
+  const qs = roomId ? `?roomId=${encodeURIComponent(roomId)}` : "";
+  const res = auth.isAuthenticated() ? await auth.fetch(`/api/puzzles${qs}`) : await fetch(`/api/puzzles${qs}`);
   if (!res.ok) throw new Error("puzzles fetch failed");
-  puzzlesCache = await res.json();
-  return puzzlesCache;
+  const data = await res.json();
+  puzzlesCache.set(key, data);
+  return data;
 }
 
 // По индексу, не по точному числу деталей: gridForPieceTarget округляет
@@ -146,15 +152,15 @@ async function shrinkForPuzzle(file) {
   return { blob, width: w, height: h };
 }
 
-async function uploadPuzzlePhoto(file, title) {
+async function uploadPuzzlePhoto(file, title, roomId) {
   const { blob, width, height } = await shrinkForPuzzle(file);
-  const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || "Мой пазл" });
+  const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || "Мой пазл", roomId });
   const res = await auth.fetch(`/api/puzzles?${qs}`, {
     method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "upload failed");
-  puzzlesCache = null; // библиотека изменилась — старый кэш врёт
+  puzzlesCache.clear(); // библиотека изменилась — старый кэш врёт
   return data;
 }
 
@@ -175,7 +181,7 @@ async function deletePuzzle(id) {
   const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}`, { method: "DELETE" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || data.error || "delete failed");
-  puzzlesCache = null;
+  puzzlesCache.clear();
 }
 
 /** DELETE /api/rooms/:id/sessions/:sessionId — освобождает слот из лимита
@@ -194,8 +200,9 @@ async function deleteRoomSession(roomId, sessionId) {
  *  при успехе — один аплоад сразу заводит все 4 уровня сложности (см.
  *  README «Свои фото»), выбора числа деталей тут больше нет. Используется
  *  только в пикере комнаты (renderRoom) — своих фото в соло-библиотеке
- *  больше нет (см. renderLibrary). */
-function mountUploadForm(container, onDone) {
+ *  больше нет (см. renderLibrary). roomId — граница видимости результата
+ *  (см. server.js, room_id): фото доступно только за столом ЭТОЙ комнаты. */
+function mountUploadForm(container, roomId, onDone) {
   container.innerHTML = `
     <form class="upload-form" id="uploadForm">
       <input class="text-input" id="uploadTitle" type="text" maxlength="80" placeholder="Название — необязательно">
@@ -214,7 +221,7 @@ function mountUploadForm(container, onDone) {
     submitBtn.disabled = true;
     try {
       const title = $(form, "#uploadTitle").value.trim();
-      const result = await uploadPuzzlePhoto(file, title);
+      const result = await uploadPuzzlePhoto(file, title, roomId);
       onDone(result);
       form.reset();
       submitBtn.disabled = false;
@@ -1324,7 +1331,7 @@ async function renderRoom(root, roomId, signal) {
   }
 
   let puzzles;
-  try { puzzles = await getPuzzles(); } catch { $(activeEl, "#roomPuzzleGrid").innerHTML = '<p class="state-note">Не удалось загрузить пазлы.</p>'; puzzles = []; }
+  try { puzzles = await getPuzzles(roomId); } catch { $(activeEl, "#roomPuzzleGrid").innerHTML = '<p class="state-note">Не удалось загрузить пазлы.</p>'; puzzles = []; }
   if (signal.aborted) return;
   const grid = $(activeEl, "#roomPuzzleGrid");
   grid.innerHTML = "";
@@ -1343,8 +1350,11 @@ async function renderRoom(root, roomId, signal) {
     }
   }
 
+  // allowDelete НЕ передан (по умолчанию разрешено) — buildCard сам
+  // покажет крестик только владельцу (ownerUserId === текущий пользователь);
+  // встроенные пазлы (ownerUserId===null) — не удаляются в любом случае.
   for (const group of groupPuzzles(puzzles)) {
-    grid.appendChild(buildCard(group, { allowDelete: false, onPlay: playVariant }));
+    grid.appendChild(buildCard(group, { onPlay: playVariant }));
   }
 
   $(activeEl, "#addPuzzleBtn").addEventListener("click", () => openModal("uploadPuzzleModalBackdrop"), { signal });
@@ -1353,8 +1363,8 @@ async function renderRoom(root, roomId, signal) {
   // выше). Монтируем один раз на каждый заход в комнату — mountUploadForm сам
   // перезаписывает innerHTML контейнера, повторный вызов при новом рендере не
   // накапливает старые формы/обработчики.
-  mountUploadForm(document.getElementById("uploadPuzzleFormMount"), result => {
-    grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { allowDelete: false, onPlay: playVariant }));
+  mountUploadForm(document.getElementById("uploadPuzzleFormMount"), roomId, result => {
+    grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { onPlay: playVariant }));
     closeModal("uploadPuzzleModalBackdrop");
   });
 
