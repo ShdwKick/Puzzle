@@ -74,6 +74,12 @@
       </a>
     </div>
     <div class="spacer"></div>
+    <!-- Кнопка «Установить как приложение» — прячется по умолчанию, показывается
+         только когда браузер реально прислал beforeinstallprompt (Chrome/Edge
+         и т.п.) и приложение ещё не запущено в standalone-режиме — см. app.js. -->
+    <button class="icon-btn" id="installBtn" title="Установить как приложение" aria-label="Установить как приложение" hidden>
+      <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 21h14"/></svg>
+    </button>
     <button class="icon-btn" id="themeBtn" title="Тема" aria-label="Тема"></button>
     <a class="icon-btn" href="#/rooms" title="Комнаты" aria-label="Комнаты">
       <svg class="icon" viewBox="0 0 24 24"><path d="M5 21V7l7-4 7 4v14"/><path d="M5 21h14"/><path d="M9 21v-6h6v6"/></svg>

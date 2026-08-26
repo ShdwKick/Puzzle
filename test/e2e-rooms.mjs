@@ -425,5 +425,42 @@ ok("после входа доступ к своей анонимной комн
 r = await asJson(tokenA, `/rooms/${anonRoom.id}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
 ok("после входа лимит снят сразу — 2-й сеанс стартует без новой комнаты", r.status === 200, JSON.stringify(r.body));
 
+// ───────── лимит поднимается ТОЛЬКО от входа создателя (owner), не любого
+// авторизованного участника — см. правку «лимиты поднимаются, только если
+// авторизован создатель комнаты» ─────────
+ar = await anonCall(null, "/rooms", { method: "POST", body: { title: "Комната без входа — не владелец" } });
+const ownerCookie = parseSetCookie(ar);
+const ownerRoom = await ar.json();
+ok("вторая анонимная комната (для проверки owner-only лимита) создана", ar.status === 200, String(ar.status));
+
+ar = await anonCall(null, `/rooms/join/${encodeURIComponent(ownerRoom.joinCode)}`, { method: "POST" });
+const memberCookie = parseSetCookie(ar);
+ok("второй аноним присоединился по коду", ar.status === 200, String(ar.status));
+
+// Не-владелец входит в аккаунт (клеймит свою member-строку, не owner) —
+// лимит НЕ должен подняться, пока владелец остаётся анонимным.
+ar = await fetch(PUZZLE + `/api/rooms/${ownerRoom.id}`, { headers: { Authorization: "Bearer " + tokenB, Cookie: memberCookie } });
+const claimedMemberRoom = await ar.json();
+ok("не-владелец вошёл и клеймится role=member (не owner)",
+  ar.status === 200 && claimedMemberRoom.role === "member", JSON.stringify(claimedMemberRoom));
+
+r = await asJson(tokenB, `/rooms/${ownerRoom.id}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+ok("1-й сеанс от вошедшего не-владельца стартует (лимит 1 ещё не исчерпан)", r.status === 200, JSON.stringify(r.body));
+
+r = await asJson(tokenB, `/rooms/${ownerRoom.id}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+ok("2-й сеанс всё ещё отбит лимитом 1 — авторизован не владелец, а рядовой участник",
+  r.status === 409 && r.body.limit === 1, JSON.stringify(r.body));
+
+// Теперь владелец (та же анонимная cookie, которой создавали комнату) входит
+// в аккаунт — вот теперь лимит должен подняться.
+ar = await fetch(PUZZLE + `/api/rooms/${ownerRoom.id}`, { headers: { Authorization: "Bearer " + tokenA, Cookie: ownerCookie } });
+const claimedOwnerRoom = await ar.json();
+ok("владелец вошёл и клеймится role=owner",
+  ar.status === 200 && claimedOwnerRoom.role === "owner", JSON.stringify(claimedOwnerRoom));
+
+r = await asJson(tokenA, `/rooms/${ownerRoom.id}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+ok("лимит снят сразу после входа ИМЕННО владельца — 2-й активный сеанс в комнате возможен",
+  r.status === 200, JSON.stringify(r.body));
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

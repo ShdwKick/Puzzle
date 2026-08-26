@@ -272,10 +272,12 @@ Object.assign(stmt, {
   addRoomMember: db.prepare(`
     INSERT INTO room_members (room_id,user_id,username,name,role,joined_at) VALUES (?,?,?,?,?,?)
     ON CONFLICT(room_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name`),
-  // "Комната ещё анонимная" = ни одного участника без префикса anon: — см.
-  // getOrCreateAnonIdentity/план. Считается на лету, не хранится отдельным
-  // полем, чтобы не могло рассинхрониться со строками room_members.
-  roomHasAuthedMember: db.prepare("SELECT 1 FROM room_members WHERE room_id = ? AND user_id NOT LIKE 'anon:%' LIMIT 1"),
+  // Лимит сессий снимается не от ЛЮБОГО вошедшего участника, а только от
+  // создателя комнаты (role='owner') — см. правку «лимиты поднимаются,
+  // только если авторизован создатель». Считается на лету по факту
+  // авторизации владельца, не хранится отдельным полем, чтобы не могло
+  // рассинхрониться со строками room_members (тот же приём, что раньше).
+  roomOwnerAuthed: db.prepare("SELECT 1 FROM room_members WHERE room_id = ? AND role = 'owner' AND user_id NOT LIKE 'anon:%' LIMIT 1"),
   // Клейм анонимного членства настоящим аккаунтом при входе (см. план) —
   // сохраняет role (в т.ч. owner, если анонимно создал именно эту комнату)
   // вместо того, чтобы завести отдельную новую строку и потерять её.
@@ -854,11 +856,14 @@ async function api(req, res, url, user) {
       }
 
       if (seg[3] === "sessions" && seg.length === 4 && m === "POST") {
-        // Пока в комнате нет ни одного настоящего аккаунта — только 1
-        // активная доска (не MAX_ACTIVE_SESSIONS_PER_ROOM) — см. план
-        // «анонимные комнаты». Снимается само собой, как только кто-то
-        // входит (roomHasAuthedMember начинает видеть его строку).
-        const limit = stmt.roomHasAuthedMember.get(roomId) ? MAX_ACTIVE_SESSIONS_PER_ROOM : 1;
+        // Пока создатель комнаты не вошёл в аккаунт — только 1 активная
+        // доска (не MAX_ACTIVE_SESSIONS_PER_ROOM), даже если другие
+        // участники уже авторизованы — см. правку «лимиты поднимаются,
+        // только если авторизован создатель». Снимается само собой, как
+        // только владелец входит (roomOwnerAuthed начинает видеть его
+        // строку — либо клеймом анонимной owner-строки, либо потому что
+        // комната изначально создана вошедшим пользователем).
+        const limit = stmt.roomOwnerAuthed.get(roomId) ? MAX_ACTIVE_SESSIONS_PER_ROOM : 1;
         const activeCount = stmt.activeSessions.all(roomId).length;
         if (activeCount >= limit) {
           return json(res, 409, { error: "room session limit reached", limit });

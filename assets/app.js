@@ -34,6 +34,33 @@ function applyTheme(theme) {
 document.getElementById("themeBtn").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 applyTheme(localStorage.getItem("puzzle.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 
+/* ───────────────────────── установка как PWA ─────────────────────────
+ * Chrome/Edge не показывают системный баннер установки сами — вместо этого
+ * шлют beforeinstallprompt и ждут явного вызова .prompt() из интерфейса.
+ * Событие приходит только если manifest.json уже валиден (иконки/start_url/
+ * display) — до этого кнопка просто остаётся скрытой, никакой отдельной
+ * фиче-детекции не нужно. Уже запущенное как приложение окно (display-mode:
+ * standalone) событие не получает вовсе — на всякий случай прячем кнопку
+ * и в этом случае тоже явно. */
+let deferredInstallPrompt = null;
+const installBtn = document.getElementById("installBtn");
+if (!matchMedia("(display-mode: standalone)").matches) {
+  window.addEventListener("beforeinstallprompt", e => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    installBtn.hidden = false;
+  });
+}
+installBtn.addEventListener("click", async () => {
+  if (!deferredInstallPrompt) return;
+  installBtn.hidden = true;
+  const prompt = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  prompt.prompt();
+  await prompt.userChoice; // outcome нас не интересует — кнопку в любом случае прячем
+});
+window.addEventListener("appinstalled", () => { installBtn.hidden = true; deferredInstallPrompt = null; });
+
 /* ───────────────────────── модалки: общий каркас ─────────────────────────
  * Дословно как в Movies (не завязано на специфику сервиса) — подложка на
  * весь экран + карточка по центру, закрытие по крестику/клику по подложке. */

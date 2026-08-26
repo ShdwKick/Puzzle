@@ -59,6 +59,10 @@ a{color:inherit}
   border:0;background:transparent;color:var(--md-sys-color-on-surface-variant);
   cursor:pointer;display:grid;place-items:center;overflow:hidden;
 }
+/* display:grid выше бьёт спецификой стандартный [hidden]{display:none} из
+   UA-стилей — без этого правила скрытая через атрибут hidden кнопка (см.
+   #installBtn) всё равно остаётся видимой и кликабельной. */
+.icon-btn[hidden]{display:none}
 .icon-btn::after{content:"";position:absolute;inset:0;background:currentColor;opacity:0;transition:opacity .2s}
 .icon-btn:hover::after{opacity:.08}
 .icon-btn:active::after{opacity:.12}
@@ -153,11 +157,20 @@ a{color:inherit}
 .puzzle-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);flex:1}
 .puzzle-card-play{align-self:flex-start;margin-top:.2rem}
 /* Крестик "Удалить" — поверх превью, в правом верхнем углу карточки (не в
-   .puzzle-card-body: там он утекал в конец flex-колонки, к низу карточки). */
+   .puzzle-card-body: там он утекал в конец flex-колонки, к низу карточки).
+   Виден только при наведении/фокусе на карточку — не захламляет сетку
+   постоянно висящими крестиками. На тач-устройствах наведения нет, поэтому
+   там крестик остаётся видимым всегда (hover: none). */
 .puzzle-card-delete{
   position:absolute;top:.5rem;right:.5rem;z-index:2;
   background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 82%, transparent);
   color:var(--md-sys-color-inverse-on-surface);
+  opacity:0;transition:opacity .15s var(--ease-std);
+}
+.puzzle-card:hover .puzzle-card-delete,
+.puzzle-card:focus-within .puzzle-card-delete{opacity:1}
+@media (hover:none){
+  .puzzle-card-delete{opacity:1}
 }
 .puzzle-card-delete:hover::after{opacity:.16}
 /* Если на той же карточке ещё и бейдж прогресса — не дать им наложиться. */
