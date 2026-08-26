@@ -482,12 +482,24 @@ function shuffleInPlace(arr) {
 /* ───────────────────────── стол: кластеры (связи вместо фиксированного места) ─────────────────────────
  * Кластер нигде не хранится явно — выводится заново из raw {r,c,x,y} через
  * assets/puzzle-clusters.js (общий модуль с сервером) на каждое значимое
- * событие. Прогресс = размер наибольшего кластера, не число "своих мест". */
+ * событие. Счётчик "собрано" = сумма деталей во ВСЕХ кластерах от двух и
+ * больше (connectedPiecesCount) — деталь, состыкованная хоть с кем-то,
+ * засчитывается сразу, не только когда её кусок дорастёт до самого
+ * большого сегмента. "Пазл решён целиком" — отдельная, более строгая
+ * проверка (largestClusterSize === total, см. isPuzzleSolved ниже), не
+ * путать с этим счётчиком. */
 
-/** Прогресс = размер наибольшего связного кластера — заменяет старое
+/** Счётчик "собрано" для интерфейса — заменяет старое
  *  [...pieces.values()].filter(p=>p.placed).length. */
 function computePiecesPlaced(pieces, cell, tol) {
-  return window.PuzzleClusters.largestClusterSize(window.PuzzleClusters.buildClusters(pieces.values(), cell, tol).members);
+  return window.PuzzleClusters.connectedPiecesCount(window.PuzzleClusters.buildClusters(pieces.values(), cell, tol).members);
+}
+
+/** "Пазл целиком собран" — ВСЕ детали в одном кластере, а не просто у
+ *  каждой есть сосед где-то на борде (это отдельно, см. computePiecesPlaced
+ *  выше). Используется там, где решается "показать ли победу". */
+function isPuzzleSolved(pieces, cell, tol, total) {
+  return window.PuzzleClusters.largestClusterSize(window.PuzzleClusters.buildClusters(pieces.values(), cell, tol).members) >= total;
 }
 
 function edgeId(a, b) { return a < b ? `${a}|${b}` : `${b}|${a}`; }
@@ -1122,7 +1134,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
       const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
       const { nextIds } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
       lastClusterEdgeIds = nextIds;
-      updateProgressLabel(window.PuzzleClusters.largestClusterSize(members), rows * cols);
+      updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(members), rows * cols);
       setSelected([]);
       scheduleSave();
     }
@@ -1171,7 +1183,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
       } catch { /* AuthRequiredError и подобное — просто не сохранилось на этот раз */ }
     } else {
       const prev = localProgress(puzzle.id);
-      const completedAt = placed >= total ? ((prev && prev.completedAt) || Date.now()) : null;
+      const completedAt = isPuzzleSolved(pieces, CELL, SNAP_TOLERANCE, total) ? ((prev && prev.completedAt) || Date.now()) : null;
       localStorage.setItem(localKey(puzzle.id), JSON.stringify({ ...payload, completedAt }));
       if (completedAt && !announced) { announced = true; showWin(); }
     }
@@ -2185,7 +2197,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
       const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
       lastClusterEdgeIds = nextIds;
-      updateProgressLabel(window.PuzzleClusters.largestClusterSize(members), rows * cols);
+      updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(members), rows * cols);
       setSelected([]);
       // >1 детали тащили или стыковка образовала новое ребро — шлём группой
       // ТОЛЬКО те детали, которых коснулся этот жест (groupKeys — тащенная
@@ -2253,7 +2265,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     }
     const built = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
     lastClusterEdgeIds = clusterEdgeIds(built.edges);
-    updateProgressLabel(window.PuzzleClusters.largestClusterSize(built.members), rows * cols);
+    updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(built.members), rows * cols);
 
     // Раскладку никто не задал — эту раскладку и предлагаем как каноническую
     // (см. план: "первый валидный init побеждает", гонка самоисцеляется).
@@ -2272,10 +2284,14 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       const built = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
       const { nextIds } = flashClusterEdges(pieces, lastClusterEdgeIds, built.edges);
       lastClusterEdgeIds = nextIds;
-      const placedNow = window.PuzzleClusters.largestClusterSize(built.members);
+      const placedNow = window.PuzzleClusters.connectedPiecesCount(built.members);
       updateProgressLabel(placedNow, msg.piecesTotal);
       updatePresence(msg.members);
-      if (placedNow >= msg.piecesTotal && !announced) { announced = true; showWin(); }
+      // "Собрано" (placedNow, счётчик выше) и "решено целиком" — разные
+      // вещи (см. комментарий у computePiecesPlaced/isPuzzleSolved) —
+      // победу показываем только когда все детали — один кластер.
+      const largest = window.PuzzleClusters.largestClusterSize(built.members);
+      if (largest >= msg.piecesTotal && !announced) { announced = true; showWin(); }
       return;
     }
     if (msg.type === "presence") return updatePresence(msg.members);

@@ -8,7 +8,7 @@
  */
 import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
-const { tolerance, buildClusters, largestClusterSize, stitchGroup } = require("../assets/puzzle-clusters.js");
+const { tolerance, buildClusters, largestClusterSize, connectedPiecesCount, stitchGroup } = require("../assets/puzzle-clusters.js");
 
 const CELL = 100;
 const TOL = tolerance(CELL); // 28
@@ -46,6 +46,51 @@ ok("tolerance(100) === 28", near(TOL, 28));
   const { members } = buildClusters(pieces, CELL, TOL);
   ok("buildClusters: оторванная деталь не входит в основной кластер", largestClusterSize(members) === 3);
   ok("buildClusters: всего кластеров — 2", members.size === 2);
+}
+
+/* ── connectedPiecesCount: счётчик "собрано" — сумма ВСЕХ кластеров от 2,
+ * не только самого большого (регресс на запрос пользователя: раньше
+ * счётчик использовал largestClusterSize, и деталь, состыкованная в
+ * отдельный от основного кусок, в него не попадала). */
+{
+  // Два независимых кластера по 2 детали (не смежные друг с другом) +
+  // одна ни с кем не состыкованная одиночка.
+  const pieces = [
+    { r: 0, c: 0, x: 0, y: 0 },
+    { r: 0, c: 1, x: 100, y: 0 },       // состыкована с (0,0) — кластер А, 2 детали
+    { r: 5, c: 5, x: 5000, y: 5000 },
+    { r: 5, c: 6, x: 5100, y: 5000 },   // состыкована с (5,5) — кластер Б, 2 детали, ФИЗИЧЕСКИ далеко от А
+    { r: 9, c: 9, x: 9999, y: 9999 },   // одиночка — ни с кем не состыкована
+  ];
+  const { members } = buildClusters(pieces, CELL, TOL);
+  ok("connectedPiecesCount: largestClusterSize видит только больший (тут оба по 2 — 2)", largestClusterSize(members) === 2);
+  ok("connectedPiecesCount: сумма ОБОИХ кластеров по 2 детали — 4, одиночка не в счёт",
+    connectedPiecesCount(members) === 4, String(connectedPiecesCount(members)));
+}
+{
+  // Всё врозь — ни одной стыковки вообще: счётчик должен быть 0, а не
+  // "1" (размер тривиального кластера-одиночки).
+  const pieces = [
+    { r: 0, c: 0, x: 0, y: 0 },
+    { r: 0, c: 1, x: 9999, y: 0 },
+    { r: 1, c: 0, x: 0, y: 9999 },
+  ];
+  const { members } = buildClusters(pieces, CELL, TOL);
+  ok("connectedPiecesCount: ни одной стыковки — счётчик 0", connectedPiecesCount(members) === 0);
+}
+{
+  // Один большой кластер из всех — оба счётчика совпадают (единственный
+  // случай, где largestClusterSize и connectedPiecesCount дают один
+  // результат: когда кластер ровно один).
+  const pieces = [
+    { r: 0, c: 0, x: 0, y: 0 },
+    { r: 0, c: 1, x: 100, y: 0 },
+    { r: 1, c: 0, x: 0, y: 100 },
+    { r: 1, c: 1, x: 100, y: 100 },
+  ];
+  const { members } = buildClusters(pieces, CELL, TOL);
+  ok("connectedPiecesCount: единственный кластер — совпадает с largestClusterSize",
+    connectedPiecesCount(members) === largestClusterSize(members) && connectedPiecesCount(members) === 4);
 }
 
 /* ── stitchGroup: одиночная стыковка ── */

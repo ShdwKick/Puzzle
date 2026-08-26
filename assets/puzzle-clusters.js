@@ -57,6 +57,19 @@ function largestClusterSize(members) {
   return max;
 }
 
+/** Сумма размеров ВСЕХ кластеров от двух деталей — то есть каждая деталь,
+ *  у которой есть хоть один живой сосед, засчитывается сразу, а не только
+ *  когда её кусок дорастёт до самого большого сегмента. Одиночки (кластер
+ *  размера 1 — ни с кем не состыкована) в сумму не входят. Это счётчик
+ *  "собрано" в интерфейсе — НЕ мера "пазл решён целиком": для неё по-прежнему
+ *  largestClusterSize (побеждаем только когда все детали — один кластер, а
+ *  не просто у каждой есть сосед где-то на борде). */
+function connectedPiecesCount(members) {
+  let sum = 0;
+  for (const set of members.values()) if (set.size > 1) sum += set.size;
+  return sum;
+}
+
 /**
  * Стыкует перетаскиваемую группу draggingKeys (Set<"r,c">) с её соседями
  * по сетке. Мутирует x/y ТОЛЬКО у деталей из draggingKeys (через
@@ -174,6 +187,6 @@ function stitchGroup(pieces, draggingKeys, cell, tol) {
   for (const subKeys of subgroups.values()) stitchOneGroup(pieces, subKeys, cell, tol);
 }
 
-const PuzzleClusters = { tolerance, buildClusters, largestClusterSize, stitchGroup };
+const PuzzleClusters = { tolerance, buildClusters, largestClusterSize, connectedPiecesCount, stitchGroup };
 if (typeof module !== "undefined") module.exports = PuzzleClusters;
 if (typeof window !== "undefined") window.PuzzleClusters = PuzzleClusters;

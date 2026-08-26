@@ -42,7 +42,7 @@ const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { checkAdminKey, createAdminLog } = require("./admin-internal");
 const ws = require("./ws-server");
-const { buildClusters, largestClusterSize, tolerance } = require("./assets/puzzle-clusters.js");
+const { buildClusters, largestClusterSize, connectedPiecesCount, tolerance } = require("./assets/puzzle-clusters.js");
 
 const PORT = parseInt(process.env.PORT || "8796", 10);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -60,10 +60,18 @@ const CELL = 100; // должно совпадать с CELL в assets/app.js
 // без претензии на финальный дизайн.
 const MAX_ACTIVE_SESSIONS_PER_ROOM = 5;
 const SNAP_TOLERANCE = tolerance(CELL);
-// Прогресс = размер наибольшего связного кластера деталей (см.
-// assets/puzzle-clusters.js), а не поштучный флаг placed из wire-формата —
-// клиентскому placed доверять нельзя, только собственному пересчёту.
-const clusterProgress = pieces => largestClusterSize(buildClusters(pieces, CELL, SNAP_TOLERANCE).members);
+// Прогресс = сумма деталей во ВСЕХ кластерах от двух и больше (см.
+// assets/puzzle-clusters.js/connectedPiecesCount), а не поштучный флаг
+// placed из wire-формата — клиентскому placed доверять нельзя, только
+// собственному пересчёту. Раньше здесь был largestClusterSize (размер
+// только САМОГО БОЛЬШОГО кластера) — деталь, состыкованная в отдельный от
+// основного кусок, в счётчик не попадала, что выглядело как "не
+// засчиталось". isSolved ниже — отдельная, более строгая проверка: пазл
+// реально СОБРАН только когда все детали — один кластер, не просто у
+// каждой есть сосед где-то на борде (используется вместо clusterProgress
+// там, где решается "показать ли победу"/completed_at).
+const clusterProgress = pieces => connectedPiecesCount(buildClusters(pieces, CELL, SNAP_TOLERANCE).members);
+const isSolved = (pieces, total) => largestClusterSize(buildClusters(pieces, CELL, SNAP_TOLERANCE).members) >= total;
 
 const AUTH_ISSUER = (process.env.AUTH_ISSUER || "").replace(/\/+$/, "");
 const AUTH_CLIENT_ID = process.env.AUTH_CLIENT_ID || "puzzle";
@@ -542,15 +550,24 @@ const server = http.createServer(async (req, res) => {
     // Для Admin: server-to-server по общему ключу (см. admin-internal.js), не SSO.
     // Загрузка своих пазлов через Admin — отдельная задача (см. README.md),
     // пока только чтение статистики и лога, по образцу остальных сервисов.
+    // Набор полей — по образцу Movies/server.js (rooms/roomsCreated7d и т.п.):
+    // комнаты появились в Puzzle позже первой версии /internal/stats, эти
+    // счётчики раньше сюда просто не попали.
     if (p === "/internal/stats" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       const since7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
       return json(res, 200, {
         ok: true,
         puzzles: db.prepare("SELECT COUNT(*) AS n FROM puzzles").get().n,
+        customPuzzles: db.prepare("SELECT COUNT(*) AS n FROM puzzles WHERE owner_user_id IS NOT NULL").get().n,
         progressRows: db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress").get().n,
         completed: db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress WHERE completed_at IS NOT NULL").get().n,
         progressUpdated7d: db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress WHERE updated_at > ?").get(since7d).n,
+        rooms: db.prepare("SELECT COUNT(*) AS n FROM rooms").get().n,
+        roomsCreated7d: db.prepare("SELECT COUNT(*) AS n FROM rooms WHERE created_at > ?").get(since7d).n,
+        roomSessions: db.prepare("SELECT COUNT(*) AS n FROM room_sessions").get().n,
+        roomSessionsCompleted: db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE completed_at IS NOT NULL").get().n,
+        roomSessionsStarted7d: db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE started_at > ?").get(since7d).n,
       });
     }
     if (p === "/internal/logs" && req.method === "GET") {
@@ -692,7 +709,7 @@ async function api(req, res, url, user) {
       // затирается обратно в null, даже если сейчас собранных деталей меньше
       // total (например, после «Перемешать») — пазл когда-то был собран, и
       // бейдж в библиотеке не должен пропадать из-за этого.
-      const completedAt = existing?.completed_at || (placed >= total ? ts : null);
+      const completedAt = existing?.completed_at || (isSolved(pieces, total) ? ts : null);
       stmt.upsertProgress.run(
         user.id, puzzle.id, JSON.stringify(pieces), placed, total,
         existing?.started_at || ts, ts, completedAt,
@@ -854,7 +871,7 @@ function persistSession(state) {
   state.dirty = false;
   const placed = clusterProgress(state.pieces);
   const ts = now();
-  const completedAt = placed >= state.piecesTotal ? ts : null;
+  const completedAt = isSolved(state.pieces, state.piecesTotal) ? ts : null;
   stmt.updateSessionPieces.run(JSON.stringify(state.pieces), placed, ts, completedAt, state.sessionId);
 }
 
@@ -945,7 +962,7 @@ function attachRoomConnection(sessionId, user, wsConn) {
       state.pieces = state.pieces.map(p => byKey.get(`${p.r},${p.c}`) || p);
       const placedNow = clusterProgress(state.pieces);
       schedulePersist(state);
-      if (placedNow >= state.piecesTotal) persistSession(state);
+      if (isSolved(state.pieces, state.piecesTotal)) persistSession(state);
       broadcast(state, {
         type: "sync", pieces: state.pieces, piecesTotal: state.piecesTotal,
         piecesPlaced: placedNow, members: presenceList(state),

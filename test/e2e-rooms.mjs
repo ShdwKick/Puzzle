@@ -167,7 +167,11 @@ const bSyncPromise = waitMessage(wsB, m => m.type === "sync" && m.pieces);
 wsA.send(JSON.stringify({ type: "init", pieces: scatteredPieces() }));
 const bSync = await bSyncPromise;
 ok("B получил каноническую раскладку от A", Array.isArray(bSync.pieces) && bSync.pieces.length === piecesTotal);
-ok("несмежная раскладка после init — piecesPlaced===1 (каждая деталь свой кластер)", bSync.piecesPlaced === 1, JSON.stringify({ piecesPlaced: bSync.piecesPlaced }));
+// piecesPlaced теперь = сумма деталей во ВСЕХ кластерах от 2 (не только
+// самом большом, см. connectedPiecesCount) — ни одна деталь тут ни с кем
+// не состыкована (каждая сама по себе), значит счётчик 0, а не 1 (как
+// было бы для largestClusterSize, где кластер-одиночка считался за 1).
+ok("несмежная раскладка после init — piecesPlaced===0 (никто ни с кем не состыкован)", bSync.piecesPlaced === 0, JSON.stringify({ piecesPlaced: bSync.piecesPlaced }));
 
 let echoOnA = false;
 wsA.addEventListener("message", function guard(e) { if (JSON.parse(e.data).type === "move") echoOnA = true; });
@@ -257,7 +261,9 @@ wsD.send(JSON.stringify({ type: "group", pieces: [
 ] }));
 const raceSync = await raceSyncPromise;
 ok("конкурентные partial-group от двух участников не затёрли друг друга", bothStitched(raceSync));
-ok("итог гонки — два независимых кластера по 2 детали, piecesPlaced===2", raceSync.piecesPlaced === 2, JSON.stringify({ piecesPlaced: raceSync.piecesPlaced }));
+// Два независимых кластера по 2 детали каждый — считаем ОБА (2+2=4), не
+// только больший (тут оба одного размера, но правило то же самое).
+ok("итог гонки — два независимых кластера по 2 детали, piecesPlaced===4 (считаются оба)", raceSync.piecesPlaced === 4, JSON.stringify({ piecesPlaced: raceSync.piecesPlaced }));
 ok("длина pieces не меняется при частичном group", raceSync.pieces.length === piecesTotal, String(raceSync.pieces.length));
 
 // ───────── удаление сеанса (DELETE /api/rooms/:id/sessions/:sessionId) ─────────
