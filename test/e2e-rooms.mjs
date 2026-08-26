@@ -375,5 +375,55 @@ ok("восстановление скрытого пазла проходит", 
 r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
 ok("после восстановления пазл снова виден в комнате", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
 
+// ───────── анонимные комнаты — совсем без входа (см. план) ─────────
+// node's fetch не хранит cookies сам — вытаскиваем Set-Cookie из ответа и
+// прокидываем дальше вручную как обычный браузер бы сделал автоматически.
+function parseSetCookie(res) {
+  const raw = res.headers.get("set-cookie");
+  return raw ? raw.split(";")[0] : null; // "puzzle_anon=<uuid>"
+}
+const anonCall = (cookie, p, init = {}) => fetch(PUZZLE + "/api" + p, {
+  ...init,
+  headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...(cookie ? { Cookie: cookie } : {}), ...init.headers },
+  body: init.body ? JSON.stringify(init.body) : undefined,
+});
+
+let ar = await anonCall(null, "/rooms", { method: "POST", body: { title: "Комната без входа" } });
+ok("анонимная комната создаётся без токена вообще", ar.status === 200, String(ar.status));
+const anonCookie = parseSetCookie(ar);
+ok("сервер выдал cookie puzzle_anon", !!anonCookie && anonCookie.startsWith("puzzle_anon="), String(anonCookie));
+const anonRoom = await ar.json();
+
+ar = await anonCall(anonCookie, "/rooms");
+const anonRoomsList = await ar.json();
+ok("анонимная комната видна в /rooms по той же cookie («мои комнаты» анонима)",
+  ar.status === 200 && anonRoomsList.some(x => x.id === anonRoom.id), JSON.stringify(anonRoomsList.map(x => x.id)));
+
+ar = await anonCall(anonCookie, `/rooms/${anonRoom.id}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+const anonSession1 = await ar.json();
+ok("первый анонимный сеанс стартовал", ar.status === 200, JSON.stringify(anonSession1));
+
+ar = await anonCall(anonCookie, `/rooms/${anonRoom.id}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+const anonSession2Body = await ar.json();
+ok("2-й сеанс в анонимной комнате отбит лимитом 1 (не 5)",
+  ar.status === 409 && anonSession2Body.limit === 1, JSON.stringify(anonSession2Body));
+
+ar = await fetch(PUZZLE + `/api/puzzles?roomId=${anonRoom.id}&w=300&h=400`, {
+  method: "POST", headers: { "Content-Type": "image/png", Cookie: anonCookie }, body: fakePng,
+});
+ok("загрузка своего фото в анонимную комнату без входа отбита 401 — как и должно", ar.status === 401, String(ar.status));
+
+// Тот же браузер (та же cookie) теперь входит в аккаунт и открывает СВОЮ
+// анонимную комнату — клейм членства должен перенести его строку на
+// настоящий user.id и сохранить role="owner" (создавал её анонимно).
+ar = await fetch(PUZZLE + `/api/rooms/${anonRoom.id}`, { headers: { Authorization: "Bearer " + tokenA, Cookie: anonCookie } });
+const claimedRoom = await ar.json();
+ok("после входа доступ к своей анонимной комнате есть и role=owner сохранилась (клейм)",
+  ar.status === 200 && claimedRoom.role === "owner", JSON.stringify(claimedRoom));
+
+// Лимит снят сразу — вторая (уже настоящая) сессия стартует без 409.
+r = await asJson(tokenA, `/rooms/${anonRoom.id}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+ok("после входа лимит снят сразу — 2-й сеанс стартует без новой комнаты", r.status === 200, JSON.stringify(r.body));
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

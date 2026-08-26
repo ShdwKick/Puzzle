@@ -104,7 +104,7 @@ async function getPuzzles(roomId) {
   const key = roomId || "";
   if (puzzlesCache.has(key)) return puzzlesCache.get(key);
   const qs = roomId ? `?roomId=${encodeURIComponent(roomId)}` : "";
-  const res = auth.isAuthenticated() ? await auth.fetch(`/api/puzzles${qs}`) : await fetch(`/api/puzzles${qs}`);
+  const res = await roomFetch(`/api/puzzles${qs}`);
   if (!res.ok) throw new Error("puzzles fetch failed");
   const data = await res.json();
   puzzlesCache.set(key, data);
@@ -154,6 +154,17 @@ async function shrinkForPuzzle(file) {
   return { blob, width: w, height: h };
 }
 
+/** Комнаты работают и без входа (см. server.js/getOrCreateAnonIdentity) —
+ *  anonymous identity живёт в HttpOnly cookie, не в JWT, поэтому
+ *  auth.fetch (бросает AuthRequiredError без токена, assets/auth-client.js)
+ *  для комнатных запросов не годится анониму. Обычный fetch на
+ *  same-origin сам шлёт cookies, ничего дополнительно прокидывать не
+ *  нужно. НЕ использовать для того, что реально требует входа (загрузка
+ *  своих фото — uploadPuzzlePhoto ниже остаётся на auth.fetch). */
+function roomFetch(url, opts) {
+  return auth.isAuthenticated() ? auth.fetch(url, opts) : fetch(url, opts);
+}
+
 async function uploadPuzzlePhoto(file, title, roomId) {
   const { blob, width, height } = await shrinkForPuzzle(file);
   const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || "Мой пазл", roomId });
@@ -170,12 +181,16 @@ async function uploadPuzzlePhoto(file, title, roomId) {
  *  начал сеанс раньше) — редиректит на уже существующий вместо ошибки.
  *  Общий код для пикера, формы загрузки, экрана «уже собран» и истории. */
 async function startRoomSession(roomId, puzzleId, asymmetric) {
-  const res = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`, {
+  const res = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId, asymmetric: !!asymmetric }),
   });
   const data = await res.json();
   if (res.status === 409 && data.session) return data.session.id;
-  if (!res.ok) throw new Error(data.error || "start session failed");
+  if (!res.ok) {
+    const err = new Error(data.error || "start session failed");
+    if (typeof data.limit === "number") err.limit = data.limit;
+    throw err;
+  }
   return data.id;
 }
 
@@ -192,7 +207,7 @@ async function deletePuzzle(id) {
  *  Своих фото это не касается — для них есть настоящее удаление, deletePuzzle
  *  выше. */
 async function hidePuzzleInRoom(roomId, variants) {
-  await Promise.all(variants.map(v => auth.fetch(
+  await Promise.all(variants.map(v => roomFetch(
     `/api/rooms/${encodeURIComponent(roomId)}/hidden-puzzles`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId: v.id }) },
   )));
@@ -205,7 +220,7 @@ async function hidePuzzleInRoom(roomId, variants) {
  *  активный и за столом реально кто-то есть — тогда бросаем понятную ошибку,
  *  вызывающий код (renderRoom) ловит её текстом. */
 async function deleteRoomSession(roomId, sessionId) {
-  const res = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  const res = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
   if (res.status === 409) throw new Error("table not empty");
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "delete session failed");
@@ -1256,9 +1271,17 @@ function connectRoomSocket({ roomId, sessionId, signal, onMessage, onOpen, onClo
 
   async function open() {
     if (stopped || signal.aborted) return;
-    const token = await auth.getAccessToken();
-    if (!token) { scheduleRetry(); return; }
-    const url = wsUrlFor(`/ws/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}?token=${encodeURIComponent(token)}`);
+    // Аноним подключается вообще без токена (auth.getAccessToken() у него
+    // всегда пуст — раньше это уводило сюда в бесконечный ретрай) — сервер
+    // сам разберётся по cookie puzzle_anon, которую браузер шлёт на
+    // апгрейд-запрос сам (см. план «анонимные комнаты»).
+    let tokenParam = "";
+    if (auth.isAuthenticated()) {
+      const token = await auth.getAccessToken();
+      if (!token) { scheduleRetry(); return; }
+      tokenParam = `?token=${encodeURIComponent(token)}`;
+    }
+    const url = wsUrlFor(`/ws/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}${tokenParam}`);
     socket = new WebSocket(url);
     socket.addEventListener("open", () => { attempt = 0; onOpen && onOpen(); });
     socket.addEventListener("message", e => {
@@ -1293,6 +1316,23 @@ function fmtDate(ts) {
   catch { return ""; }
 }
 
+/** Ярлыки участников комнаты для списка/presence — анонимным (id с
+ *  префиксом "anon:", см. server.js/getOrCreateAnonIdentity) присваиваем
+ *  "Гость"/"Гость 2"/… по порядку появления в переданном списке, у
+ *  настоящих — имя/логин, как раньше. idKey — поле с идентификатором:
+ *  "user_id" у списка участников комнаты (room.members, сырые поля из
+ *  SQLite), "id" у presence из WS (см. server.js presenceList). */
+function roomMemberLabels(members, idKey) {
+  let guestN = 0;
+  return members.map(m => {
+    if (typeof m[idKey] === "string" && m[idKey].startsWith("anon:")) {
+      guestN++;
+      return guestN === 1 ? "Гость" : `Гость ${guestN}`;
+    }
+    return m.name || m.username || "участник";
+  });
+}
+
 /** Русское склонение по числу — дословно как в Movies (plural). */
 function plural(n, one, few, many) {
   const a = Math.abs(n) % 100, b = a % 10;
@@ -1319,7 +1359,7 @@ document.getElementById("createRoomBtn").addEventListener("click", async () => {
   const title = input.value.trim();
   if (!title) return;
   try {
-    const res = await auth.fetch("/api/rooms", {
+    const res = await roomFetch("/api/rooms", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }),
     });
     if (!res.ok) throw new Error("create room failed");
@@ -1363,20 +1403,23 @@ async function renderRoomsList(root, signal) {
       <button class="btn outlined sm" id="roomsNextBtn" type="button">Вперёд →</button>
     </div>`;
 
+  // Комнаты теперь доступны и без входа (см. server.js/
+  // getOrCreateAnonIdentity) — список анонимных комнат этого браузера
+  // работает так же, как «мои комнаты» у вошедшего, просто ключом служит
+  // cookie вместо JWT. Единственное, чего анониму не хватает — списка
+  // комнат виден только на ЭТОМ устройстве (cookie не переносится), для
+  // этого мягкая подсказка ниже, не блокирующая экран.
   if (!auth.isAuthenticated()) {
-    $(root, "#roomList").innerHTML = "";
     const note = document.createElement("div");
     note.className = "guest-note";
     const span = document.createElement("span");
-    span.textContent = "Комнаты доступны только вошедшим — нужен аккаунт, чтобы участники видели, кто есть кто за столом.";
+    span.textContent = "Войдите, чтобы комната была видна и с других устройств.";
     const btn = document.createElement("button");
     btn.className = "btn tonal sm"; btn.type = "button";
     btn.textContent = "Войти";
     btn.addEventListener("click", () => auth.login());
     note.append(span, btn);
-    $(root, "#roomList").appendChild(note);
-    $(root, "#roomActionsRow").hidden = true;
-    return;
+    $(root, "#roomList").before(note);
   }
 
   // Пагинация — целиком на фронте, список уже загружен целиком (см.
@@ -1426,7 +1469,7 @@ async function renderRoomsList(root, signal) {
   async function loadRooms() {
     const list = $(root, "#roomList");
     try {
-      const res = await auth.fetch("/api/rooms");
+      const res = await roomFetch("/api/rooms");
       if (!res.ok) throw new Error("rooms fetch failed");
       rooms = await res.json();
     } catch {
@@ -1453,16 +1496,11 @@ async function renderRoom(root, roomId, signal) {
     <div id="roomBody"><p class="state-note">Загружаем…</p></div>`;
   const body = $(root, "#roomBody");
 
-  if (!auth.isAuthenticated()) {
-    body.innerHTML = '<p class="state-note">Войдите, чтобы увидеть комнату.</p>';
-    return;
-  }
-
   let room, sessions;
   try {
     const [roomRes, sessionsRes] = await Promise.all([
-      auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}`),
-      auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`),
+      roomFetch(`/api/rooms/${encodeURIComponent(roomId)}`),
+      roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`),
     ]);
     if (roomRes.status === 403) { body.innerHTML = '<p class="state-note">Вы не участник этой комнаты.</p>'; return; }
     if (!roomRes.ok) throw new Error("room fetch failed");
@@ -1514,12 +1552,13 @@ async function renderRoom(root, roomId, signal) {
 
   const membersEl = $(root, "#roomMembers");
   membersEl.innerHTML = "";
-  for (const m of room.members) {
+  const memberLabels = roomMemberLabels(room.members, "user_id");
+  room.members.forEach((m, i) => {
     const chip = document.createElement("span");
     chip.className = "member-chip" + (m.role === "owner" ? " owner" : "");
-    chip.textContent = m.name || m.username || "участник";
+    chip.textContent = memberLabels[i];
     membersEl.appendChild(chip);
-  }
+  });
 
   // До MAX_ACTIVE_SESSIONS_PER_ROOM параллельных активных сборок в комнате
   // (временное послабление, см. план) — список карточек 0..5 вместо жёсткого
@@ -1578,7 +1617,8 @@ async function renderRoom(root, roomId, signal) {
       if (e.message === "room session limit reached") {
         const note = $(activeEl, "#sessionLimitNote");
         note.hidden = false;
-        note.textContent = `Достигнут лимит одновременных сборок в комнате (${MAX_ACTIVE_SESSIONS_PER_ROOM}) — заверши одну, чтобы начать новую.`;
+        const limit = typeof e.limit === "number" ? e.limit : MAX_ACTIVE_SESSIONS_PER_ROOM;
+        note.textContent = `Достигнут лимит одновременных сборок в комнате (${limit}) — заверши одну, чтобы начать новую.`;
       }
       /* иначе — ошибка сети, пользователь просто попробует кнопку ещё раз */
     }
@@ -1597,11 +1637,20 @@ async function renderRoom(root, roomId, signal) {
   // раньше висела постоянно открытой, теперь только по клику на «+» (см. кнопку
   // выше). Монтируем один раз на каждый заход в комнату — mountUploadForm сам
   // перезаписывает innerHTML контейнера, повторный вызов при новом рендере не
-  // накапливает старые формы/обработчики.
-  mountUploadForm(document.getElementById("uploadPuzzleFormMount"), roomId, result => {
-    grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { onPlay: playVariant, roomId }));
-    closeModal("uploadPuzzleModalBackdrop");
-  });
+  // накапливает старые формы/обработчики. Загрузка своего фото по-прежнему
+  // требует настоящего входа (POST /api/puzzles и так уже проверяет это на
+  // сервере, см. план «анонимные комнаты») — анониму вместо формы подсказка,
+  // чтобы не показывать то, что всё равно откажет.
+  const uploadMount = document.getElementById("uploadPuzzleFormMount");
+  if (auth.isAuthenticated()) {
+    mountUploadForm(uploadMount, roomId, result => {
+      grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { onPlay: playVariant, roomId }));
+      closeModal("uploadPuzzleModalBackdrop");
+    });
+  } else {
+    uploadMount.innerHTML = '<p class="state-note">Войдите, чтобы добавить своё фото.</p><button class="btn tonal sm" id="uploadLoginBtn" type="button">Войти</button>';
+    $(uploadMount, "#uploadLoginBtn").addEventListener("click", () => auth.login(), { signal });
+  }
 
   const historyEl = $(root, "#roomHistory");
   const past = sessions.filter(s => s.completedAt);
@@ -1660,20 +1709,11 @@ async function renderRoomJoin(root, code, signal) {
   root.innerHTML = `<div id="joinBody"><p class="state-note">Секунду…</p></div>`;
   const body = $(root, "#joinBody");
 
-  if (!auth.isAuthenticated()) {
-    sessionStorage.setItem("bh_puzzle_pending_join", code);
-    body.innerHTML = `
-      <div class="room-join-screen">
-        <h2>Приглашение в комнату</h2>
-        <p>Войдите, чтобы принять приглашение и присоединиться к сборке.</p>
-        <button class="btn filled" id="joinLoginBtn" type="button">Войти</button>
-      </div>`;
-    $(body, "#joinLoginBtn").addEventListener("click", () => auth.login(), { signal });
-    return;
-  }
-
+  // Вступление по ссылке теперь работает и без входа (см. план
+  // «анонимные комнаты») — roomFetch сам разберётся, JWT это или
+  // анонимный cookie.
   try {
-    const res = await auth.fetch(`/api/rooms/join/${encodeURIComponent(code)}`, { method: "POST" });
+    const res = await roomFetch(`/api/rooms/join/${encodeURIComponent(code)}`, { method: "POST" });
     if (!res.ok) throw new Error("join failed");
     const data = await res.json();
     if (signal.aborted) return;
@@ -1758,11 +1798,9 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     </div>`;
   const stage = $(root, "#stage");
 
-  if (!auth.isAuthenticated()) { stage.innerHTML = '<p class="state-note">Войдите, чтобы сесть за стол комнаты.</p>'; return; }
-
   let session;
   try {
-    const sessionRes = await auth.fetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`);
+    const sessionRes = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`);
     if (!sessionRes.ok) throw new Error("session fetch failed");
     session = await sessionRes.json();
   } catch {
@@ -2085,12 +2123,13 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     presenceCount.textContent = String(list.length);
     presenceCount.hidden = list.length === 0;
     presenceListEl.innerHTML = "";
-    for (const m of list) {
+    const labels = roomMemberLabels(list, "id");
+    list.forEach((m, i) => {
       const chip = document.createElement("span");
       chip.className = "presence-chip";
-      chip.textContent = m.name || "участник";
+      chip.textContent = labels[i];
       presenceListEl.appendChild(chip);
-    }
+    });
   }
   function showWin() {
     const overlay = document.createElement("div");
@@ -2350,14 +2389,6 @@ async function init() {
   // (см. README «Идея в двух режимах»).
   await auth.handleRedirect();
   renderAuthArea();
-  // Код приглашения, отложенный при уходе на вход из renderRoomJoin
-  // (см. там же) — редирект в auth теряет хэш, поэтому переносим отдельно
-  // через sessionStorage и после возврата уводим на экран вступления заново.
-  const pendingJoin = sessionStorage.getItem("bh_puzzle_pending_join");
-  if (pendingJoin && auth.isAuthenticated()) {
-    sessionStorage.removeItem("bh_puzzle_pending_join");
-    location.hash = `#/rooms/join/${pendingJoin}`;
-  }
   route();
 }
 init().catch(e => {

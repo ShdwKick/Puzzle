@@ -272,6 +272,15 @@ Object.assign(stmt, {
   addRoomMember: db.prepare(`
     INSERT INTO room_members (room_id,user_id,username,name,role,joined_at) VALUES (?,?,?,?,?,?)
     ON CONFLICT(room_id,user_id) DO UPDATE SET username = excluded.username, name = excluded.name`),
+  // "Комната ещё анонимная" = ни одного участника без префикса anon: — см.
+  // getOrCreateAnonIdentity/план. Считается на лету, не хранится отдельным
+  // полем, чтобы не могло рассинхрониться со строками room_members.
+  roomHasAuthedMember: db.prepare("SELECT 1 FROM room_members WHERE room_id = ? AND user_id NOT LIKE 'anon:%' LIMIT 1"),
+  // Клейм анонимного членства настоящим аккаунтом при входе (см. план) —
+  // сохраняет role (в т.ч. owner, если анонимно создал именно эту комнату)
+  // вместо того, чтобы завести отдельную новую строку и потерять её.
+  claimAnonMembership: db.prepare(`
+    UPDATE room_members SET user_id = ?, username = ?, name = ? WHERE room_id = ? AND user_id = ?`),
 
   activeSessions: db.prepare("SELECT * FROM room_sessions WHERE room_id = ? AND completed_at IS NULL ORDER BY started_at DESC"),
   session:       db.prepare("SELECT * FROM room_sessions WHERE id = ?"),
@@ -305,6 +314,54 @@ function readBody(req, limit) {
   });
 }
 const readJson = async (req, limit = 512 * 1024) => JSON.parse((await readBody(req, limit)).toString("utf8") || "{}");
+
+// ── анонимные комнаты: своя личность через cookie, без Auth/JWT ──
+// У Auth и остальных сервисов BurningHouse нет понятия анонимной сессии
+// вообще (см. план) — это целиком локальный примитив Puzzle. Префикс
+// "anon:" гарантирует, что псевдо-id никогда не совпадёт с настоящим JWT
+// sub (тоже UUID) — по этому же префиксу остальной код отличает
+// анонимного участника комнаты от настоящего (лимит сессий, клейм
+// членства при входе — см. ниже). НИКОГДА не подставлять эту личность
+// туда, где нужен настоящий вход (загрузка своих фото — /api/puzzles
+// POST уже проверяет user отдельно и эту проверку не трогаем).
+const ANON_COOKIE = "puzzle_anon";
+const ANON_MAX_AGE = 60 * 60 * 24 * 180; // 180 дней
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function parseCookies(req) {
+  const header = req.headers.cookie;
+  const out = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const i = part.indexOf("=");
+    if (i < 0) continue;
+    out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+  }
+  return out;
+}
+
+/** Достаёт анонимную личность из cookie, при необходимости заводит новую
+ *  (Set-Cookie на res — должно быть вызвано ДО json()/res.writeHead, иначе
+ *  заголовок не долетит до ответа). */
+function getOrCreateAnonIdentity(req, res) {
+  const cookies = parseCookies(req);
+  let id = cookies[ANON_COOKIE];
+  if (!id || !UUID_RE.test(id)) {
+    id = crypto.randomUUID();
+    const secure = AUTH_ISSUER.startsWith("https://") ? "; Secure" : "";
+    res.setHeader("Set-Cookie", `${ANON_COOKIE}=${id}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${ANON_MAX_AGE}${secure}`);
+  }
+  return { id: "anon:" + id, username: null, name: null };
+}
+
+/** Тот же cookie, но без побочного эффекта (никогда не заводит новый) —
+ *  нужен там, где важно только УЗНАТЬ, была ли эта личность недавно
+ *  анонимом в конкретной комнате (клейм членства при входе), а не всегда
+ *  гарантированно иметь какую-то анонимную личность. */
+function readAnonId(req) {
+  const id = parseCookies(req)[ANON_COOKIE];
+  return id && UUID_RE.test(id) ? "anon:" + id : null;
+}
 
 // seed выходит за рамки минимального контракта из плана ({id,title,gridRows,
 // gridCols,imageUrl}), но без него клиент не сможет детерминированно
@@ -619,8 +676,11 @@ async function api(req, res, url, user) {
   if (seg[1] === "puzzles" && seg.length === 2 && m === "GET") {
     const roomId = url.searchParams.get("roomId");
     if (roomId) {
-      if (!user) return json(res, 401, { error: "unauthorized" });
-      if (!stmt.roomMember.get(roomId, user.id)) return json(res, 403, { error: "not a member" });
+      // Та же анонимная личность, что и в /api/rooms/* (см. план) —
+      // список пазлов комнаты (пикер стола) должен открываться и без
+      // входа, если это твоя комната.
+      const identity = user || getOrCreateAnonIdentity(req, res);
+      if (!stmt.roomMember.get(roomId, identity.id)) return json(res, 403, { error: "not a member" });
       return json(res, 200, stmt.puzzlesForRoom.all(roomId, roomId).map(puzzlePayload));
     }
     return json(res, 200, stmt.puzzlesPublic.all().map(puzzlePayload));
@@ -720,27 +780,32 @@ async function api(req, res, url, user) {
   }
 
   if (seg[1] === "rooms") {
-    if (!user) return json(res, 401, { error: "unauthorized" });
+    // Комнату можно создать/открыть и без входа — см. план «анонимные
+    // комнаты». identity — настоящий user, если он есть, иначе анонимная
+    // личность из cookie (заводится при первом обращении). НЕ путать со
+    // строгим "!user" — он остаётся отдельно там, где нужен настоящий
+    // вход (см. POST /api/puzzles, не в этом блоке).
+    const identity = user || getOrCreateAnonIdentity(req, res);
 
     if (seg.length === 2 && m === "POST") {
       const body = await readJson(req);
       const title = str(body.title, 120);
       if (!title) return json(res, 400, { error: "bad title" });
       const id = crypto.randomUUID(), ts = now(), code = newJoinCode();
-      stmt.insertRoom.run(id, title, code, user.id, ts, ts);
-      stmt.addRoomMember.run(id, user.id, user.username || null, user.name || null, "owner", ts);
+      stmt.insertRoom.run(id, title, code, identity.id, ts, ts);
+      stmt.addRoomMember.run(id, identity.id, identity.username || null, identity.name || null, "owner", ts);
       return json(res, 200, roomPayload(stmt.room.get(id), "owner", 1));
     }
 
     if (seg.length === 2 && m === "GET") {
-      return json(res, 200, stmt.myRooms.all(user.id).map(r => roomPayload(r, r.role, r.members_count)));
+      return json(res, 200, stmt.myRooms.all(identity.id).map(r => roomPayload(r, r.role, r.members_count)));
     }
 
     if (seg[2] === "join" && seg[3] && seg.length === 4) {
       const code = String(seg[3]).toUpperCase().slice(0, 16);
       const room = stmt.roomByCode.get(code);
       if (!room) return json(res, 404, { error: "no such invite" });
-      const already = stmt.roomMember.get(room.id, user.id);
+      const already = stmt.roomMember.get(room.id, identity.id);
       if (m === "GET") {
         return json(res, 200, {
           roomId: room.id, title: room.title, alreadyMember: !!already,
@@ -748,7 +813,7 @@ async function api(req, res, url, user) {
         });
       }
       if (m === "POST") {
-        if (!already) stmt.addRoomMember.run(room.id, user.id, user.username || null, user.name || null, "member", now());
+        if (!already) stmt.addRoomMember.run(room.id, identity.id, identity.username || null, identity.name || null, "member", now());
         return json(res, 200, { roomId: room.id, joined: !already });
       }
       return json(res, 405, { error: "method not allowed" });
@@ -758,7 +823,22 @@ async function api(req, res, url, user) {
       const roomId = seg[2];
       const room = stmt.room.get(roomId);
       if (!room) return json(res, 404, { error: "not found" });
-      const member = stmt.roomMember.get(roomId, user.id);
+
+      // Клейм анонимного членства настоящим аккаунтом: тот же браузер (тот
+      // же cookie) был анонимом в ЭТОЙ комнате, а теперь вошёл — переносим
+      // его строку в room_members на настоящий user.id вместо того, чтобы
+      // завести отдельную и потерять role (в т.ч. owner). Не трогаем,
+      // если под настоящим user.id уже и так есть строка — иначе UPDATE
+      // столкнулся бы с PRIMARY KEY (room_id, user_id).
+      if (user) {
+        const anonId = readAnonId(req);
+        if (anonId && anonId !== user.id && !stmt.roomMember.get(roomId, user.id)) {
+          const anonRow = stmt.roomMember.get(roomId, anonId);
+          if (anonRow) stmt.claimAnonMembership.run(user.id, user.username || null, user.name || null, roomId, anonId);
+        }
+      }
+
+      const member = stmt.roomMember.get(roomId, identity.id);
       if (!member) return json(res, 403, { error: "not a member" });
 
       if (seg.length === 3 && m === "GET") {
@@ -774,15 +854,20 @@ async function api(req, res, url, user) {
       }
 
       if (seg[3] === "sessions" && seg.length === 4 && m === "POST") {
+        // Пока в комнате нет ни одного настоящего аккаунта — только 1
+        // активная доска (не MAX_ACTIVE_SESSIONS_PER_ROOM) — см. план
+        // «анонимные комнаты». Снимается само собой, как только кто-то
+        // входит (roomHasAuthedMember начинает видеть его строку).
+        const limit = stmt.roomHasAuthedMember.get(roomId) ? MAX_ACTIVE_SESSIONS_PER_ROOM : 1;
         const activeCount = stmt.activeSessions.all(roomId).length;
-        if (activeCount >= MAX_ACTIVE_SESSIONS_PER_ROOM) {
-          return json(res, 409, { error: "room session limit reached", limit: MAX_ACTIVE_SESSIONS_PER_ROOM });
+        if (activeCount >= limit) {
+          return json(res, 409, { error: "room session limit reached", limit });
         }
         const body = await readJson(req);
         const puzzle = stmt.puzzle.get(body.puzzleId);
         if (!puzzle) return json(res, 400, { error: "bad puzzle" });
         const id = crypto.randomUUID(), ts = now();
-        stmt.insertSession.run(id, roomId, puzzle.id, puzzle.grid_rows * puzzle.grid_cols, user.id, ts, ts, body.asymmetric ? 1 : 0);
+        stmt.insertSession.run(id, roomId, puzzle.id, puzzle.grid_rows * puzzle.grid_cols, identity.id, ts, ts, body.asymmetric ? 1 : 0);
         return json(res, 200, sessionSummary(stmt.session.get(id)));
       }
 
@@ -792,11 +877,11 @@ async function api(req, res, url, user) {
         return json(res, 200, sessionSummary(session));
       }
 
-      // Удаление сеанса — освобождает слот из MAX_ACTIVE_SESSIONS_PER_ROOM
-      // (см. константу выше), если кто-то по ошибке начал лишнюю сборку и
-      // ушёл. Членство в комнате уже проверено выше (member). Нельзя удалить
-      // сеанс, за которым сейчас реально кто-то сидит за столом — только
-      // "активный, но пустой" или уже завершённый.
+      // Удаление сеанса — освобождает слот из лимита (см. выше), если
+      // кто-то по ошибке начал лишнюю сборку и ушёл. Членство в комнате
+      // уже проверено выше (member). Нельзя удалить сеанс, за которым
+      // сейчас реально кто-то сидит за столом — только "активный, но
+      // пустой" или уже завершённый.
       if (seg[3] === "sessions" && seg[4] && seg.length === 5 && m === "DELETE") {
         const session = stmt.session.get(seg[4]);
         if (!session || session.room_id !== roomId) return json(res, 404, { error: "not found" });
@@ -824,7 +909,7 @@ async function api(req, res, url, user) {
         const puzzle = stmt.puzzle.get(body.puzzleId);
         if (!puzzle) return json(res, 404, { error: "not found" });
         if (puzzle.owner_user_id !== null) return json(res, 400, { error: "not a default puzzle" });
-        stmt.hidePuzzleInRoom.run(roomId, puzzle.id, user.id, now());
+        stmt.hidePuzzleInRoom.run(roomId, puzzle.id, identity.id, now());
         return json(res, 200, { ok: true });
       }
 
@@ -1025,11 +1110,24 @@ async function handleUpgrade(req, socket, head) {
   const roomId = decodeURIComponent(seg[2]);
   const sessionId = decodeURIComponent(seg[4]);
 
+  // Анонимные комнаты (см. план): нет token — пробуем cookie puzzle_anon
+  // вместо JWT. Cookie на апгрейд-запрос браузер шлёт сам (это ещё обычный
+  // HTTP-запрос до переключения протокола) — новую тут НЕ заводим (нечему
+  // отдать Set-Cookie на этом пути с пользой): к моменту, когда клиент
+  // подключается к WS сессии, он уже создавал/открывал комнату через REST
+  // (см. /api/rooms/* — там cookie уже выставлена).
   const token = url.searchParams.get("token");
   const payload = token ? await auth.verify(token) : null;
-  if (!payload) return rejectUpgrade(socket, 401, "Unauthorized");
+  let identity;
+  if (payload) {
+    identity = { id: payload.sub, username: payload.preferred_username || null, name: payload.name || null };
+  } else {
+    const anonId = readAnonId(req);
+    if (!anonId) return rejectUpgrade(socket, 401, "Unauthorized");
+    identity = { id: anonId, username: null, name: null };
+  }
 
-  const member = stmt.roomMember.get(roomId, payload.sub);
+  const member = stmt.roomMember.get(roomId, identity.id);
   if (!member) return rejectUpgrade(socket, 403, "Forbidden");
 
   const session = stmt.session.get(sessionId);
@@ -1039,9 +1137,7 @@ async function handleUpgrade(req, socket, head) {
   const conn = ws.acceptUpgrade(req, socket, head);
   if (!conn) return;
 
-  attachRoomConnection(sessionId, {
-    id: payload.sub, username: payload.preferred_username || null, name: payload.name || null,
-  }, conn);
+  attachRoomConnection(sessionId, identity, conn);
 }
 
 server.listen(PORT, HOST, () => {
