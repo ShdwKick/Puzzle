@@ -462,5 +462,57 @@ r = await asJson(tokenA, `/rooms/${ownerRoom.id}/sessions`, { method: "POST", bo
 ok("лимит снят сразу после входа ИМЕННО владельца — 2-й активный сеанс в комнате возможен",
   r.status === 200, JSON.stringify(r.body));
 
+// ───────── владелец комнаты может убрать участника ─────────
+r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комната для проверки кика" } });
+const kickRoomId = r.body.id;
+const userIdA = r.body.createdBy;
+ok("комната для проверки кика создана", r.status === 200, JSON.stringify(r.body));
+
+r = await asJson(tokenB, "/rooms/join/" + r.body.joinCode, { method: "POST" });
+ok("B присоединился к комнате для кика", r.status === 200 && r.body.joined === true, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${kickRoomId}`);
+const userIdB = r.body.members.find(x => x.role !== "owner").user_id;
+
+r = await asJson(tokenB, `/rooms/${kickRoomId}/members/${userIdA}`, { method: "DELETE" });
+ok("не-владелец не может кикнуть — 403", r.status === 403 && r.body.error === "not the owner", JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${kickRoomId}/members/${userIdA}`, { method: "DELETE" });
+ok("владелец не может выгнать сам себя — 400", r.status === 400 && r.body.error === "cannot remove yourself", JSON.stringify(r.body));
+
+// Анонимный гость (id вида "anon:<uuid>", с двоеточием) — отдельная
+// проверка на регресс: seg приходит из url.pathname.split("/") БЕЗ
+// decodeURIComponent, клиент шлёт id как encodeURIComponent ("anon%3A..."),
+// и без decodeURIComponent на сервере эта ветка ложно бьёт 404 "not a
+// member" даже для реально существующего анонимного участника.
+ar = await anonCall(null, `/rooms/join/${(await asJson(tokenA, `/rooms/${kickRoomId}`)).body.joinCode}`, { method: "POST" });
+ok("анонимный гость присоединился к комнате для кика", ar.status === 200, String(ar.status));
+r = await asJson(tokenA, `/rooms/${kickRoomId}`);
+const anonGuestId = r.body.members.find(x => x.user_id.startsWith("anon:")).user_id;
+
+r = await asJson(tokenA, `/rooms/${kickRoomId}/members/${encodeURIComponent(anonGuestId)}`, { method: "DELETE" });
+ok("владелец убрал анонимного гостя (id с двоеточием) — 200, не 404", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${kickRoomId}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+const kickSessionId = r.body.id;
+ok("сеанс в комнате для кика стартовал", r.status === 200, JSON.stringify(r.body));
+
+const kickWsUrl = token => `ws://localhost:${PUZZLE_PORT}/ws/rooms/${kickRoomId}/sessions/${kickSessionId}?token=${encodeURIComponent(token)}`;
+const wsKickB = new WebSocket(kickWsUrl(tokenB));
+await waitOpen(wsKickB);
+await waitMessage(wsKickB, msg => msg.type === "sync");
+const bClosed = new Promise(res => wsKickB.addEventListener("close", () => res(true)));
+
+r = await asJson(tokenA, `/rooms/${kickRoomId}/members/${userIdB}`, { method: "DELETE" });
+ok("владелец убрал участника B — 200", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+
+ok("живое WS-подключение выгнанного B разорвано сервером", await Promise.race([bClosed, new Promise(res => setTimeout(() => res(false), 3000))]));
+
+r = await asJson(tokenB, `/rooms/${kickRoomId}`);
+ok("выгнанный B больше не член комнаты — 403", r.status === 403 && r.body.error === "not a member", JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${kickRoomId}/members/${userIdB}`, { method: "DELETE" });
+ok("повторный кик уже убранного участника — 404", r.status === 404 && r.body.error === "not a member", JSON.stringify(r.body));
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

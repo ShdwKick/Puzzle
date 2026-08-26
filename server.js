@@ -283,6 +283,7 @@ Object.assign(stmt, {
   // вместо того, чтобы завести отдельную новую строку и потерять её.
   claimAnonMembership: db.prepare(`
     UPDATE room_members SET user_id = ?, username = ?, name = ? WHERE room_id = ? AND user_id = ?`),
+  deleteRoomMember: db.prepare("DELETE FROM room_members WHERE room_id = ? AND user_id = ?"),
 
   activeSessions: db.prepare("SELECT * FROM room_sessions WHERE room_id = ? AND completed_at IS NULL ORDER BY started_at DESC"),
   session:       db.prepare("SELECT * FROM room_sessions WHERE id = ?"),
@@ -922,6 +923,30 @@ async function api(req, res, url, user) {
         stmt.unhidePuzzleInRoom.run(roomId, seg[4]);
         return json(res, 200, { ok: true });
       }
+
+      // Владелец комнаты может убрать участника, включая анонимного гостя —
+      // роль в room_members при этом не спрашиваем у цели (owner ровно один,
+      // назначается только при создании комнаты, seg[4] === identity.id ниже
+      // отсекает попытку выгнать самого себя этим путём — это не «удалить
+      // комнату», для владельца тут просто нет такого сценария).
+      if (seg[3] === "members" && seg[4] && seg.length === 5 && m === "DELETE") {
+        // seg приходит из url.pathname.split("/") без decodeURIComponent
+        // (см. объявление seg выше) — для всех остальных id в путях это
+        // не имело значения (UUID/join-код без спецсимволов), но анонимные
+        // id содержат ":" (anon:<uuid>), клиент шлёт его как encodeURIComponent
+        // ("anon%3A..."), поэтому именно здесь декодируем сами.
+        const targetId = decodeURIComponent(seg[4]);
+        if (member.role !== "owner") return json(res, 403, { error: "not the owner" });
+        if (targetId === identity.id) return json(res, 400, { error: "cannot remove yourself" });
+        if (!stmt.roomMember.get(roomId, targetId)) return json(res, 404, { error: "not a member" });
+        stmt.deleteRoomMember.run(roomId, targetId);
+        // Живые WS-подключения выгнанного в этой комнате рвём сразу — иначе
+        // он продолжал бы двигать детали за столом ещё какое-то время, хотя
+        // членства в room_members уже нет (переподключиться он всё равно не
+        // сможет — roomMember.get вернёт пусто на следующем апгрейде).
+        kickFromRoom(roomId, targetId);
+        return json(res, 200, { ok: true });
+      }
     }
 
     return json(res, 404, { error: "not found" });
@@ -985,6 +1010,23 @@ function presenceList(state) {
 }
 function broadcastPresence(state) {
   broadcast(state, { type: "presence", members: presenceList(state) }, null);
+}
+
+// Разрывает живые WS-подключения userId во ВСЕХ активных столах этой
+// комнаты сразу (не только в одном сеансе) — используется при удалении
+// участника владельцем (см. DELETE /api/rooms/:id/members/:userId).
+function kickFromRoom(roomId, userId) {
+  for (const state of liveSessions.values()) {
+    if (state.roomId !== roomId) continue;
+    let changed = false;
+    for (const conn of state.conns) {
+      if (conn.user.id !== userId) continue;
+      state.conns.delete(conn);
+      changed = true;
+      try { conn.ws.close(); } catch {}
+    }
+    if (changed) broadcastPresence(state);
+  }
 }
 
 function attachRoomConnection(sessionId, user, wsConn) {

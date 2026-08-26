@@ -253,6 +253,14 @@ async function deleteRoomSession(roomId, sessionId) {
   if (!res.ok) throw new Error(data.error || "delete session failed");
 }
 
+/** DELETE /api/rooms/:id/members/:userId — только владелец комнаты (сервер
+ *  сам это проверяет по member.role, здесь только пробрасываем ошибку). */
+async function removeRoomMember(roomId, userId) {
+  const res = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(userId)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "remove member failed");
+}
+
 /** Вставляет форму загрузки в контейнер, вызывает onDone({title, variants})
  *  при успехе — один аплоад сразу заводит все 4 уровня сложности (см.
  *  README «Свои фото»), выбора числа деталей тут больше нет. Используется
@@ -1580,10 +1588,36 @@ async function renderRoom(root, roomId, signal) {
   const membersEl = $(root, "#roomMembers");
   membersEl.innerHTML = "";
   const memberLabels = roomMemberLabels(room.members, "user_id");
+  // Убрать участника может только владелец комнаты, и не самого себя —
+  // owner всегда один, менять роль тут негде и незачем (см. правку
+  // «возможность удалять пользователей владельцем комнаты»).
+  const canRemoveMembers = room.role === "owner";
   room.members.forEach((m, i) => {
     const chip = document.createElement("span");
     chip.className = "member-chip" + (m.role === "owner" ? " owner" : "");
-    chip.textContent = memberLabels[i];
+    const label = document.createElement("span");
+    label.textContent = memberLabels[i];
+    chip.appendChild(label);
+    if (canRemoveMembers && m.role !== "owner") {
+      const removeBtn = document.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.className = "member-chip-remove";
+      removeBtn.title = `Убрать «${memberLabels[i]}» из комнаты`;
+      removeBtn.setAttribute("aria-label", removeBtn.title);
+      removeBtn.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      removeBtn.addEventListener("click", async () => {
+        if (!confirm(`Убрать «${memberLabels[i]}» из комнаты?`)) return;
+        removeBtn.disabled = true;
+        try {
+          await removeRoomMember(roomId, m.user_id);
+          chip.remove();
+        } catch {
+          removeBtn.disabled = false;
+          alert("Не удалось убрать участника.");
+        }
+      }, { signal });
+      chip.appendChild(removeBtn);
+    }
     membersEl.appendChild(chip);
   });
 
