@@ -2410,6 +2410,19 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   });
 }
 
+/* ───────────────────────── Яндекс.Метрика: переходы внутри SPA ─────────────────────────
+ * Счётчик считает автоматически только самый первый заход (обычная загрузка
+ * страницы) — переходы между комнатами/столом идут через hashchange без
+ * перезагрузки, поэтому на каждую смену hash шлём hit вручную, тем же
+ * приёмом, что и в Brain (assets/app.js). Puzzle, в отличие от Brain,
+ * document.title по маршрутам не меняет — везде статичный «Что собираем? —
+ * BurningHouse» (см. index.html), так что title в hit будет одинаковым для
+ * всех страниц; различает их сам url (location.href, hash — часть адреса). */
+const METRIKA_ID = 112035178;
+function trackPageview() {
+  if (typeof ym === "function") ym(METRIKA_ID, "hit", location.href, { title: document.title, referer: document.referrer });
+}
+
 /* ───────────────────────── роутер ───────────────────────── */
 function route() {
   const hash = location.hash.replace(/^#/, "") || "/";
@@ -2439,7 +2452,7 @@ function route() {
     root.innerHTML = '<p class="state-note">Что-то пошло не так — обновите страницу.</p>';
   });
 }
-window.addEventListener("hashchange", route);
+window.addEventListener("hashchange", () => { route(); trackPageview(); });
 
 /* ───────────────────────── старт ───────────────────────── */
 async function init() {

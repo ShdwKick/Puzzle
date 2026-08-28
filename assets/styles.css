@@ -214,6 +214,19 @@ a{color:inherit}
     radial-gradient(circle at 1px 1px, var(--md-sys-color-outline-variant) 1px, transparent 0) 0 0/22px 22px,
     var(--md-sys-color-surface-container-lowest);
   border-top:1px solid var(--md-sys-color-outline-variant);
+  /* position:relative без z-index стека НЕ создаёт (только с z-index≠auto) —
+     непрозрачный фон стола держится поверх фонового bh-backdrop (fixed,
+     z-index:-1, см. базовые стили) чисто порядком отрисовки, без явной
+     стековой границы. .table-world (панорама/зум) и десятки .piece с
+     постоянным filter:drop-shadow каждая — это отдельные composited-слои
+     GPU поверх/внутри стола; на слабом мобильном GPU при большом числе
+     деталей (до 480 на "Легенде") и активном перемещении эти слои иногда
+     ре-компонуются в неверном порядке на кадр-другой — фон стола "теряется",
+     и сквозь него на миг видно fixed-подложку под всем сайтом (репорт:
+     мерцание на Pixel 9, на десктопе не воспроизводится). isolation:isolate
+     даёт столу явную собственную стековую границу — GPU больше не может
+     перепутать порядок компоновки этого поддерева с fixed-подложкой снаружи. */
+  isolation:isolate;
 }
 .table-stage.panning{cursor:grabbing}
 .table-world{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform}
@@ -461,9 +474,16 @@ select.text-input{cursor:pointer}
 
 .room-section-title{font-size:1.05rem;font-weight:650;margin:1.2rem 0 .7rem}
 /* «Начать сборку» + кнопка «+» (открывает модалку загрузки своего фото) в
-   одной строке — тот же приём justify-content:space-between, что и в шапке. */
+   одной строке — тот же приём justify-content:space-between, что и в шапке.
+   margin-top обнулён — здесь отступ сверху уже даёт gap на .room-active. */
 .room-section-head{display:flex;align-items:center;justify-content:space-between;gap:.8rem}
-.room-section-head .room-section-title{margin:1.2rem 0 .7rem}
+.room-section-head .room-section-title{margin:0 0 .7rem}
+/* Плашки активных досок (#roomActive, см. renderRoom в app.js) — без явного
+   gap на контейнере несколько досок сразу (до MAX_ACTIVE_SESSIONS_PER_ROOM)
+   рендерились впритык друг к другу, слипаясь в один блок без видимой
+   границы между ними. gap на самом контейнере — не margin на карточках —
+   не задваивается и одинаково работает что для одной плашки, что для пяти. */
+.room-active{display:flex;flex-direction:column;gap:.75rem}
 .room-active-card{
   background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
   padding:1rem 1.1rem;box-shadow:var(--e1);display:flex;align-items:center;gap:1rem;flex-wrap:wrap;
