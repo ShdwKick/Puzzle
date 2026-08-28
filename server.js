@@ -639,6 +639,32 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // Вкладка «Комнаты» в Admin — общий формат "групп с кодом приглашения"
+    // (см. Admin/assets/app.js loadRooms, дословно как /internal/rooms у
+    // Trip). У Puzzle нет своих полей destination/status (это понятия из
+    // путешествий) — шлём null, шаблон Admin уже рисует их как "—".
+    // placesCount там подписан "Мест" (места в поездке) — для Puzzle туда
+    // кладём число сеансов сборки в комнате (всего, не только активных):
+    // не идеальное совпадение по смыслу подписи, но живая и полезная
+    // владельцу комнаты цифра, а не пустая заглушка.
+    if (p === "/internal/rooms" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const rows = db.prepare(`
+        SELECT r.id, r.title, r.join_code, r.created_at,
+               (SELECT COUNT(*) FROM room_members m WHERE m.room_id = r.id) AS members,
+               (SELECT COUNT(*) FROM room_sessions s WHERE s.room_id = r.id) AS sessions
+        FROM rooms r
+        ORDER BY r.created_at DESC
+        LIMIT 200
+      `).all();
+      return json(res, 200, {
+        rooms: rows.map(r => ({
+          id: r.id, title: r.title, destination: null, status: null,
+          joinCode: r.join_code || null, membersCount: r.members, placesCount: r.sessions, createdAt: r.created_at,
+        })),
+      });
+    }
+
     // Адрес auth отдаём с сервера, чтобы он не был зашит в статику.
     if (p === "/api/config") return json(res, 200, {
       authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID,
@@ -723,6 +749,7 @@ async function api(req, res, url, user) {
       stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId);
       return puzzlePayload(stmt.puzzle.get(id));
     });
+    adminLog.info("Загружено своё фото", { userId: user.id, roomId, title, variants: variants.length });
     return json(res, 200, { title, variants });
   }
 
@@ -740,6 +767,7 @@ async function api(req, res, url, user) {
     }
     for (const p of group) stmt.deletePuzzle.run(p.id);
     try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
+    adminLog.info("Своё фото удалено", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, variants: group.length });
     return json(res, 200, { ok: true });
   }
 
@@ -797,6 +825,7 @@ async function api(req, res, url, user) {
       const id = crypto.randomUUID(), ts = now(), code = newJoinCode();
       stmt.insertRoom.run(id, title, code, identity.id, ts, ts);
       stmt.addRoomMember.run(id, identity.id, identity.username || null, identity.name || null, "owner", ts);
+      adminLog.info("Комната создана", { roomId: id, title, anonymous: identity.id.startsWith("anon:") });
       return json(res, 200, roomPayload(stmt.room.get(id), "owner", 1));
     }
 
@@ -945,6 +974,7 @@ async function api(req, res, url, user) {
         // членства в room_members уже нет (переподключиться он всё равно не
         // сможет — roomMember.get вернёт пусто на следующем апгрейде).
         kickFromRoom(roomId, targetId);
+        adminLog.info("Участник удалён владельцем комнаты", { roomId, removedUserId: targetId, byUserId: identity.id });
         return json(res, 200, { ok: true });
       }
     }
