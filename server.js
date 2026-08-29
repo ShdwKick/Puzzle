@@ -246,6 +246,11 @@ const stmt = {
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
   puzzlesByImage: db.prepare("SELECT * FROM puzzles WHERE image_file = ? AND owner_user_id = ?"),
+  // Группа встроенных пазлов, добавленных Admin (owner_user_id IS NULL —
+  // "= ?" тут не сработал бы, NULL с ним никогда не совпадает). Отличаем от
+  // трёх стартовых картинок (BUILTIN_IMAGES, всегда .svg) расширением файла
+  // в JS-коде — см. isAdminUploadedFile ниже, не тут.
+  puzzlesByImagePublic: db.prepare("SELECT * FROM puzzles WHERE image_file = ? AND owner_user_id IS NULL"),
   // Скрытие встроенного пазла в конкретной комнате (не удаление — см. схему
   // room_hidden_puzzles) — доступно любому участнику комнаты, не только
   // владельцу: это общая настройка «что показываем в ЭТОЙ комнате», не личная
@@ -372,10 +377,20 @@ function readAnonId(req) {
 // в assets/puzzle-shapes.js требует seed на вход. Значение из БД, зашитое
 // один раз при вставке (см. BUILTIN_IMAGES ниже и insertCustomPuzzle для
 // своих фото) и никогда не меняющееся.
+//
+// imageUrl раньше решался по owner_user_id (NULL → /assets/puzzles/, иначе
+// → /uploads/) — это совпадало с "где физически лежит файл" ровно пока
+// единственным источником owner_user_id IS NULL были три стартовые картинки
+// (BUILTIN_IMAGES, .svg в статике). С добавлением загрузки через Admin
+// (см. POST /internal/puzzles) появились НЕ-.svg пазлы с owner_user_id
+// IS NULL: они физически лежат в PUZZLE_PHOTO_DIR/uploads, как и свои
+// фото пользователей. .svg бывает только у трёх стартовых картинок —
+// sniffImage вообще не пропускает SVG на вход POST /api/puzzles и
+// POST /internal/puzzles, так что путаницы файл↔расширение тут не бывает.
 function puzzlePayload(p) {
   return {
     id: p.id, title: p.title, gridRows: p.grid_rows, gridCols: p.grid_cols,
-    imageUrl: p.owner_user_id ? `/uploads/${p.image_file}` : `/assets/puzzles/${p.image_file}`,
+    imageUrl: p.image_file.endsWith(".svg") ? `/assets/puzzles/${p.image_file}` : `/uploads/${p.image_file}`,
     seed: p.seed, ownerUserId: p.owner_user_id || null,
   };
 }
@@ -663,6 +678,83 @@ const server = http.createServer(async (req, res) => {
           joinCode: r.join_code || null, membersCount: r.members, placesCount: r.sessions, createdAt: r.created_at,
         })),
       });
+    }
+
+    // Загрузка картинок в библиотеку через Admin (см. README «Загрузка через
+    // Admin») — новые дефолтные пазлы, доступные без входа, наравне с тремя
+    // стартовыми (BUILTIN_IMAGES). Тот же приём, что у своих фото (POST
+    // /api/puzzles ниже): один аплоад сразу заводит все PIECE_PRESETS
+    // вариантов сложности. Отличия от своего фото — owner_user_id/room_id
+    // оба NULL (видно всем и без входа, не только автору/в одной комнате) и
+    // тело запроса — JSON с base64 картинкой, а не сырые байты: Admin ходит
+    // сюда server-to-server через callService, который всегда шлёт JSON
+    // (см. Admin/server.js), поднимать под этот один вызов бинарный проброс
+    // там не стали.
+    if (p === "/internal/puzzles" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      // Публичные пазлы минус три стартовые (.svg) — только то, что реально
+      // добавлено через этот же эндпоинт, сгруппированное по файлу (та же
+      // идея, что у groupPuzzles в assets/app.js, но на сервере — тут не
+      // нужна дедупликация по нескольким полям, только по image_file).
+      const rows = stmt.puzzlesPublic.all().filter(row => !row.image_file.endsWith(".svg"));
+      const groups = new Map();
+      for (const row of rows) {
+        if (!groups.has(row.image_file)) {
+          groups.set(row.image_file, { id: row.id, title: row.title, imageUrl: `/uploads/${row.image_file}`, variants: 0, createdAt: row.created_at });
+        }
+        groups.get(row.image_file).variants++;
+      }
+      return json(res, 200, { puzzles: [...groups.values()] });
+    }
+    if (p === "/internal/puzzles" && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      // base64 раздувает байты примерно на треть — лимит readJson должен
+      // это учитывать, иначе картинка ровно на границе MAX_PHOTO_BYTES
+      // ложно словит "тело слишком большое" ещё до проверки buf.length ниже.
+      const body = await readJson(req, Math.ceil(MAX_PHOTO_BYTES * 1.4) + 4096);
+      const title = str(body.title, 80) || "Библиотека";
+      const buf = Buffer.from(String(body.imageBase64 || ""), "base64");
+      if (!buf.length) return json(res, 400, { error: "missing image" });
+      if (buf.length > MAX_PHOTO_BYTES) return json(res, 413, { error: "too large" });
+      const mime = sniffImage(buf);
+      if (!mime) return json(res, 415, { error: "not an image" });
+      const width = parseInt(body.width, 10) || 0;
+      const height = parseInt(body.height, 10) || 0;
+
+      const groupId = crypto.randomUUID();
+      const file = groupId + PHOTO_MIME[mime];
+      fs.writeFileSync(path.join(PUZZLE_PHOTO_DIR, file), buf);
+      const ts = now();
+      const variants = PIECE_PRESETS.map(total => {
+        const { rows, cols } = gridForPieceTarget(total, width, height);
+        const id = crypto.randomUUID();
+        const seed = crypto.randomInt(1, 2 ** 31 - 1);
+        stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, null, null);
+        return puzzlePayload(stmt.puzzle.get(id));
+      });
+      adminLog.info("Admin добавил картинку в библиотеку", { title, variants: variants.length });
+      return json(res, 200, { title, variants });
+    }
+    const puzzleDeleteMatch = p.match(/^\/internal\/puzzles\/([\w-]+)$/);
+    if (puzzleDeleteMatch && req.method === "DELETE") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(puzzleDeleteMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      // Три стартовые картинки (BUILTIN_IMAGES, всегда .svg) этим путём не
+      // трогаем — их удаление уронит #/table/hills и т.п. ссылки и чужой уже
+      // сохранённый прогресс. Своё фото пользователя (owner_user_id не NULL)
+      // сюда тоже не должно попасть — у него свой DELETE /api/puzzles/:id.
+      if (puzzle.owner_user_id !== null || puzzle.image_file.endsWith(".svg")) {
+        return json(res, 400, { error: "not an admin-uploaded puzzle" });
+      }
+      const group = stmt.puzzlesByImagePublic.all(puzzle.image_file);
+      if (group.some(gp => stmt.sessionsForPuzzle.get(gp.id))) {
+        return json(res, 409, { error: "in use", message: "Этим пазлом уже играли в комнате — удалить нельзя." });
+      }
+      for (const gp of group) stmt.deletePuzzle.run(gp.id);
+      try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
+      adminLog.info("Admin удалил картинку из библиотеки", { puzzleId: puzzle.id, title: puzzle.title });
+      return json(res, 200, { ok: true });
     }
 
     // Адрес auth отдаём с сервера, чтобы он не был зашит в статику.

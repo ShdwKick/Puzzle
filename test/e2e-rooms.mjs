@@ -45,9 +45,10 @@ function start(name, cwd, env) {
   procs.push(p);
 }
 start("auth", AUTH_DIR, { ...authEnv, DEV: "1", ISSUER: AUTH, PORT: String(AUTH_PORT), HOST: "127.0.0.1" });
+const ADMIN_KEY = "test-admin-key";
 start("puzzle", PUZZLE_DIR, {
   ...process.env, DATA_DIR: WORK + "/puzzle", PORT: String(PUZZLE_PORT), HOST: "127.0.0.1",
-  AUTH_ISSUER: AUTH, AUTH_CLIENT_ID: "puzzle",
+  AUTH_ISSUER: AUTH, AUTH_CLIENT_ID: "puzzle", ADMIN_INTERNAL_KEY: ADMIN_KEY,
 });
 
 async function waitUp(url) {
@@ -513,6 +514,50 @@ ok("выгнанный B больше не член комнаты — 403", r.s
 
 r = await asJson(tokenA, `/rooms/${kickRoomId}/members/${userIdB}`, { method: "DELETE" });
 ok("повторный кик уже убранного участника — 404", r.status === 404 && r.body.error === "not a member", JSON.stringify(r.body));
+
+// ───────── загрузка картинок в библиотеку через Admin (/internal/puzzles) ─────────
+const internalCall = (key, p, init = {}) => fetch(PUZZLE + p, {
+  ...init,
+  headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...(key ? { "X-Admin-Key": key } : {}), ...init.headers },
+  body: init.body ? JSON.stringify(init.body) : undefined,
+});
+
+let ir = await internalCall("wrong-key", "/internal/puzzles", { method: "POST", body: { title: "x", imageBase64: fakePng.toString("base64") } });
+ok("POST /internal/puzzles без верного ключа — 403", ir.status === 403, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "Из Admin", imageBase64: fakePng.toString("base64"), width: 300, height: 400 },
+});
+const adminUpload = await ir.json();
+ok("Admin добавил картинку — 200, все PIECE_PRESETS вариантов",
+  ir.status === 200 && Array.isArray(adminUpload.variants) && adminUpload.variants.length === 6, JSON.stringify(adminUpload).slice(0, 200));
+const adminPuzzleId = adminUpload.variants[0].id;
+
+ir = await fetch(PUZZLE + "/api/puzzles"); // без roomId и без токена — соло-библиотека, гость
+const soloLib = await ir.json();
+ok("добавленная через Admin картинка видна в соло-библиотеке без входа",
+  soloLib.some(x => x.id === adminPuzzleId), JSON.stringify(soloLib.map(x => x.id)));
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles");
+const adminList = await ir.json();
+ok("GET /internal/puzzles видит добавленную группу",
+  ir.status === 200 && adminList.puzzles.some(g => g.id === adminPuzzleId && g.variants === 6), JSON.stringify(adminList));
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles/hills", { method: "DELETE" });
+ok("удалить одну из трёх стартовых картинок через /internal/puzzles нельзя — 400",
+  ir.status === 400 && (await ir.json()).error === "not an admin-uploaded puzzle", String(ir.status));
+
+ir = await internalCall(null, `/internal/puzzles/${adminPuzzleId}`, { method: "DELETE" });
+ok("DELETE /internal/puzzles/:id без ключа — 403", ir.status === 403, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${adminPuzzleId}`, { method: "DELETE" });
+ok("Admin удалил картинку — 200", ir.status === 200 && (await ir.json()).ok === true, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles");
+ok("удалённая группа больше не в /internal/puzzles", !(await ir.json()).puzzles.some(g => g.id === adminPuzzleId));
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+ok("удалённая картинка пропала из соло-библиотеки", !(await ir.json()).some(x => x.id === adminPuzzleId));
 
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);
