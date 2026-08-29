@@ -44,8 +44,8 @@ function start(name, cwd, env) {
   p.stdout.on("data", () => {}); p.stderr.on("data", d => process.stderr.write(`[${name}] ${d}`));
   procs.push(p);
 }
-start("auth", AUTH_DIR, { ...authEnv, DEV: "1", ISSUER: AUTH, PORT: String(AUTH_PORT), HOST: "127.0.0.1" });
 const ADMIN_KEY = "test-admin-key";
+start("auth", AUTH_DIR, { ...authEnv, DEV: "1", ISSUER: AUTH, PORT: String(AUTH_PORT), HOST: "127.0.0.1", ADMIN_INTERNAL_KEY: ADMIN_KEY });
 start("puzzle", PUZZLE_DIR, {
   ...process.env, DATA_DIR: WORK + "/puzzle", PORT: String(PUZZLE_PORT), HOST: "127.0.0.1",
   AUTH_ISSUER: AUTH, AUTH_CLIENT_ID: "puzzle", ADMIN_INTERNAL_KEY: ADMIN_KEY,
@@ -307,10 +307,16 @@ r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Втора�
 ok("вторая комната создана", r.status === 200, JSON.stringify(r.body));
 const roomId2 = r.body.id;
 
-let ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&title=${encodeURIComponent("Тестовое фото")}`, fakePng, "image/png");
+// Согласие обязательно (см. план «Модерация загруженных фото») — без
+// consent=1 сервер отбивает 400 ещё до чтения тела картинки.
+let ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400`, fakePng, "image/png");
+ok("загрузка без consent=1 отбита 400", ur.status === 400 && (await ur.json()).error === "consent required", String(ur.status));
+
+ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Тестовое фото")}`, fakePng, "image/png");
 const upload = { status: ur.status, body: await ur.json().catch(() => ({})) };
 ok("загрузка фото в комнату прошла", upload.status === 200 && Array.isArray(upload.body.variants) && upload.body.variants.length === 6, JSON.stringify(upload.body).slice(0, 200));
 const uploadedId = upload.body.variants[0].id;
+ok("moderationStatus пуст сразу после загрузки (никогда не публиковалось)", upload.body.variants[0].moderationStatus === null, JSON.stringify(upload.body.variants[0]));
 
 r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
 ok("фото видно в комнате, где загружено", r.status === 200 && r.body.some(p => p.id === uploadedId), JSON.stringify(r.body.map(p => p.id)));
@@ -558,6 +564,169 @@ ok("удалённая группа больше не в /internal/puzzles", !(a
 
 ir = await fetch(PUZZLE + "/api/puzzles");
 ok("удалённая картинка пропала из соло-библиотеки", !(await ir.json()).some(x => x.id === adminPuzzleId));
+
+// ───────── публикация в общую библиотеку + бан устройства (см. план
+// «Модерация загруженных фото») ─────────
+const authInternalCall = (key, p, init = {}) => fetch(AUTH + p, {
+  ...init,
+  headers: { ...(init.body ? { "Content-Type": "application/json" } : {}), ...(key ? { "X-Admin-Key": key } : {}), ...init.headers },
+  body: init.body ? JSON.stringify(init.body) : undefined,
+});
+
+// Свежая загрузка для публикации — uploadedId (выше по файлу) уже удалён
+// тестом self-service DELETE, publish на несуществующий id даст 404, а не
+// то, что тут реально проверяется.
+ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото на публикацию")}`, fakePng, "image/png");
+const uploadForPublish = await ur.json();
+const publishId = uploadForPublish.variants[0].id;
+
+r = await asJson(tokenA, `/puzzles/${publishId}/publish`, { method: "POST", body: {} });
+ok("публикация без consent — 400", r.status === 400 && r.body.error === "consent required", JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/puzzles/${publishId}/publish`, { method: "POST", body: { consent: true } });
+ok("публикация с consent — 200, pending", r.status === 200 && r.body.moderationStatus === "pending", JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/puzzles/${publishId}/publish`, { method: "POST", body: { consent: true } });
+ok("повторная публикация уже pending — 409", r.status === 409, String(r.status));
+
+r = await asJson(tokenB, `/puzzles/${publishId}/publish`, { method: "POST", body: { consent: true } });
+ok("публикация чужого фото — 403", r.status === 403, String(r.status));
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${publishId}/approve`, { method: "POST" });
+ok("Admin одобрил публикацию — 200", ir.status === 200 && (await ir.json()).ok === true, String(ir.status));
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+ok("одобренное фото видно в соло-библиотеке без входа", (await ir.json()).some(x => x.id === publishId));
+
+r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
+const approvedRow = r.body.find(x => x.id === publishId);
+ok("статус на карточке — approved", approvedRow && approvedRow.moderationStatus === "approved", JSON.stringify(approvedRow));
+
+// Второе фото — на отклонение с причиной, потом переотправку.
+ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото на отклонение")}`, fakePng, "image/png");
+const upload2 = await ur.json();
+const rejectId = upload2.variants[0].id;
+await asJson(tokenA, `/puzzles/${rejectId}/publish`, { method: "POST", body: { consent: true } });
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${rejectId}/reject`, { method: "POST", body: { reason: "замажьте номер машины на фоне" } });
+ok("Admin отклонил публикацию — 200", ir.status === 200, String(ir.status));
+
+r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
+const rejectedRow = r.body.find(x => x.id === rejectId);
+ok("отклонённое фото несёт причину и остаётся приватным", rejectedRow && rejectedRow.moderationStatus === "rejected" && rejectedRow.moderationReason.includes("номер"), JSON.stringify(rejectedRow));
+
+r = await asJson(tokenA, `/puzzles/${rejectId}/publish`, { method: "POST", body: { consent: true } });
+ok("переотправка после отклонения разрешена — снова pending", r.status === 200 && r.body.moderationStatus === "pending", JSON.stringify(r.body));
+
+// Модерационное удаление — форсирует, даже если пазлом уже играли (в
+// отличие от self-service DELETE /api/puzzles/:id). Своя свежая комната —
+// roomId к этому моменту файла мог уже упереться в лимит активных сеансов
+// из более ранних тестов, а тут это не то, что проверяется.
+r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комната для форс-удаления" } });
+const forceDeleteRoomId = r.body.id;
+r = await asJson(tokenA, `/rooms/${forceDeleteRoomId}/sessions`, { method: "POST", body: { puzzleId: rejectId } });
+ok("сеанс с этим фото стартовал (готовим 'уже играли')", r.status === 200, JSON.stringify(r.body));
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${rejectId}`, { method: "DELETE" });
+ok("модерационное удаление проходит, даже если пазлом уже играли — 200", ir.status === 200, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/moderation/photos");
+const modList = await ir.json();
+ok("удалённое фото пропало из списка модерации", !modList.photos.some(x => x.id === rejectId), JSON.stringify(modList.photos.map(x => x.id)));
+
+// Бан устройства — куём собственный device-id (не тот, что реально выдал
+// бы сервер) и баним его напрямую в Auth, чтобы не гонять полноценный вход
+// ради одной cookie. Дальше используем как реальный bh_device — сервер не
+// отличает, откуда взялось значение, лишь бы прошёл формат UUID.
+const testDeviceId = crypto.randomUUID();
+const deviceCookie = `bh_device=${testDeviceId}`;
+
+const deviceUploadCall = () => fetch(PUZZLE + `/api/puzzles?roomId=${roomId}&w=300&h=400&consent=1`, {
+  method: "POST", headers: { Authorization: "Bearer " + tokenA, "Content-Type": "image/png", Cookie: deviceCookie }, body: fakePng,
+});
+
+ur = await deviceUploadCall();
+ok("загрузка с ещё не забаненного устройства проходит", ur.status === 200, String(ur.status));
+
+ir = await authInternalCall(ADMIN_KEY, `/internal/devices/${testDeviceId}/banned`, { method: "POST", body: { on: true, reason: "тестовый бан" } });
+ok("бан устройства в Auth — 200", ir.status === 200, String(ir.status));
+
+ur = await deviceUploadCall();
+const bannedUploadBody = await ur.json().catch(() => ({}));
+ok("после бана устройства загрузка отбита 403 ещё до записи в БД", ur.status === 403 && bannedUploadBody.error === "device banned", JSON.stringify(bannedUploadBody));
+
+// ───────── категории библиотеки (см. план «Категории пазлов в библиотеке») ─────────
+ir = await fetch(PUZZLE + "/api/categories"); // публичный роут, без ключа и без входа
+const initialCategories = await ir.json();
+ok("GET /api/categories без ключа и входа — 200, категорий изначально нет",
+  ir.status === 200 && Array.isArray(initialCategories) && initialCategories.length === 0, JSON.stringify(initialCategories));
+
+ir = await internalCall("wrong-key", "/internal/categories", { method: "POST", body: { name: "Природа" } });
+ok("POST /internal/categories без верного ключа — 403", ir.status === 403, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories", { method: "POST", body: { name: "Природа" } });
+const categoryA = await ir.json();
+ok("категория создана — 200", ir.status === 200 && categoryA.id && categoryA.name === "Природа", JSON.stringify(categoryA));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories", { method: "POST", body: { name: "Город" } });
+const categoryB = await ir.json();
+ok("вторая категория создана", ir.status === 200 && categoryB.id, JSON.stringify(categoryB));
+
+ir = await fetch(PUZZLE + "/api/categories");
+const publicCategories = await ir.json();
+ok("обе категории видны в публичном списке", publicCategories.length === 2 && publicCategories.every(c => c.id && c.name), JSON.stringify(publicCategories));
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "С категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: categoryA.id },
+});
+const categorizedUpload = await ir.json();
+ok("загрузка через Admin с categoryId — 200, все варианты несут категорию",
+  ir.status === 200 && categorizedUpload.variants.length === 6, JSON.stringify(categorizedUpload).slice(0, 200));
+const categorizedPuzzleId = categorizedUpload.variants[0].id;
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+const libAfterCategoryUpload = await ir.json();
+const categorizedVariants = libAfterCategoryUpload.filter(p => p.imageUrl === categorizedUpload.variants[0].imageUrl);
+ok("все 6 вариантов несут одну и ту же категорию", categorizedVariants.length === 6 && categorizedVariants.every(p => p.categoryId === categoryA.id), JSON.stringify(categorizedVariants.map(p => p.categoryId)));
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "С неверной категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: "no-such-category" },
+});
+ok("загрузка с несуществующей categoryId — 400", ir.status === 400, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}/category`, { method: "POST", body: { categoryId: categoryB.id } });
+ok("смена категории уже загруженной картинки — 200", ir.status === 200 && (await ir.json()).ok === true, String(ir.status));
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+const afterCategoryChange = (await ir.json()).filter(p => p.id === categorizedPuzzleId || categorizedVariants.some(v => v.id === p.id));
+ok("после смены категория обновилась на всех вариантах группы", afterCategoryChange.every(p => p.categoryId === categoryB.id), JSON.stringify(afterCategoryChange.map(p => p.categoryId)));
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}/category`, { method: "POST", body: { categoryId: null } });
+ok("снятие категории (categoryId: null) — 200", ir.status === 200, String(ir.status));
+
+ir = await internalCall(null, `/internal/categories/${categoryB.id}`, { method: "DELETE" });
+ok("DELETE /internal/categories/:id без ключа — 403", ir.status === 403, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}/category`, { method: "POST", body: { categoryId: categoryB.id } });
+ok("повторно назначили категорию B перед удалением категории", ir.status === 200, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryB.id}`, { method: "DELETE" });
+ok("удаление категории — 200", ir.status === 200 && (await ir.json()).ok === true, String(ir.status));
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+const afterCategoryDelete = (await ir.json()).find(p => p.id === categorizedPuzzleId);
+ok("пазл пережил удаление своей категории — остался, но без категории",
+  afterCategoryDelete && afterCategoryDelete.categoryId === null, JSON.stringify(afterCategoryDelete));
+
+ir = await fetch(PUZZLE + "/api/categories");
+const categoriesAfterDelete = await ir.json();
+ok("удалённой категории больше нет в публичном списке", categoriesAfterDelete.length === 1 && categoriesAfterDelete[0].id === categoryA.id, JSON.stringify(categoriesAfterDelete));
+
+// уборка — не оставляем тестовую картинку висеть в библиотеке для следующих проверок этого файла
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}`, { method: "DELETE" });
+ok("уборка: тестовая картинка с категорией удалена", ir.status === 200, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryA.id}`, { method: "DELETE" });
+ok("уборка: оставшаяся категория удалена", ir.status === 200, String(ir.status));
 
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

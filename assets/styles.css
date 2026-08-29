@@ -139,6 +139,18 @@ a{color:inherit}
 .library-head h1{font-size:1.6rem;font-weight:650;letter-spacing:-.01em}
 .library-head p{color:var(--md-sys-color-on-surface-variant);margin-top:.3rem;max-width:40rem}
 
+/* Карусель категорий над сеткой библиотеки (см. план «Категории пазлов») —
+   тот же вид плашек, что у .member-chip, но крупнее и кликабельно: это
+   переключатель фильтра, а не статус. */
+.category-carousel{display:flex;gap:.6rem;overflow-x:auto;padding-bottom:.3rem;margin-bottom:1.2rem}
+.category-chip{
+  flex:none;display:inline-flex;align-items:center;
+  background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
+  font-size:.88rem;font-weight:600;padding:.5em 1em;border-radius:var(--md-sys-shape-corner-full);
+  border:0;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s;
+}
+.category-chip.is-active{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary)}
+
 /* ===================== КАРТОЧКИ ПАЗЛОВ ===================== */
 .puzzle-grid{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr))}
 .puzzle-card{
@@ -173,6 +185,13 @@ a{color:inherit}
   .puzzle-card-delete{opacity:1}
 }
 .puzzle-card-delete:hover::after{opacity:.16}
+/* Статус модерации своего фото (см. план «Модерация загруженных фото») —
+   текстовая строка в теле карточки, не путать с .puzzle-card-badge (та —
+   про прогресс сборки, поверх превью). */
+.puzzle-card-moderation{font-size:.8rem;font-weight:600}
+.puzzle-card-moderation.pending{color:var(--md-warn)}
+.puzzle-card-moderation.approved{color:var(--md-ok)}
+.puzzle-card-moderation.rejected{color:var(--md-sys-color-error)}
 /* Если на той же карточке ещё и бейдж прогресса — не дать им наложиться. */
 .puzzle-card-thumb.has-delete .puzzle-card-badge{right:2.6rem}
 
@@ -183,6 +202,16 @@ a{color:inherit}
   padding:1rem 1.1rem;box-shadow:var(--e1);
 }
 .upload-form .btn{align-self:flex-start}
+/* Согласие + запрещённые категории (см. план «Модерация загруженных фото») —
+   внутри .upload-form, перед кнопкой сабмита. */
+.upload-consent{
+  background:var(--md-sys-color-surface-container);border-radius:var(--md-sys-shape-corner-m);
+  padding:.8rem .9rem;display:flex;flex-direction:column;gap:.5rem;
+}
+.upload-consent-title{font-size:.85rem;font-weight:600}
+.upload-consent-list{margin:0;padding-left:1.2rem;font-size:.82rem;color:var(--md-sys-color-on-surface-variant);display:flex;flex-direction:column;gap:.15rem}
+.upload-consent-check{display:flex;align-items:flex-start;gap:.5rem;font-size:.85rem;cursor:pointer}
+.upload-consent-check input{margin-top:.2rem;flex:none}
 
 /* ===================== ГОСТЕВАЯ ПОДСКАЗКА ===================== */
 .guest-note{

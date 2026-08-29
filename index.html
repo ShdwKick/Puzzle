@@ -234,6 +234,33 @@
   </div>
 </div>
 
+<!-- Публикация своего фото в общую библиотеку (см. план «Модерация
+     загруженных фото», openPublishModal в assets/app.js) — правила строже,
+     чем при обычной загрузке в комнату: фото после одобрения станет видно
+     всем без входа. Список категорий — статичный текст, заполняется в JS
+     из PROHIBITED_TIER_A/B, не меняется от пазла к пазлу, только заголовок. -->
+<div class="modal-backdrop hidden" id="publishModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="publishModalTitle">
+    <div class="modal-head">
+      <h2 id="publishModalTitle">Опубликовать в общую библиотеку</h2>
+      <button class="icon-btn" id="publishModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p class="state-note">После одобрения модератором фото станет доступно всем без входа — правила строже, чем для приватной комнаты.</p>
+    <div class="upload-consent">
+      <p class="upload-consent-title">Дополнительно к обычным правилам, для публикации нельзя:</p>
+      <ul class="upload-consent-list" id="publishCategoryList"></ul>
+      <label class="upload-consent-check">
+        <input type="checkbox" id="publishConsent" required>
+        Я подтверждаю согласие с правилами публикации и беру на себя ответственность за это фото
+      </label>
+    </div>
+    <button class="btn filled" id="publishConfirmBtn" type="button">Отправить на модерацию</button>
+    <p class="state-note" id="publishError" hidden></p>
+  </div>
+</div>
+
 <script src="assets/brand.js"></script>
 <script src="assets/auth-client.js"></script>
 <script src="assets/puzzle-shapes.js"></script>

@@ -185,6 +185,29 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_puzzles_room ON puzzles(room_id)");
 // флаг живёт на сеансе, а не в puzzles.
 try { db.exec("ALTER TABLE room_sessions ADD COLUMN asymmetric_shape INTEGER NOT NULL DEFAULT 0"); } catch {}
 
+// Модерация загруженных фото (см. план «Модерация загруженных фото»).
+// moderation_status: NULL — никогда не отправлялось на публикацию (свежая
+// загрузка или обычное приватное фото для комнаты); 'pending' — отправлено,
+// ждёт админа; 'approved' — админ одобрил (в этот момент owner_user_id/
+// room_id обнуляются, фото становится обычной публичной библиотечной
+// записью, неотличимой от загруженной через Admin); 'rejected' — отклонено
+// с причиной в moderation_reason, повторная отправка (POST .../publish)
+// разрешена и сама сбрасывает reason. consent_at/upload_device — бумажный
+// след согласия на загрузку (не на публикацию — то отдельное согласие,
+// смотри publish), на всех 6 строк-вариантов одной загрузки одинаковые
+// (тот же приём дублирования по группе, что уже есть у title/image_file).
+try { db.exec("ALTER TABLE puzzles ADD COLUMN moderation_status TEXT"); } catch {}
+try { db.exec("ALTER TABLE puzzles ADD COLUMN moderation_reason TEXT"); } catch {}
+try { db.exec("ALTER TABLE puzzles ADD COLUMN consent_at INTEGER"); } catch {}
+try { db.exec("ALTER TABLE puzzles ADD COLUMN upload_device TEXT"); } catch {}
+
+// Категория (см. категории выше) — атрибут ГРУППЫ загрузки, как
+// moderation_status/title/image_file: все строки-варианты одной картинки
+// получают одно и то же значение. ON DELETE SET NULL — удаление категории
+// в Admin не должно уносить с собой сами пазлы, только обнулять их
+// принадлежность (тот же принцип, что у остальных мягких связей в схеме).
+try { db.exec("ALTER TABLE puzzles ADD COLUMN category_id TEXT REFERENCES categories(id) ON DELETE SET NULL"); } catch {}
+
 // Встроенные пазлы (Холмы/Лес/Горы) видны во ВСЕХ комнатах сразу (owner_user_id
 // IS NULL — см. puzzlesForRoom) — не всем участникам конкретной комнаты они
 // нужны. Скрытие ЛОКАЛЬНО для комнаты (не удаление самого пазла: он остаётся
@@ -200,6 +223,18 @@ db.exec(`
     hidden_by  TEXT NOT NULL,
     hidden_at  INTEGER NOT NULL,
     PRIMARY KEY (room_id, puzzle_id)
+  );
+`);
+
+// Категории библиотеки (см. план «Категории пазлов в библиотеке») —
+// заводятся и назначаются только через Admin. category_id на puzzles ниже
+// (ALTER TABLE, рядом с остальными пост-релизными колонками).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS categories (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    sort_order REAL NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL
   );
 `);
 
@@ -241,11 +276,28 @@ const stmt = {
       AND id NOT IN (SELECT puzzle_id FROM room_hidden_puzzles WHERE room_id = ?)
     ORDER BY sort_order, created_at`),
   insertCustomPuzzle: db.prepare(`INSERT INTO puzzles
-      (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id,room_id)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`),
+      (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id,room_id,
+       moderation_status,moderation_reason,consent_at,upload_device,category_id)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
+  sessionIdsForPuzzle: db.prepare("SELECT id FROM room_sessions WHERE puzzle_id = ?"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
   puzzlesByImage: db.prepare("SELECT * FROM puzzles WHERE image_file = ? AND owner_user_id = ?"),
+  // Модерация (см. план). group-запросы идут по image_file — так же, как
+  // puzzlesByImage выше для self-service удаления, но без owner_user_id:
+  // тут нас интересует вся группа своего фото (owner_user_id IS NOT NULL —
+  // проверяется в JS до вызова), не важно, кто именно её загрузил.
+  puzzlesByImageAny: db.prepare("SELECT * FROM puzzles WHERE image_file = ?"),
+  allUserPhotos: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NOT NULL ORDER BY created_at DESC"),
+  setModerationPending: db.prepare("UPDATE puzzles SET moderation_status = 'pending', moderation_reason = NULL WHERE image_file = ?"),
+  setModerationApproved: db.prepare("UPDATE puzzles SET owner_user_id = NULL, room_id = NULL, moderation_status = 'approved', moderation_reason = NULL WHERE image_file = ?"),
+  setModerationRejected: db.prepare("UPDATE puzzles SET moderation_status = 'rejected', moderation_reason = ? WHERE image_file = ?"),
+  // Категории (см. план «Категории пазлов в библиотеке»).
+  listCategories: db.prepare("SELECT * FROM categories ORDER BY sort_order, created_at"),
+  categoryById: db.prepare("SELECT * FROM categories WHERE id = ?"),
+  insertCategory: db.prepare("INSERT INTO categories (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)"),
+  deleteCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
+  setPuzzleCategory: db.prepare("UPDATE puzzles SET category_id = ? WHERE image_file = ?"),
   // Группа встроенных пазлов, добавленных Admin (owner_user_id IS NULL —
   // "= ?" тут не сработал бы, NULL с ним никогда не совпадает). Отличаем от
   // трёх стартовых картинок (BUILTIN_IMAGES, всегда .svg) расширением файла
@@ -371,6 +423,54 @@ function readAnonId(req) {
   return id && UUID_RE.test(id) ? "anon:" + id : null;
 }
 
+// ───────── cookie устройства: бан-сигнал для модерации (см. план) ─────────
+// В отличие от puzzle_anon — не про личность в комнате, а про повторную
+// загрузку фото с того же браузера под новым аккаунтом. Реестр банов живёт
+// в Auth (/internal/devices/*, общий для всей семьи), тут только выдача и
+// чтение самого cookie. Год жизни (не 180 дней, как у puzzle_anon) —
+// устройство как сигнал живёт дольше, чем гостевая сессия одной комнаты.
+const DEVICE_COOKIE = "bh_device";
+const DEVICE_MAX_AGE = 60 * 60 * 24 * 365;
+// .burninghouse.ru из https://auth.burninghouse.ru — не хардкодим домен
+// литералом, чтобы форк на другой зоне не пришлось чинить руками. На
+// localhost (дев, нет поддоменов) остаётся undefined — cookie будет
+// host-only, не расшарится с другими сервисами локально, это ограничение
+// дев-окружения, не баг (см. план, часть 1).
+const DEVICE_COOKIE_DOMAIN = (() => {
+  if (!AUTH_ISSUER.startsWith("https://")) return null;
+  try {
+    const host = new URL(AUTH_ISSUER).hostname; // "auth.burninghouse.ru"
+    const parts = host.split(".");
+    return parts.length > 2 ? "." + parts.slice(1).join(".") : null; // ".burninghouse.ru"
+  } catch { return null; }
+})();
+
+function getOrCreateDeviceId(req, res) {
+  const cookies = parseCookies(req);
+  let id = cookies[DEVICE_COOKIE];
+  if (!id || !UUID_RE.test(id)) {
+    id = crypto.randomUUID();
+    const domain = DEVICE_COOKIE_DOMAIN ? `; Domain=${DEVICE_COOKIE_DOMAIN}` : "";
+    const secure = AUTH_ISSUER.startsWith("https://") ? "; Secure" : "";
+    res.setHeader("Set-Cookie", `${DEVICE_COOKIE}=${id}; HttpOnly; Path=/; SameSite=Lax; Max-Age=${DEVICE_MAX_AGE}${domain}${secure}`);
+  }
+  return id;
+}
+
+/** Спрашивает Auth "забанено ли устройство" перед тем, как принять фото —
+ *  server-to-server, тем же ADMIN_INTERNAL_KEY, что уже держит Puzzle для
+ *  своих /internal/*, вызванных ИЗ Admin (тут наоборот — Puzzle вызывающая
+ *  сторона). Таймаут короткий и намеренно ФЕЙЛИМСЯ ЗАКРЫТО: недоступность
+ *  реестра банов — не повод молча пропустить загрузку (см. план). */
+async function isDeviceBanned(deviceId) {
+  const res = await fetch(`${AUTH_ISSUER}/internal/devices/${encodeURIComponent(deviceId)}`, {
+    headers: { "X-Admin-Key": process.env.ADMIN_INTERNAL_KEY || "" },
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!res.ok) throw new Error(`auth devices check: HTTP ${res.status}`);
+  return (await res.json()).banned === true;
+}
+
 // seed выходит за рамки минимального контракта из плана ({id,title,gridRows,
 // gridCols,imageUrl}), но без него клиент не сможет детерминированно
 // построить те же формы деталей на разных устройствах/сессиях — buildEdges
@@ -392,6 +492,11 @@ function puzzlePayload(p) {
     id: p.id, title: p.title, gridRows: p.grid_rows, gridCols: p.grid_cols,
     imageUrl: p.image_file.endsWith(".svg") ? `/assets/puzzles/${p.image_file}` : `/uploads/${p.image_file}`,
     seed: p.seed, ownerUserId: p.owner_user_id || null,
+    // Только для показа автору (клиент сам решает, кому рисовать бейдж —
+    // buildCard в app.js гейтит по mine), см. план «Модерация загруженных
+    // фото». Не секрет: строка внутри уже видимой в этой комнате карточки.
+    moderationStatus: p.moderation_status || null, moderationReason: p.moderation_reason || null,
+    categoryId: p.category_id || null,
   };
 }
 
@@ -700,7 +805,10 @@ const server = http.createServer(async (req, res) => {
       const groups = new Map();
       for (const row of rows) {
         if (!groups.has(row.image_file)) {
-          groups.set(row.image_file, { id: row.id, title: row.title, imageUrl: `/uploads/${row.image_file}`, variants: 0, createdAt: row.created_at });
+          groups.set(row.image_file, {
+            id: row.id, title: row.title, imageUrl: `/uploads/${row.image_file}`, variants: 0,
+            createdAt: row.created_at, categoryId: row.category_id || null,
+          });
         }
         groups.get(row.image_file).variants++;
       }
@@ -720,6 +828,14 @@ const server = http.createServer(async (req, res) => {
       if (!mime) return json(res, 415, { error: "not an image" });
       const width = parseInt(body.width, 10) || 0;
       const height = parseInt(body.height, 10) || 0;
+      // categoryId необязателен (см. план) — "Без категории" на форме
+      // Admin шлёт пусто/null, тогда пазл просто некатегоризирован, как и
+      // всё, что было загружено до этого захода.
+      let categoryId = null;
+      if (body.categoryId) {
+        if (!stmt.categoryById.get(body.categoryId)) return json(res, 400, { error: "bad category" });
+        categoryId = body.categoryId;
+      }
 
       const groupId = crypto.randomUUID();
       const file = groupId + PHOTO_MIME[mime];
@@ -729,7 +845,10 @@ const server = http.createServer(async (req, res) => {
         const { rows, cols } = gridForPieceTarget(total, width, height);
         const id = crypto.randomUUID();
         const seed = crypto.randomInt(1, 2 ** 31 - 1);
-        stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, null, null);
+        // moderation_status='approved' сразу — тут нет автора-загрузчика,
+        // которого нужно домодерировать: сам факт, что картинку кладёт
+        // Admin, УЖЕ модерация. upload_device=null — не с браузера.
+        stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, null, null, "approved", null, ts, null, categoryId);
         return puzzlePayload(stmt.puzzle.get(id));
       });
       adminLog.info("Admin добавил картинку в библиотеку", { title, variants: variants.length });
@@ -757,11 +876,140 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
+    // Модерация загруженных пользователями фото (см. план «Модерация
+    // загруженных фото»). В отличие от /internal/puzzles выше (там —
+    // библиотека built-in картинок ОТ Admin) — тут ВСЕ фото от ВСЕХ
+    // пользователей, любого статуса, не только pending: админ должен видеть
+    // вообще всё когда-либо загруженное, даже то, что осталось приватным в
+    // комнате и никогда не отправлялось на публикацию (см. план, часть 2).
+    if (p === "/internal/moderation/photos" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const groups = new Map();
+      for (const row of stmt.allUserPhotos.all()) {
+        if (!groups.has(row.image_file)) {
+          const room = row.room_id ? stmt.room.get(row.room_id) : null;
+          groups.set(row.image_file, {
+            id: row.id, title: row.title, imageUrl: `/uploads/${row.image_file}`,
+            ownerUserId: row.owner_user_id, uploadDevice: row.upload_device,
+            roomId: row.room_id, roomTitle: room ? room.title : null,
+            createdAt: row.created_at, consentAt: row.consent_at,
+            moderationStatus: row.moderation_status, moderationReason: row.moderation_reason,
+            variants: 0,
+          });
+        }
+        groups.get(row.image_file).variants++;
+      }
+      return json(res, 200, { photos: [...groups.values()].sort((a, b) => b.createdAt - a.createdAt) });
+    }
+
+    const modApproveMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)\/approve$/);
+    if (modApproveMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(modApproveMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      if (puzzle.moderation_status !== "pending") return json(res, 400, { error: "not pending" });
+      stmt.setModerationApproved.run(puzzle.image_file);
+      adminLog.info("Admin одобрил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, ownerUserId: puzzle.owner_user_id });
+      return json(res, 200, { ok: true });
+    }
+    const modRejectMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)\/reject$/);
+    if (modRejectMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(modRejectMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      const body = await readJson(req);
+      const reason = str(body.reason, 400) || null;
+      stmt.setModerationRejected.run(reason, puzzle.image_file);
+      adminLog.info("Admin отклонил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, reason });
+      return json(res, 200, { ok: true });
+    }
+    const modDeleteMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)$/);
+    if (modDeleteMatch && req.method === "DELETE") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(modDeleteMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      // В отличие от self-service DELETE /api/puzzles/:id — модерационное
+      // удаление НЕ блокируется тем, что пазлом уже играли (см. план, часть
+      // 2): если контент нарушает правила, факт, что кто-то успел его
+      // увидеть в сессии, не повод его оставить. room_sessions.puzzle_id
+      // ссылается на puzzles(id) без ON DELETE CASCADE (см. схему) — сперва
+      // рвём сами сеансы (и живые WS-подключения за столом, если кто-то
+      // сидит прямо сейчас — иначе FOREIGN KEY constraint упадёт на самом
+      // DELETE FROM puzzles ниже).
+      const group = stmt.puzzlesByImageAny.all(puzzle.image_file);
+      for (const gp of group) {
+        for (const s of stmt.sessionIdsForPuzzle.all(gp.id)) {
+          const live = liveSessions.get(s.id);
+          if (live) { for (const conn of live.conns) { try { conn.ws.close(); } catch {} } liveSessions.delete(s.id); }
+          stmt.deleteSession.run(s.id);
+        }
+      }
+      for (const gp of group) stmt.deletePuzzle.run(gp.id);
+      try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
+      adminLog.warn("Admin удалил загруженное фото (модерация)", { puzzleId: puzzle.id, title: puzzle.title, ownerUserId: puzzle.owner_user_id });
+      return json(res, 200, { ok: true });
+    }
+
+    // Категории (см. план «Категории пазлов в библиотеке») — заводятся и
+    // назначаются только через Admin, тот же checkAdminKey-гейт, что у
+    // /internal/puzzles выше.
+    if (p === "/internal/categories" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, { categories: stmt.listCategories.all().map(c => ({ id: c.id, name: c.name, createdAt: c.created_at })) });
+    }
+    if (p === "/internal/categories" && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const body = await readJson(req);
+      const name = str(body.name, 80);
+      if (!name) return json(res, 400, { error: "bad name" });
+      const id = crypto.randomUUID(), ts = now();
+      // sort_order = ts — новые категории естественно уходят в конец
+      // списка, та же идея, что уже используется для сортировки своих фото.
+      stmt.insertCategory.run(id, name, ts, ts);
+      adminLog.info("Admin создал категорию", { categoryId: id, name });
+      return json(res, 200, { id, name });
+    }
+    const categoryDeleteMatch = p.match(/^\/internal\/categories\/([\w-]+)$/);
+    if (categoryDeleteMatch && req.method === "DELETE") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const category = stmt.categoryById.get(categoryDeleteMatch[1]);
+      if (!category) return json(res, 404, { error: "not found" });
+      // ON DELETE SET NULL на puzzles.category_id (см. схему) — пазлы этой
+      // категории не удаляются, просто становятся некатегоризированными.
+      stmt.deleteCategory.run(category.id);
+      adminLog.info("Admin удалил категорию", { categoryId: category.id, name: category.name });
+      return json(res, 200, { ok: true });
+    }
+    // Назначение категории уже загруженной через Admin картинке — отдельно
+    // от выбора при самой загрузке, иначе три стартовые картинки и всё,
+    // что добавлено до этого захода, навсегда остались бы без категории.
+    const puzzleCategoryMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/category$/);
+    if (puzzleCategoryMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(puzzleCategoryMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      const body = await readJson(req);
+      let categoryId = null;
+      if (body.categoryId) {
+        if (!stmt.categoryById.get(body.categoryId)) return json(res, 400, { error: "bad category" });
+        categoryId = body.categoryId;
+      }
+      stmt.setPuzzleCategory.run(categoryId, puzzle.image_file);
+      adminLog.info("Admin изменил категорию пазла", { puzzleId: puzzle.id, title: puzzle.title, categoryId });
+      return json(res, 200, { ok: true });
+    }
+
     // Адрес auth отдаём с сервера, чтобы он не был зашит в статику.
     if (p === "/api/config") return json(res, 200, {
       authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID,
       maxPhotoBytes: MAX_PHOTO_BYTES, piecePresets: PIECE_PRESETS,
     });
+
+    // Категории — публично, без входа, как и сама библиотека (см. план
+    // «Категории пазлов в библиотеке», карусель в renderLibrary).
+    if (p === "/api/categories" && req.method === "GET") {
+      return json(res, 200, stmt.listCategories.all().map(c => ({ id: c.id, name: c.name })));
+    }
 
     if (p.startsWith("/api/")) {
       // Анонимный доступ к /api/* — нормальный режим (гость играет без
@@ -820,6 +1068,24 @@ async function api(req, res, url, user) {
     if (!roomId) return json(res, 400, { error: "roomId required" });
     if (!stmt.roomMember.get(roomId, user.id)) return json(res, 403, { error: "not a member" });
 
+    // Согласие + бан устройства — до чтения тела запроса (дорогой I/O): нет
+    // смысла принимать и сохранять байты картинки, если запрос всё равно
+    // будет отбит. consent=1 — обязателен, галочка на клиенте (см. план,
+    // часть 3) физически не даёт сабмититься без него, но клиент не источник
+    // доверия — сервер перепроверяет сам.
+    if (url.searchParams.get("consent") !== "1") {
+      return json(res, 400, { error: "consent required" });
+    }
+    const deviceId = getOrCreateDeviceId(req, res);
+    try {
+      if (await isDeviceBanned(deviceId)) return json(res, 403, { error: "device banned" });
+    } catch (e) {
+      // Реестр банов недоступен — фейлимся закрыто (см. план), а не молча
+      // пропускаем: недоступность Auth не повод разрешить любую загрузку.
+      adminLog.error("Не удалось проверить бан устройства — Auth недоступен", { message: e.message });
+      return json(res, 503, { error: "moderation unavailable" });
+    }
+
     const width = parseInt(url.searchParams.get("w"), 10) || 0;
     const height = parseInt(url.searchParams.get("h"), 10) || 0;
     const title = str(url.searchParams.get("title"), 80) || "Мой пазл";
@@ -838,7 +1104,7 @@ async function api(req, res, url, user) {
       const { rows, cols } = gridForPieceTarget(total, width, height);
       const id = crypto.randomUUID();
       const seed = crypto.randomInt(1, 2 ** 31 - 1);
-      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId);
+      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId, null, null, ts, deviceId, null);
       return puzzlePayload(stmt.puzzle.get(id));
     });
     adminLog.info("Загружено своё фото", { userId: user.id, roomId, title, variants: variants.length });
@@ -861,6 +1127,28 @@ async function api(req, res, url, user) {
     try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
     adminLog.info("Своё фото удалено", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, variants: group.length });
     return json(res, 200, { ok: true });
+  }
+
+  // Отправка своего фото на публикацию в общую библиотеку (см. план,
+  // «Публикация только из комнаты, только вошедшему» — подтверждено
+  // пользователем: publish идёт ПОСЛЕ обычной загрузки в комнату, не вместо
+  // неё, и требует настоящего входа, анонимному тут делать нечего — фото и
+  // так не могло появиться без входа, см. POST /api/puzzles выше). JSON-тело
+  // — не query, как у самой загрузки: это отдельное, более строгое согласие
+  // (см. план, часть 3), не то же самое, что consent=1 при заливке.
+  if (seg[1] === "puzzles" && seg[2] && seg[3] === "publish" && seg.length === 4 && m === "POST") {
+    if (!user) return json(res, 401, { error: "unauthorized" });
+    const puzzle = stmt.puzzle.get(seg[2]);
+    if (!puzzle) return json(res, 404, { error: "not found" });
+    if (puzzle.owner_user_id !== user.id) return json(res, 403, { error: "not yours" });
+    const body = await readJson(req);
+    if (!body.consent) return json(res, 400, { error: "consent required" });
+    if (puzzle.moderation_status === "pending" || puzzle.moderation_status === "approved") {
+      return json(res, 409, { error: "already " + puzzle.moderation_status });
+    }
+    stmt.setModerationPending.run(puzzle.image_file);
+    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title });
+    return json(res, 200, { ok: true, moderationStatus: "pending" });
   }
 
   // ── прогресс по конкретному пазлу: единственное, что требует входа ──

@@ -16,6 +16,27 @@ const PAD_FACTOR = 0.4;    // тот же коэффициент, что заш�
 const SNAP_TOLERANCE = window.PuzzleClusters.tolerance(CELL); // допуск стыковки — общий модуль с сервером
 const MAX_ACTIVE_SESSIONS_PER_ROOM = 5; // только для текста ошибки лимита — сервер решает сам, см. playVariant
 
+// Категории для формы загрузки/публикации (см. план «Модерация загруженных
+// фото»). Tier A — абсолютный запрет, действует ВЕЗДЕ, включая приватную
+// комнату (см. mountUploadForm). Tier B — только для публикации в общую
+// ленту (см. openPublishModal), строже: комната — ответственность круга
+// друзей, лента — виден всем без входа. Список — черновик, формулировки
+// можно менять как обычный текст, ничего в логике от них не зависит.
+const PROHIBITED_TIER_A = [
+  "материалы с сексуализацией несовершеннолетних",
+  "порнография и откровенно сексуальный контент",
+  "интимные фото и видео человека без его согласия",
+  "реальное насилие, жестокость, материалы, пропагандирующие терроризм",
+  "экстремистская символика, разжигание ненависти по признаку расы, религии, национальности, пола, ориентации",
+  "чужие личные документы (паспорт, карты, переписка) без согласия владельца",
+];
+const PROHIBITED_TIER_B = [
+  "любая обнажённость, не только откровенная порнография",
+  "жестокость и шокирующий контент, даже нереалистичный",
+  "чужой копирайт без разрешения правообладателя",
+  "узнаваемые люди без явного согласия на публичный показ",
+];
+
 /* ───────────────────────── тема приложения ─────────────────────────
  * Общий переключатель светлой/тёмной темы (data-theme на <html>) — тот же
  * приём, что и во всех остальных сервисах BurningHouse (Movies/Trip/
@@ -117,6 +138,47 @@ document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
   onPlay(variants[idx], asymmetric);
 });
 
+/* ───────────────────────── публикация своего фото ─────────────────────────
+ * См. план «Модерация загруженных фото» — отдельное, более строгое согласие,
+ * не то же самое, что чекбокс при обычной загрузке в комнату (mountUploadForm).
+ * Тот же приём, что и у openDifficultyModal выше: статичная разметка в
+ * index.html, "pending"-переменная переносит контекст между открытием и
+ * подтверждением. */
+let pendingPublishId = null;
+function openPublishModal(id, title, onDone) {
+  document.getElementById("publishModalTitle").textContent = `Опубликовать «${title}»`;
+  const list = document.getElementById("publishCategoryList");
+  list.innerHTML = [...PROHIBITED_TIER_A, ...PROHIBITED_TIER_B].map(c => `<li>${c}</li>`).join("");
+  document.getElementById("publishConsent").checked = false;
+  document.getElementById("publishError").hidden = true;
+  pendingPublishId = { id, onDone };
+  openModal("publishModalBackdrop");
+}
+bindModal("publishModalBackdrop", null, "publishModalClose");
+document.getElementById("publishConfirmBtn").addEventListener("click", async () => {
+  if (!pendingPublishId) return;
+  const errEl = document.getElementById("publishError");
+  errEl.hidden = true;
+  if (!document.getElementById("publishConsent").checked) {
+    errEl.textContent = "Нужно подтвердить согласие с правилами публикации.";
+    errEl.hidden = false;
+    return;
+  }
+  const { id, onDone } = pendingPublishId;
+  const btn = document.getElementById("publishConfirmBtn");
+  btn.disabled = true;
+  try {
+    await publishPuzzle(id);
+    closeModal("publishModalBackdrop");
+    pendingPublishId = null;
+    onDone();
+  } catch (err) {
+    errEl.textContent = "Не удалось отправить на модерацию — попробуйте ещё раз.";
+    errEl.hidden = false;
+  }
+  btn.disabled = false;
+});
+
 /* ───────────────────────── хранилище гостя ───────────────────────── */
 const localKey = id => `puzzle_progress_${id}`;
 function localProgress(id) {
@@ -136,6 +198,16 @@ async function getPuzzles(roomId) {
   const data = await res.json();
   puzzlesCache.set(key, data);
   return data;
+}
+
+/** Список категорий для карусели над библиотекой (см. план «Категории
+ *  пазлов в библиотеке») — без кэша: список короткий, почти не меняется,
+ *  а кэш вроде puzzlesCache пришлось бы отдельно инвалидировать при
+ *  каждом изменении в Admin, что не окупается для пары запросов за сессию. */
+async function getCategories() {
+  const res = await fetch("/api/categories");
+  if (!res.ok) throw new Error("categories fetch failed");
+  return res.json();
 }
 
 // По индексу, не по точному числу деталей: gridForPieceTarget округляет
@@ -194,7 +266,11 @@ function roomFetch(url, opts) {
 
 async function uploadPuzzlePhoto(file, title, roomId) {
   const { blob, width, height } = await shrinkForPuzzle(file);
-  const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || "Мой пазл", roomId });
+  // consent=1 — обязательное согласие с запрещёнными категориями (см. план
+  // «Модерация загруженных фото»): форма физически не даёт сюда попасть без
+  // отмеченной галочки (mountUploadForm ниже), но сервер всё равно
+  // перепроверяет сам — клиент не источник доверия.
+  const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || "Мой пазл", roomId, consent: "1" });
   const res = await auth.fetch(`/api/puzzles?${qs}`, {
     method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
   });
@@ -226,6 +302,19 @@ async function deletePuzzle(id) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || data.error || "delete failed");
   puzzlesCache.clear();
+}
+
+/** Отправка своего фото на публикацию в общую библиотеку (см. план
+ *  «Модерация загруженных фото») — отдельное, более строгое согласие, не то
+ *  же самое, что consent=1 при обычной загрузке в комнату. */
+async function publishPuzzle(id) {
+  const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}/publish`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ consent: true }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "publish failed");
+  puzzlesCache.clear();
+  return data;
 }
 
 /** Скрывает встроенный пазл (все уровни сложности сразу — variants) ИМЕННО
@@ -272,6 +361,14 @@ function mountUploadForm(container, roomId, onDone) {
     <form class="upload-form" id="uploadForm">
       <input class="text-input" id="uploadTitle" type="text" maxlength="80" placeholder="Название — необязательно">
       <input type="file" id="uploadFile" accept="image/*" required>
+      <div class="upload-consent">
+        <p class="upload-consent-title">Нельзя загружать фото, которые относятся к следующим категориям:</p>
+        <ul class="upload-consent-list">${PROHIBITED_TIER_A.map(c => `<li>${c}</li>`).join("")}</ul>
+        <label class="upload-consent-check">
+          <input type="checkbox" id="uploadConsent" required>
+          Я подтверждаю, что несу ответственность за загруженное фото и что оно не относится к перечисленным категориям
+        </label>
+      </div>
       <button class="btn filled" type="submit">Собрать из фото</button>
       <p class="state-note" id="uploadError" hidden></p>
     </form>`;
@@ -384,6 +481,38 @@ function buildCard(p, opts = {}) {
     thumb.classList.add("has-delete");
     thumb.appendChild(del);
   }
+  // Статус модерации + кнопка «Опубликовать» — только на своих фото (см.
+  // план «Модерация загруженных фото»). Своё фото рендерится только внутри
+  // комнаты (renderRoom), соло-библиотека их не показывает вовсе (см.
+  // README «Свои фото») — mine тут достаточно, отдельно проверять
+  // opts.roomId не нужно.
+  if (mine) {
+    const body = $(node, ".puzzle-card-body");
+    const playBtnEl = $(node, ".puzzle-card-play");
+    if (p.moderationStatus) {
+      const status = document.createElement("p");
+      status.className = "puzzle-card-moderation " + p.moderationStatus;
+      status.textContent = p.moderationStatus === "pending" ? "На модерации"
+        : p.moderationStatus === "approved" ? "Опубликовано"
+        : `Отклонено: ${p.moderationReason || "без причины"}`;
+      body.insertBefore(status, playBtnEl);
+    }
+    if (!p.moderationStatus || p.moderationStatus === "rejected") {
+      const pubBtn = document.createElement("button");
+      pubBtn.className = "btn text sm puzzle-card-publish";
+      pubBtn.type = "button";
+      pubBtn.textContent = p.moderationStatus === "rejected" ? "Отправить снова" : "Опубликовать";
+      pubBtn.addEventListener("click", ev => {
+        ev.stopPropagation();
+        openPublishModal(p.id, p.title, () => {
+          p.moderationStatus = "pending"; p.moderationReason = null;
+          const fresh = buildCard(p, opts);
+          node.replaceWith(fresh);
+        });
+      });
+      body.insertBefore(pubBtn, playBtnEl);
+    }
+  }
   const playBtn = $(node, ".puzzle-card-play");
   const onPlay = opts.onPlay || ((v, asymmetric) => {
     location.hash = `#/table/${encodeURIComponent(v.id)}${asymmetric ? "?shape=asym" : "?shape=normal"}`;
@@ -423,6 +552,7 @@ async function renderLibrary(root, signal) {
       <p>Собирайте встроенные пазлы прямо в браузере — детали фигурные, стол зумится и таскается. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
     </div>
     <div id="guestNoteWrap"></div>
+    <div id="categoryCarouselWrap"></div>
     <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
 
   if (!auth.isAuthenticated()) {
@@ -438,9 +568,9 @@ async function renderLibrary(root, signal) {
     $(root, "#guestNoteWrap").appendChild(note);
   }
 
-  let puzzles;
+  let puzzles, categories;
   try {
-    puzzles = await getPuzzles();
+    [puzzles, categories] = await Promise.all([getPuzzles(), getCategories().catch(() => [])]);
   } catch {
     if (!signal.aborted) $(root, "#puzzleGrid").innerHTML = '<p class="state-note">Не удалось загрузить пазлы — обновите страницу.</p>';
     return;
@@ -451,11 +581,41 @@ async function renderLibrary(root, signal) {
   // видит исключительно встроенные пазлы. groupPuzzles сводит все уровни
   // сложности одного изображения (общий imageUrl) в одну карточку — иначе
   // Холмы/Лес/Горы показались бы по 6 раз каждый (см. server.js, BUILTIN_IMAGES).
+  const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
   const grid = $(root, "#puzzleGrid");
-  grid.innerHTML = "";
-  const cards = groupPuzzles(puzzles.filter(p => !p.ownerUserId))
-    .map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
-  for (const { p, node } of cards) applyBadge(node, p);
+
+  function paintGrid(groups) {
+    grid.innerHTML = "";
+    const cards = groups.map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
+    for (const { p, node } of cards) applyBadge(node, p);
+  }
+
+  // Карусель рисуем только если категории вообще заведены (см. план) — без
+  // этого единственный чип «Все» без выбора был бы бессмысленным элементом.
+  if (categories.length) {
+    const carouselEl = $(root, "#categoryCarouselWrap");
+    const counts = new Map();
+    for (const p of allGroups) counts.set(p.categoryId || null, (counts.get(p.categoryId || null) || 0) + 1);
+    const chips = [{ id: null, name: "Все", count: allGroups.length }, ...categories.map(c => ({ id: c.id, name: c.name, count: counts.get(c.id) || 0 }))];
+    const carousel = document.createElement("div");
+    carousel.className = "category-carousel";
+    for (const c of chips) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "category-chip" + (c.id === null ? " is-active" : "");
+      btn.textContent = `${c.name} (${c.count})`;
+      btn.dataset.id = c.id || "";
+      btn.addEventListener("click", () => {
+        carousel.querySelectorAll(".category-chip").forEach(chip => chip.classList.remove("is-active"));
+        btn.classList.add("is-active");
+        paintGrid(c.id === null ? allGroups : allGroups.filter(p => p.categoryId === c.id));
+      });
+      carousel.appendChild(btn);
+    }
+    carouselEl.appendChild(carousel);
+  }
+
+  paintGrid(allGroups);
 }
 
 /* ───────────────────────── стол: раскладка деталей ───────────────────────── */
