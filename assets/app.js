@@ -544,6 +544,13 @@ function buildCard(p, opts = {}) {
   const img = $(node, "img");
   img.src = p.imageUrl;
   img.alt = p.title;
+  img.decoding = "async";
+  // Ленивая загрузка — везде, КРОМЕ первой карточки сетки (opts.eager, см.
+  // вызовы buildCard в paintGrid/renderProfile): она обычно и есть LCP
+  // (Largest Contentful Paint, метрика скорости, важна и для Core Web
+  // Vitals, и для позиций в поиске) — если бы она тоже грузилась лениво,
+  // это ЗАМЕДЛИЛО бы LCP, а не ускорило страницу.
+  if (!opts.eager) img.loading = "lazy";
   $(node, ".puzzle-card-title").textContent = p.title;
   const variants = p.variants || [p];
   // «N уровней сложности» убрано — у нас нет настройки доступных уровней,
@@ -698,15 +705,50 @@ async function applyBadge(node, p) {
   badge.hidden = true;
 }
 
+// FAQ (см. план «SEO») — длиннохвостые запросы + возможный расширенный
+// сниппет в Google (FAQPage, разметка — в index.html, тут только видимый
+// текст). Вынесено в константу, а не только в шаблон ниже, потому что
+// ДОСЛОВНО ТА ЖЕ разметка нужна ещё и в index.html как статичная заглушка
+// до JS — расхождение читалось бы краулером как подмена контента (см.
+// комментарий у root.innerHTML ниже). Меняете один — обновите и другой.
+const LIBRARY_FAQ_HTML = `
+  <section class="faq">
+    <h2>Частые вопросы о сборке пазлов онлайн</h2>
+    <details>
+      <summary>Нужна ли регистрация, чтобы собирать пазлы онлайн?</summary>
+      <p>Нет — играть можно сразу и бесплатно, без регистрации. Прогресс в этом случае хранится в браузере; вход нужен только для того, чтобы он не терялся при смене устройства.</p>
+    </details>
+    <details>
+      <summary>Можно ли собрать пазл из своей фотографии?</summary>
+      <p>Да — в комнате можно загрузить любую фотографию, и сервис сам нарежет её на фигурные детали нужной сложности.</p>
+    </details>
+    <details>
+      <summary>Можно ли собирать пазл вместе с друзьями онлайн?</summary>
+      <p>Да — создайте комнату и поделитесь ссылкой: все участники видят один стол и собирают пазл вместе в реальном времени.</p>
+    </details>
+    <details>
+      <summary>Сколько это стоит?</summary>
+      <p>Ничего — сервис полностью бесплатный.</p>
+    </details>
+    <details>
+      <summary>На каких устройствах это работает?</summary>
+      <p>В любом браузере — на компьютере, планшете или телефоне, ничего скачивать не нужно.</p>
+    </details>
+  </section>`;
+
 async function renderLibrary(root, signal) {
+  // Тот же текст (включая FAQ), что в index.html — статичная заглушка ДО
+  // отработки JS (см. план «SEO», комментарий там же) — расхождение тут
+  // читалось бы краулером как подмена контента после рендера.
   root.innerHTML = `
     <div class="library-head">
-      <h1>Библиотека пазлов</h1>
-      <p>Собирайте встроенные пазлы прямо в браузере — детали фигурные, стол зумится и таскается. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
+      <h1>Пазлы онлайн бесплатно — собрать пазл в браузере</h1>
+      <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
     </div>
     <div id="guestNoteWrap"></div>
     <div id="categoryCarouselWrap"></div>
-    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>
+    ${LIBRARY_FAQ_HTML}`;
 
   if (!auth.isAuthenticated()) {
     const note = document.createElement("div");
@@ -739,7 +781,7 @@ async function renderLibrary(root, signal) {
 
   function paintGrid(groups) {
     grid.innerHTML = "";
-    const cards = groups.map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
+    const cards = groups.map((p, i) => { const node = buildCard(p, { eager: i === 0 }); grid.appendChild(node); return { p, node }; });
     for (const { p, node } of cards) applyBadge(node, p);
   }
 
@@ -806,7 +848,7 @@ async function renderProfile(root, userId, signal) {
     return;
   }
   const cards = groupPuzzles(data.puzzles)
-    .map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
+    .map((p, i) => { const node = buildCard(p, { eager: i === 0 }); grid.appendChild(node); return { p, node }; });
   for (const { p, node } of cards) applyBadge(node, p);
 }
 

@@ -791,7 +791,17 @@ function serveStatic(res, pathname) {
   const file = path.join(__dirname, path.normalize(pathname).replace(/^([\\/])+/, ""));
   if (file !== APP_HTML && !file.startsWith(ASSETS_DIR + path.sep)) return false;
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
-  res.writeHead(200, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" });
+  const headers = { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" };
+  // /assets/* (см. план «SEO») — раньше вообще без Cache-Control, каждый
+  // визит заново тянул app.js/styles.css и т.п. Имена файлов без хэша
+  // (см. комментарий у ROOT_FILES) — значит долгий immutable-кэш, как у
+  // /uploads/ выше, был бы небезопасен: деплой поменял бы содержимое под
+  // тем же URL, и браузеры/Яндекс с длинным кэшем не увидели бы правку
+  // неделями. Час — компромисс: заметно меньше повторных загрузок, но
+  // изменения долетают в разумный срок. index.html — без кэша вовсе,
+  // это точка входа, свежесть важнее.
+  if (file.startsWith(ASSETS_DIR + path.sep)) headers["Cache-Control"] = "public, max-age=3600";
+  res.writeHead(200, headers);
   fs.createReadStream(file).pipe(res);
   return true;
 }

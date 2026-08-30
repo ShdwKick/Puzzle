@@ -232,6 +232,27 @@ a{color:inherit}
 .menu-item:hover{background:var(--md-sys-color-surface-container)}
 .menu-item.danger{color:var(--md-sys-color-error)}
 
+/* ===================== FAQ (см. план «SEO») ===================== */
+/* Нативные <details>/<summary> — раскрывается без единой строчки JS,
+   индексируется поисковиками и без свёрнутого-по-умолчанию содержимого. */
+.faq{margin-top:2.4rem;padding-top:1.6rem;border-top:1px solid var(--md-sys-color-outline-variant)}
+.faq h2{font-size:1.25rem;font-weight:650;margin-bottom:.9rem}
+.faq details{
+  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-m);
+  padding:.2rem .9rem;margin-bottom:.6rem;
+}
+.faq summary{
+  padding:.8rem 0;font-weight:600;cursor:pointer;list-style:none;
+  display:flex;align-items:center;justify-content:space-between;gap:.8rem;
+}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{
+  content:"";flex:none;width:.6rem;height:.6rem;border-right:2px solid currentColor;border-bottom:2px solid currentColor;
+  transform:rotate(45deg);transition:transform .15s var(--ease-std);
+}
+.faq details[open] summary::after{transform:rotate(-135deg)}
+.faq details p{padding:0 0 .9rem;color:var(--md-sys-color-on-surface-variant);font-size:.92rem}
+
 /* ===================== ЗАГРУЗКА СВОЕГО ФОТО ===================== */
 .upload-form{
   display:flex;flex-direction:column;gap:.7rem;margin-bottom:1.4rem;max-width:26rem;
