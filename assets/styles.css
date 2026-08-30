@@ -134,6 +134,25 @@ a{color:inherit}
 /* ===================== CONTENT ===================== */
 .content{max-width:76rem;margin:0 auto;padding:1.4rem 1.1rem 4rem}
 
+/* ===================== ФУТЕР ===================== */
+/* Вне #app (см. index.html) — не перерисовывается роутером, живёт на
+   странице постоянно. surface-container-low — тем же тоном, что карточки
+   FAQ внутри него (.faq details ниже), лёгкое обособление от фона без
+   отдельной ещё одной поверхности. */
+.bh-footer{margin-top:3rem;border-top:1px solid var(--md-sys-color-outline-variant);background:var(--md-sys-color-surface-container-low)}
+.bh-footer-inner{max-width:76rem;margin:0 auto;padding:2.4rem 1.1rem 2rem}
+.bh-footer-top{display:flex;flex-wrap:wrap;gap:2.4rem 3rem;margin-bottom:2rem}
+.bh-footer-brand{flex:2 1 16rem;min-width:14rem}
+.bh-footer-brand .bh-lockup{margin-bottom:.6rem}
+.bh-footer-brand p{color:var(--md-sys-color-on-surface-variant);font-size:.9rem;max-width:22rem}
+.bh-footer-links{flex:1 1 11rem;min-width:9rem;display:flex;flex-direction:column;gap:.55rem}
+.bh-footer-links h3{font-size:.78rem;font-weight:650;text-transform:uppercase;letter-spacing:.04em;
+  color:var(--md-sys-color-on-surface-variant);margin-bottom:.2rem}
+.bh-footer-links a{color:var(--md-sys-color-on-surface);text-decoration:none;font-size:.92rem;width:fit-content}
+.bh-footer-links a:hover{color:var(--md-sys-color-primary);text-decoration:underline}
+.bh-footer .faq{margin-top:0;padding-top:1.8rem;border-top:1px solid var(--md-sys-color-outline-variant)}
+.bh-footer-copy{margin-top:1.8rem;color:var(--md-sys-color-on-surface-variant);font-size:.82rem}
+
 /* ===================== ЗАГОЛОВОК БИБЛИОТЕКИ ===================== */
 .library-head{margin-bottom:1.4rem}
 .library-head h1{font-size:1.6rem;font-weight:650;letter-spacing:-.01em}

@@ -363,6 +363,10 @@ const stmt = {
        moderation_status,moderation_reason,consent_at,upload_device,category_id,
        uploader_user_id,uploader_username,uploader_name,uploader_email,room_review_status)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+  // По image_file — та же логика, что у setModerationApproved и т.п.: title
+  // общий на все 4 варианта сложности одной картинки, переименование должно
+  // применяться к группе, а не к одной строке.
+  updatePuzzleTitle: db.prepare("UPDATE puzzles SET title = ? WHERE image_file = ?"),
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
   sessionIdsForPuzzle: db.prepare("SELECT id FROM room_sessions WHERE puzzle_id = ?"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
@@ -1352,6 +1356,28 @@ const server = http.createServer(async (req, res) => {
       adminLog.info("Admin удалил категорию", { categoryId: category.id, name: category.name });
       return json(res, 200, { ok: true });
     }
+    // Переименование уже загруженной через Admin картинки (см. Admin
+    // app.js wirePuzzleLibrary) — импорт с Pexels без alt-текста у фото
+    // уходит болванкой ("Пазл с Pexels"), это точечная правка задним
+    // числом. Только для admin-загруженных: у своего фото пользователя
+    // название — часть его личной библиотеки, менять его отсюда нельзя
+    // (тот же принцип, что у DELETE /internal/puzzles/:id выше).
+    const puzzleTitleMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/title$/);
+    if (puzzleTitleMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(puzzleTitleMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      if (puzzle.owner_user_id !== null || puzzle.image_file.endsWith(".svg")) {
+        return json(res, 400, { error: "not an admin-uploaded puzzle" });
+      }
+      const body = await readJson(req);
+      const title = str(body.title, 80);
+      if (!title) return json(res, 400, { error: "bad title" });
+      stmt.updatePuzzleTitle.run(title, puzzle.image_file);
+      adminLog.info("Admin переименовал картинку в библиотеке", { puzzleId: puzzle.id, oldTitle: puzzle.title, newTitle: title });
+      return json(res, 200, { ok: true, title });
+    }
+
     // Назначение категорий уже загруженной через Admin картинке — отдельно
     // от выбора при самой загрузке, иначе три стартовые картинки и всё,
     // что добавлено до этого захода, навсегда остались бы без категорий.

@@ -27,15 +27,15 @@
 <title>Пазлы онлайн бесплатно — собрать пазл в браузере | Что собираем?</title>
 <meta name="description" content="Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.">
 <link rel="canonical" href="https://puzzle.burninghouse.ru/">
-<link rel="manifest" href="manifest.json">
+<link rel="manifest" href="/manifest.json">
 <!-- SVG — основная иконка (современные браузеры, вкладка); PNG/ICO — для тех,
      кто SVG-фавиконы не читает (в т.ч. Яндекс при индексации, см. решение той
      же проблемы у остальных сервисов). Растеризованы из того же силуэта
      пламени, что и favicon.svg, просто как PNG, не через var(--flame-*). -->
-<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-<link rel="icon" href="assets/favicon-32.png" sizes="32x32" type="image/png">
-<link rel="icon" href="assets/favicon-16.png" sizes="16x16" type="image/png">
-<link rel="apple-touch-icon" href="assets/favicon-180.png">
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/assets/favicon-32.png" sizes="32x32" type="image/png">
+<link rel="icon" href="/assets/favicon-16.png" sizes="16x16" type="image/png">
+<link rel="apple-touch-icon" href="/assets/favicon-180.png">
 
 <!-- Open Graph / Twitter — чтобы ссылка в поиске и при пересылке в мессенджеры
      разворачивалась со знаком и описанием, а не голым текстом. -->
@@ -76,9 +76,11 @@
 }
 </script>
 
-<!-- FAQPage — текст должен дословно совпадать с видимым блоком .faq ниже
-     (и с LIBRARY_FAQ_HTML в app.js) — иначе Google не даст расширенный
-     сниппет за расхождение разметки и видимого контента. -->
+<!-- FAQPage — текст должен дословно совпадать с видимым блоком .faq в
+     футере ниже (см. план «Футер») — иначе Google не даст расширенный
+     сниппет за расхождение разметки и видимого контента. Футер — часть
+     статичного каркаса страницы (вне #app), не трогается роутером/JS при
+     смене маршрута, поэтому одной копии в разметке достаточно. -->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -113,9 +115,9 @@
 }
 </script>
 
-<link rel="stylesheet" href="assets/brand.css">
-<link rel="stylesheet" href="assets/theme.css">
-<link rel="stylesheet" href="assets/styles.css">
+<link rel="stylesheet" href="/assets/brand.css">
+<link rel="stylesheet" href="/assets/theme.css">
+<link rel="stylesheet" href="/assets/styles.css">
 </head>
 <body>
 
@@ -194,31 +196,72 @@
     <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
   </div>
   <p class="state-note">Загружаем библиотеку пазлов…</p>
-  <!-- Дословно LIBRARY_FAQ_HTML в app.js — см. комментарий там же. -->
-  <section class="faq">
-    <h2>Частые вопросы о сборке пазлов онлайн</h2>
-    <details>
-      <summary>Нужна ли регистрация, чтобы собирать пазлы онлайн?</summary>
-      <p>Нет — играть можно сразу и бесплатно, без регистрации. Прогресс в этом случае хранится в браузере; вход нужен только для того, чтобы он не терялся при смене устройства.</p>
-    </details>
-    <details>
-      <summary>Можно ли собрать пазл из своей фотографии?</summary>
-      <p>Да — в комнате можно загрузить любую фотографию, и сервис сам нарежет её на фигурные детали нужной сложности.</p>
-    </details>
-    <details>
-      <summary>Можно ли собирать пазл вместе с друзьями онлайн?</summary>
-      <p>Да — создайте комнату и поделитесь ссылкой: все участники видят один стол и собирают пазл вместе в реальном времени.</p>
-    </details>
-    <details>
-      <summary>Сколько это стоит?</summary>
-      <p>Ничего — сервис полностью бесплатный.</p>
-    </details>
-    <details>
-      <summary>На каких устройствах это работает?</summary>
-      <p>В любом браузере — на компьютере, планшете или телефоне, ничего скачивать не нужно.</p>
-    </details>
-  </section>
 </main>
+
+<!-- Футер — вне #app: роутер (см. app.js, route()) переписывает только
+     #app, футер остаётся на месте при любом маршруте без переучёта. Ссылки
+     "Сервис" — те же три точки входа, что в шапке (см. appbar-inner выше),
+     просто дублированы внизу для тех, кто долистал; ссылки "Семья
+     BurningHouse" — остальные публичные сервисы под тем же брендом (см.
+     Home/assets/app.js — список и подписи оттуда, порядок тот же). -->
+<footer class="bh-footer">
+  <div class="bh-footer-inner">
+    <div class="bh-footer-top">
+      <div class="bh-footer-brand">
+        <div class="bh-lockup">
+          <svg class="bh-mark" viewBox="0 0 24 24" role="img" aria-hidden="true">
+            <path fill="url(#bh-flame)" fill-rule="evenodd"
+                  d="M12 1.2C13.6 5 16.4 6.6 18.2 9.4C21.4 14.4 18.6 22.4 12 22.4C5.4 22.4 2.6 14.4 5.8 9.4C7.2 7.2 9.2 6 10.2 3.4C10.9 5.6 11.4 6.6 12 7.4C12.4 5.6 12.3 3.4 12 1.2ZM12 9.8 7.4 13.6V19.2H16.6V13.6Z"/>
+          </svg>
+          <span class="bh-name">Что собираем?</span>
+        </div>
+        <p>Пазлы онлайн бесплатно — часть семьи сервисов BurningHouse.</p>
+      </div>
+      <nav class="bh-footer-links" aria-label="Сервис">
+        <h3>Сервис</h3>
+        <a href="/">Библиотека пазлов</a>
+        <a href="/categories">Категории</a>
+        <a href="/rooms">Комнаты</a>
+      </nav>
+      <nav class="bh-footer-links" aria-label="Семья BurningHouse">
+        <h3>Семья BurningHouse</h3>
+        <a href="https://burninghouse.ru">Все сервисы</a>
+        <a href="https://brain.burninghouse.ru">Пораскинем мозгами?</a>
+        <a href="https://money.burninghouse.ru">Мои финансы</a>
+        <a href="https://movies.burninghouse.ru">Что смотрим?</a>
+        <a href="https://trip.burninghouse.ru">Куда поедем?</a>
+      </nav>
+    </div>
+
+    <!-- FAQPage-разметка в <head> должна дословно совпадать с этим блоком
+         (см. комментарий там же). -->
+    <section class="faq">
+      <h2>Частые вопросы о сборке пазлов онлайн</h2>
+      <details>
+        <summary>Нужна ли регистрация, чтобы собирать пазлы онлайн?</summary>
+        <p>Нет — играть можно сразу и бесплатно, без регистрации. Прогресс в этом случае хранится в браузере; вход нужен только для того, чтобы он не терялся при смене устройства.</p>
+      </details>
+      <details>
+        <summary>Можно ли собрать пазл из своей фотографии?</summary>
+        <p>Да — в комнате можно загрузить любую фотографию, и сервис сам нарежет её на фигурные детали нужной сложности.</p>
+      </details>
+      <details>
+        <summary>Можно ли собирать пазл вместе с друзьями онлайн?</summary>
+        <p>Да — создайте комнату и поделитесь ссылкой: все участники видят один стол и собирают пазл вместе в реальном времени.</p>
+      </details>
+      <details>
+        <summary>Сколько это стоит?</summary>
+        <p>Ничего — сервис полностью бесплатный.</p>
+      </details>
+      <details>
+        <summary>На каких устройствах это работает?</summary>
+        <p>В любом браузере — на компьютере, планшете или телефоне, ничего скачивать не нужно.</p>
+      </details>
+    </section>
+
+    <p class="bh-footer-copy">© BurningHouse</p>
+  </div>
+</footer>
 
 <!-- Шаблон карточки пазла в библиотеке -->
 <template id="tplPuzzleCard">
@@ -368,10 +411,10 @@
   </div>
 </div>
 
-<script src="assets/brand.js"></script>
-<script src="assets/auth-client.js"></script>
-<script src="assets/puzzle-shapes.js"></script>
-<script src="assets/puzzle-clusters.js"></script>
-<script src="assets/app.js"></script>
+<script src="/assets/brand.js"></script>
+<script src="/assets/auth-client.js"></script>
+<script src="/assets/puzzle-shapes.js"></script>
+<script src="/assets/puzzle-clusters.js"></script>
+<script src="/assets/app.js"></script>
 </body>
 </html>
