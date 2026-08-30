@@ -206,7 +206,23 @@ try { db.exec("ALTER TABLE puzzles ADD COLUMN upload_device TEXT"); } catch {}
 // получают одно и то же значение. ON DELETE SET NULL — удаление категории
 // в Admin не должно уносить с собой сами пазлы, только обнулять их
 // принадлежность (тот же принцип, что у остальных мягких связей в схеме).
+// УСТАРЕЛО (см. план «Категории many-to-many»): категория стала
+// многозначной, живёт в puzzle_categories ниже. Колонку не трогаем и
+// не читаем нигде дальше — конвенция репозитория не дропать колонки —
+// но и не пишем в неё больше.
 try { db.exec("ALTER TABLE puzzles ADD COLUMN category_id TEXT REFERENCES categories(id) ON DELETE SET NULL"); } catch {}
+
+// Атрибуция публикации (см. план «Категории many-to-many, автор карточки,
+// профиль»): кто изначально загрузил фото — ТОЛЬКО для показа (карточка,
+// профиль), никогда не используется для контроля доступа. Пишется один раз
+// при self-upload (POST /api/puzzles) и НИКОГДА не трогается модерацией —
+// в отличие от owner_user_id/room_id (которые setModerationApproved
+// обнуляет специально, см. комментарий выше), эти три колонки переживают
+// весь цикл модерации без изменений. У встроенных/добавленных через Admin
+// картинок остаются NULL — атрибуции нет.
+try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_user_id TEXT"); } catch {}
+try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_username TEXT"); } catch {}
+try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_name TEXT"); } catch {}
 
 // Встроенные пазлы (Холмы/Лес/Горы) видны во ВСЕХ комнатах сразу (owner_user_id
 // IS NULL — см. puzzlesForRoom) — не всем участникам конкретной комнаты они
@@ -235,6 +251,36 @@ db.exec(`
     name       TEXT NOT NULL,
     sort_order REAL NOT NULL DEFAULT 0,
     created_at INTEGER NOT NULL
+  );
+`);
+
+// Модерация самих категорий (см. план «Категории many-to-many») — админские
+// категории (POST /internal/categories) создаются сразу approved,
+// пользовательские (POST /api/categories, при публикации) — pending,
+// требуют одобрения, как и фото. DEFAULT 'approved' — уже существующие
+// Admin-категории остаются видимыми без отдельной миграции статуса. ДОЛЖНЫ
+// идти именно тут, ПОСЛЕ CREATE TABLE categories выше — ALTER TABLE на ещё
+// не существующую таблицу тихо проглатывался бы try/catch, и колонки
+// никогда бы не появлялись (была реальная ошибка при первой версии этого
+// кода — таблица создавалась заново уже без status, потому что ALTER шёл
+// раньше CREATE TABLE в файле).
+try { db.exec("ALTER TABLE categories ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
+try { db.exec("ALTER TABLE categories ADD COLUMN created_by TEXT"); } catch {}
+try { db.exec("ALTER TABLE categories ADD COLUMN moderation_reason TEXT"); } catch {}
+
+// Категория — many-to-many (см. план «Категории many-to-many»): один пазл
+// может быть в нескольких категориях сразу, поэтому связь — отдельная
+// таблица, не колонка на puzzles (puzzles.category_id выше — устаревший
+// одиночный вариант, оставлен нетронутым, но больше не используется).
+// Ключ — image_file (ГРУППА загрузки), не puzzle_id: категория, как и
+// moderation_status/title, относится ко всем 6 уровням сложности разом.
+// ON DELETE CASCADE — удаление категории просто убирает связи, сами
+// пазлы не трогает (то же мягкое поведение, что раньше давал SET NULL).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS puzzle_categories (
+    image_file  TEXT NOT NULL,
+    category_id TEXT NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+    PRIMARY KEY (image_file, category_id)
   );
 `);
 
@@ -277,8 +323,9 @@ const stmt = {
     ORDER BY sort_order, created_at`),
   insertCustomPuzzle: db.prepare(`INSERT INTO puzzles
       (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id,room_id,
-       moderation_status,moderation_reason,consent_at,upload_device,category_id)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+       moderation_status,moderation_reason,consent_at,upload_device,category_id,
+       uploader_user_id,uploader_username,uploader_name)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
   sessionIdsForPuzzle: db.prepare("SELECT id FROM room_sessions WHERE puzzle_id = ?"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
@@ -292,12 +339,22 @@ const stmt = {
   setModerationPending: db.prepare("UPDATE puzzles SET moderation_status = 'pending', moderation_reason = NULL WHERE image_file = ?"),
   setModerationApproved: db.prepare("UPDATE puzzles SET owner_user_id = NULL, room_id = NULL, moderation_status = 'approved', moderation_reason = NULL WHERE image_file = ?"),
   setModerationRejected: db.prepare("UPDATE puzzles SET moderation_status = 'rejected', moderation_reason = ? WHERE image_file = ?"),
-  // Категории (см. план «Категории пазлов в библиотеке»).
+  // Категории (см. план «Категории many-to-many, автор карточки, профиль»).
   listCategories: db.prepare("SELECT * FROM categories ORDER BY sort_order, created_at"),
+  listApprovedCategories: db.prepare("SELECT * FROM categories WHERE status = 'approved' ORDER BY sort_order, created_at"),
+  listPendingCategories: db.prepare("SELECT * FROM categories WHERE status = 'pending' ORDER BY created_at"),
   categoryById: db.prepare("SELECT * FROM categories WHERE id = ?"),
-  insertCategory: db.prepare("INSERT INTO categories (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)"),
+  insertCategory: db.prepare("INSERT INTO categories (id, name, status, created_by, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
   deleteCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
-  setPuzzleCategory: db.prepare("UPDATE puzzles SET category_id = ? WHERE image_file = ?"),
+  setCategoryApproved: db.prepare("UPDATE categories SET status = 'approved', moderation_reason = NULL WHERE id = ?"),
+  setCategoryRejected: db.prepare("UPDATE categories SET status = 'rejected', moderation_reason = ? WHERE id = ?"),
+  // many-to-many: image_file (группа) <-> category_id. deleteCategoryLinks +
+  // insertCategoryLink вместе образуют "заменить весь набор" (setPuzzleCategories
+  // ниже) — та же логика и для назначения через Admin, и для публикации.
+  categoryIdsForImage: db.prepare("SELECT category_id FROM puzzle_categories WHERE image_file = ?"),
+  deleteCategoryLinks: db.prepare("DELETE FROM puzzle_categories WHERE image_file = ?"),
+  insertCategoryLink: db.prepare("INSERT OR IGNORE INTO puzzle_categories (image_file, category_id) VALUES (?, ?)"),
+  approvedByUploader: db.prepare("SELECT * FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'approved' ORDER BY created_at DESC"),
   // Группа встроенных пазлов, добавленных Admin (owner_user_id IS NULL —
   // "= ?" тут не сработал бы, NULL с ним никогда не совпадает). Отличаем от
   // трёх стартовых картинок (BUILTIN_IMAGES, всегда .svg) расширением файла
@@ -355,6 +412,35 @@ Object.assign(stmt, {
 
 // ───────────────────────── мелкие утилиты ─────────────────────────
 const now = () => Date.now();
+
+/** Заменяет ПОЛНЫЙ набор категорий для группы загрузки (image_file) —
+ *  используется и при назначении категорий через Admin, и при публикации
+ *  (см. план «Категории many-to-many») — оба места хотят "вот итоговый
+ *  список", не добавление к уже имеющемуся. */
+function setPuzzleCategories(imageFile, categoryIds) {
+  stmt.deleteCategoryLinks.run(imageFile);
+  for (const categoryId of categoryIds) stmt.insertCategoryLink.run(imageFile, categoryId);
+}
+function categoryIdsFor(imageFile) {
+  return stmt.categoryIdsForImage.all(imageFile).map(r => r.category_id);
+}
+
+// Системная категория «Пользовательские» (см. план) — фиксированный id, тот
+// же приём, что у BUILTIN_IMAGES (hills/forest/mountains): сеется один раз,
+// id никогда не меняется, чтобы на неё можно было безопасно ссылаться из
+// кода (publish, guard на удаление). Всегда approved, без created_by (не
+// пользовательская заявка).
+const USER_CATEGORY_ID = "user-published";
+if (!stmt.categoryById.get(USER_CATEGORY_ID)) {
+  stmt.insertCategory.run(USER_CATEGORY_ID, "Пользовательские", "approved", null, 0, now());
+}
+
+// Одноразовая миграция старого одиночного puzzles.category_id в новую
+// many-to-many таблицу (см. план) — INSERT OR IGNORE делает её идемпотентной
+// на каждый рестарт, DISTINCT нужен, потому что category_id одинаков на всех
+// 6 строках-вариантах одной группы.
+db.exec(`INSERT OR IGNORE INTO puzzle_categories (image_file, category_id)
+  SELECT DISTINCT image_file, category_id FROM puzzles WHERE category_id IS NOT NULL`);
 
 function json(res, code, obj) {
   res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -496,7 +582,13 @@ function puzzlePayload(p) {
     // buildCard в app.js гейтит по mine), см. план «Модерация загруженных
     // фото». Не секрет: строка внутри уже видимой в этой комнате карточки.
     moderationStatus: p.moderation_status || null, moderationReason: p.moderation_reason || null,
-    categoryId: p.category_id || null,
+    categoryIds: categoryIdsFor(p.image_file),
+    // Атрибуция (см. план «Категории many-to-many, автор карточки, профиль»)
+    // — null у встроенных/добавленных через Admin, переживает модерацию
+    // (в отличие от ownerUserId, который approve обнуляет).
+    uploaderUserId: p.uploader_user_id || null,
+    uploaderUsername: p.uploader_username || null,
+    uploaderName: p.uploader_name || null,
   };
 }
 
@@ -807,7 +899,7 @@ const server = http.createServer(async (req, res) => {
         if (!groups.has(row.image_file)) {
           groups.set(row.image_file, {
             id: row.id, title: row.title, imageUrl: `/uploads/${row.image_file}`, variants: 0,
-            createdAt: row.created_at, categoryId: row.category_id || null,
+            createdAt: row.created_at, categoryIds: categoryIdsFor(row.image_file),
           });
         }
         groups.get(row.image_file).variants++;
@@ -828,18 +920,18 @@ const server = http.createServer(async (req, res) => {
       if (!mime) return json(res, 415, { error: "not an image" });
       const width = parseInt(body.width, 10) || 0;
       const height = parseInt(body.height, 10) || 0;
-      // categoryId необязателен (см. план) — "Без категории" на форме
-      // Admin шлёт пусто/null, тогда пазл просто некатегоризирован, как и
-      // всё, что было загружено до этого захода.
-      let categoryId = null;
-      if (body.categoryId) {
-        if (!stmt.categoryById.get(body.categoryId)) return json(res, 400, { error: "bad category" });
-        categoryId = body.categoryId;
+      // categoryIds необязателен (см. план «Категории many-to-many») —
+      // пустой массив/отсутствие поля значит пазл просто некатегоризирован.
+      const categoryIds = [];
+      for (const cid of Array.isArray(body.categoryIds) ? body.categoryIds : []) {
+        if (!stmt.categoryById.get(cid)) return json(res, 400, { error: "bad category" });
+        categoryIds.push(cid);
       }
 
       const groupId = crypto.randomUUID();
       const file = groupId + PHOTO_MIME[mime];
       fs.writeFileSync(path.join(PUZZLE_PHOTO_DIR, file), buf);
+      setPuzzleCategories(file, categoryIds);
       const ts = now();
       const variants = PIECE_PRESETS.map(total => {
         const { rows, cols } = gridForPieceTarget(total, width, height);
@@ -848,7 +940,8 @@ const server = http.createServer(async (req, res) => {
         // moderation_status='approved' сразу — тут нет автора-загрузчика,
         // которого нужно домодерировать: сам факт, что картинку кладёт
         // Admin, УЖЕ модерация. upload_device=null — не с браузера.
-        stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, null, null, "approved", null, ts, null, categoryId);
+        // uploader_*=null — у добавленного через Admin атрибуции нет.
+        stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, null, null, "approved", null, ts, null, null, null, null, null);
         return puzzlePayload(stmt.puzzle.get(id));
       });
       adminLog.info("Admin добавил картинку в библиотеку", { title, variants: variants.length });
@@ -950,12 +1043,16 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
-    // Категории (см. план «Категории пазлов в библиотеке») — заводятся и
-    // назначаются только через Admin, тот же checkAdminKey-гейт, что у
-    // /internal/puzzles выше.
+    // Категории (см. план «Категории many-to-many, автор карточки, профиль»)
+    // — создание через Admin (мгновенно approved) — тот же checkAdminKey-
+    // гейт, что у /internal/puzzles выше. Пользовательские заявки —
+    // отдельный публичный роут POST /api/categories внутри api() ниже (там
+    // уже есть user из JWT).
     if (p === "/internal/categories" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
-      return json(res, 200, { categories: stmt.listCategories.all().map(c => ({ id: c.id, name: c.name, createdAt: c.created_at })) });
+      // Все статусы разом — админу нужно видеть и pending (для будущей
+      // модерации), не только approved.
+      return json(res, 200, { categories: stmt.listCategories.all().map(c => ({ id: c.id, name: c.name, status: c.status, createdBy: c.created_by, createdAt: c.created_at })) });
     }
     if (p === "/internal/categories" && req.method === "POST") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
@@ -965,37 +1062,69 @@ const server = http.createServer(async (req, res) => {
       const id = crypto.randomUUID(), ts = now();
       // sort_order = ts — новые категории естественно уходят в конец
       // списка, та же идея, что уже используется для сортировки своих фото.
-      stmt.insertCategory.run(id, name, ts, ts);
+      // Admin создаёт категорию сразу approved, без created_by — не заявка.
+      stmt.insertCategory.run(id, name, "approved", null, ts, ts);
       adminLog.info("Admin создал категорию", { categoryId: id, name });
       return json(res, 200, { id, name });
     }
     const categoryDeleteMatch = p.match(/^\/internal\/categories\/([\w-]+)$/);
     if (categoryDeleteMatch && req.method === "DELETE") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      if (categoryDeleteMatch[1] === USER_CATEGORY_ID) return json(res, 400, { error: "protected category" });
       const category = stmt.categoryById.get(categoryDeleteMatch[1]);
       if (!category) return json(res, 404, { error: "not found" });
-      // ON DELETE SET NULL на puzzles.category_id (см. схему) — пазлы этой
-      // категории не удаляются, просто становятся некатегоризированными.
+      // ON DELETE CASCADE на puzzle_categories (см. схему) — пазлы этой
+      // категории не удаляются, просто теряют связь с ней.
       stmt.deleteCategory.run(category.id);
       adminLog.info("Admin удалил категорию", { categoryId: category.id, name: category.name });
       return json(res, 200, { ok: true });
     }
-    // Назначение категории уже загруженной через Admin картинке — отдельно
+    // Назначение категорий уже загруженной через Admin картинке — отдельно
     // от выбора при самой загрузке, иначе три стартовые картинки и всё,
-    // что добавлено до этого захода, навсегда остались бы без категории.
-    const puzzleCategoryMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/category$/);
+    // что добавлено до этого захода, навсегда остались бы без категорий.
+    // Множественное число в пути — теперь принимает массив, заменяет весь
+    // набор (см. setPuzzleCategories).
+    const puzzleCategoryMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/categories$/);
     if (puzzleCategoryMatch && req.method === "POST") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       const puzzle = stmt.puzzle.get(puzzleCategoryMatch[1]);
       if (!puzzle) return json(res, 404, { error: "not found" });
       const body = await readJson(req);
-      let categoryId = null;
-      if (body.categoryId) {
-        if (!stmt.categoryById.get(body.categoryId)) return json(res, 400, { error: "bad category" });
-        categoryId = body.categoryId;
+      const categoryIds = [];
+      for (const cid of Array.isArray(body.categoryIds) ? body.categoryIds : []) {
+        if (!stmt.categoryById.get(cid)) return json(res, 400, { error: "bad category" });
+        categoryIds.push(cid);
       }
-      stmt.setPuzzleCategory.run(categoryId, puzzle.image_file);
-      adminLog.info("Admin изменил категорию пазла", { puzzleId: puzzle.id, title: puzzle.title, categoryId });
+      setPuzzleCategories(puzzle.image_file, categoryIds);
+      adminLog.info("Admin изменил категории пазла", { puzzleId: puzzle.id, title: puzzle.title, categoryIds });
+      return json(res, 200, { ok: true });
+    }
+
+    // Модерация пользовательских категорий (см. план) — зеркалит
+    // /internal/moderation/photos/* выше один в один.
+    if (p === "/internal/moderation/categories" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, { categories: stmt.listPendingCategories.all().map(c => ({ id: c.id, name: c.name, createdBy: c.created_by, createdAt: c.created_at })) });
+    }
+    const catModApproveMatch = p.match(/^\/internal\/moderation\/categories\/([\w-]+)\/approve$/);
+    if (catModApproveMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const category = stmt.categoryById.get(catModApproveMatch[1]);
+      if (!category) return json(res, 404, { error: "not found" });
+      if (category.status !== "pending") return json(res, 400, { error: "not pending" });
+      stmt.setCategoryApproved.run(category.id);
+      adminLog.info("Admin одобрил категорию", { categoryId: category.id, name: category.name });
+      return json(res, 200, { ok: true });
+    }
+    const catModRejectMatch = p.match(/^\/internal\/moderation\/categories\/([\w-]+)\/reject$/);
+    if (catModRejectMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const category = stmt.categoryById.get(catModRejectMatch[1]);
+      if (!category) return json(res, 404, { error: "not found" });
+      const body = await readJson(req);
+      const reason = str(body.reason, 400) || null;
+      stmt.setCategoryRejected.run(reason, category.id);
+      adminLog.info("Admin отклонил категорию", { categoryId: category.id, name: category.name, reason });
       return json(res, 200, { ok: true });
     }
 
@@ -1005,10 +1134,11 @@ const server = http.createServer(async (req, res) => {
       maxPhotoBytes: MAX_PHOTO_BYTES, piecePresets: PIECE_PRESETS,
     });
 
-    // Категории — публично, без входа, как и сама библиотека (см. план
-    // «Категории пазлов в библиотеке», карусель в renderLibrary).
+    // Категории — публично, без входа, как и сама библиотека (см. план,
+    // карусель в renderLibrary). Только approved — pending пока не видны,
+    // rejected не видны никогда.
     if (p === "/api/categories" && req.method === "GET") {
-      return json(res, 200, stmt.listCategories.all().map(c => ({ id: c.id, name: c.name })));
+      return json(res, 200, stmt.listApprovedCategories.all().map(c => ({ id: c.id, name: c.name })));
     }
 
     if (p.startsWith("/api/")) {
@@ -1036,6 +1166,38 @@ const server = http.createServer(async (req, res) => {
 async function api(req, res, url, user) {
   const seg = url.pathname.split("/").filter(Boolean); // ["api", "puzzles", ":id", "progress"]
   const m = req.method;
+
+  // Пользовательская заявка на новую категорию (см. план «Категории
+  // many-to-many») — в отличие от /internal/categories (Admin, мгновенно
+  // approved), эта уходит на модерацию. Клиент публикации создаёт новую
+  // категорию не через этот роут напрямую, а полем newCategoryName внутри
+  // POST /puzzles/:id/publish (там же и привязка к пазлу, одним запросом);
+  // этот роут — тот же примитив отдельно, на случай прямого использования.
+  if (seg[1] === "categories" && seg.length === 2 && m === "POST") {
+    if (!user) return json(res, 401, { error: "unauthorized" });
+    const body = await readJson(req);
+    const name = str(body.name, 80);
+    if (!name) return json(res, 400, { error: "bad name" });
+    const id = crypto.randomUUID();
+    stmt.insertCategory.run(id, name, "pending", user.id, 0, now());
+    adminLog.info("Пользователь предложил категорию", { userId: user.id, categoryId: id, name });
+    return json(res, 200, { id, name, status: "pending" });
+  }
+
+  // Профиль: все ОДОБРЕННЫЕ публикации конкретного пользователя (см. план)
+  // — публично, без входа, как и сама библиотека. username/name берём из
+  // первой найденной строки (денормализованы на puzzles.uploader_* при
+  // загрузке, отдельной таблицы пользователей в Puzzle нет и не будет —
+  // тот же приём, что у room_members, см. схему).
+  const userPuzzlesMatch = seg[1] === "users" && seg[2] && seg[3] === "puzzles" && seg.length === 4 && m === "GET";
+  if (userPuzzlesMatch) {
+    const rows = stmt.approvedByUploader.all(seg[2]);
+    return json(res, 200, {
+      username: rows[0]?.uploader_username || null,
+      name: rows[0]?.uploader_name || null,
+      puzzles: rows.map(puzzlePayload),
+    });
+  }
 
   // Библиотека пазлов: без входа или без ?roomId= — только встроенные
   // (гость играет без сохранения, это нормальный режим сервиса, не
@@ -1104,7 +1266,7 @@ async function api(req, res, url, user) {
       const { rows, cols } = gridForPieceTarget(total, width, height);
       const id = crypto.randomUUID();
       const seed = crypto.randomInt(1, 2 ** 31 - 1);
-      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId, null, null, ts, deviceId, null);
+      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId, null, null, ts, deviceId, null, user.id, user.username || null, user.name || null);
       return puzzlePayload(stmt.puzzle.get(id));
     });
     adminLog.info("Загружено своё фото", { userId: user.id, roomId, title, variants: variants.length });
@@ -1146,8 +1308,32 @@ async function api(req, res, url, user) {
     if (puzzle.moderation_status === "pending" || puzzle.moderation_status === "approved") {
       return json(res, 409, { error: "already " + puzzle.moderation_status });
     }
+
+    // Категории (см. план «Категории many-to-many») — любое опубликованное
+    // фото автоматически попадает в системную «Пользовательские»,
+    // независимо от выбора пользователя. Выбранные существующие категории
+    // должны быть approved (pending нельзя выбрать — их ещё не видно в
+    // публичном списке, см. GET /api/categories). Новая категория —
+    // необязательное текстовое поле, уходит на модерацию сразу же.
+    const categoryIds = new Set([USER_CATEGORY_ID]);
+    for (const cid of Array.isArray(body.categoryIds) ? body.categoryIds : []) {
+      const cat = stmt.categoryById.get(cid);
+      if (!cat || cat.status !== "approved") return json(res, 400, { error: "bad category" });
+      categoryIds.add(cid);
+    }
+    let newCategory = null;
+    if (body.newCategoryName) {
+      const name = str(body.newCategoryName, 80);
+      if (name) {
+        newCategory = { id: crypto.randomUUID(), name };
+        stmt.insertCategory.run(newCategory.id, name, "pending", user.id, 0, now());
+        categoryIds.add(newCategory.id);
+      }
+    }
+    setPuzzleCategories(puzzle.image_file, [...categoryIds]);
+
     stmt.setModerationPending.run(puzzle.image_file);
-    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title });
+    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, categoryIds: [...categoryIds], newCategory: newCategory?.name || null });
     return json(res, 200, { ok: true, moderationStatus: "pending" });
   }
 

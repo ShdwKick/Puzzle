@@ -120,7 +120,10 @@ function openDifficultyModal(title, variants, onPlay) {
   variants.forEach((v, i) => {
     const opt = document.createElement("option");
     opt.value = String(i);
-    opt.textContent = DIFFICULTY_LABELS[i] || `${v.gridRows * v.gridCols} деталей`;
+    // Число деталей — рядом с названием уровня (см. правку): без него все
+    // уровни выглядят одинаково информативными, хотя разница между ними —
+    // именно в количестве деталей.
+    opt.textContent = `${DIFFICULTY_LABELS[i] || `Уровень ${i + 1}`} — ${v.gridRows * v.gridCols} деталей`;
     select.appendChild(opt);
   });
   document.getElementById("difficultyAsymmetric").checked = false; // не запоминаем между открытиями — осознанный выбор каждый раз
@@ -145,12 +148,27 @@ document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
  * index.html, "pending"-переменная переносит контекст между открытием и
  * подтверждением. */
 let pendingPublishId = null;
-function openPublishModal(id, title, onDone) {
+async function openPublishModal(id, title, onDone) {
   document.getElementById("publishModalTitle").textContent = `Опубликовать «${title}»`;
   const list = document.getElementById("publishCategoryList");
   list.innerHTML = [...PROHIBITED_TIER_A, ...PROHIBITED_TIER_B].map(c => `<li>${c}</li>`).join("");
   document.getElementById("publishConsent").checked = false;
+  document.getElementById("publishNewCategoryName").value = "";
   document.getElementById("publishError").hidden = true;
+  // Категории — многозначный выбор чекбоксами (см. план «Категории
+  // many-to-many»), список — только approved (pending пока не выбрать,
+  // их ещё не видно в публичном GET /api/categories).
+  const categoriesBox = document.getElementById("publishLibraryCategories");
+  categoriesBox.innerHTML = '<p class="state-note">Загрузка категорий…</p>';
+  try {
+    const categories = await getCategories();
+    categoriesBox.innerHTML = categories.length
+      ? categories.map(c => `
+          <label style="display:inline-flex;align-items:center;gap:.3em;margin:0 .8em .3em 0">
+            <input type="checkbox" name="publishCategory" value="${c.id}"> ${c.name}
+          </label>`).join("")
+      : "";
+  } catch { categoriesBox.innerHTML = ""; }
   pendingPublishId = { id, onDone };
   openModal("publishModalBackdrop");
 }
@@ -165,10 +183,12 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
     return;
   }
   const { id, onDone } = pendingPublishId;
+  const categoryIds = [...document.querySelectorAll('input[name="publishCategory"]:checked')].map(cb => cb.value);
+  const newCategoryName = document.getElementById("publishNewCategoryName").value.trim();
   const btn = document.getElementById("publishConfirmBtn");
   btn.disabled = true;
   try {
-    await publishPuzzle(id);
+    await publishPuzzle(id, { categoryIds, newCategoryName });
     closeModal("publishModalBackdrop");
     pendingPublishId = null;
     onDone();
@@ -264,6 +284,15 @@ function roomFetch(url, opts) {
   return auth.isAuthenticated() ? auth.fetch(url, opts) : fetch(url, opts);
 }
 
+/** Список СВОИХ комнат (см. план «Добавление в комнату», дропдаун на
+ *  карточке библиотеки) — работает и без входа, через анонимную cookie-
+ *  личность (roomFetch), тот же роут, что и renderRoomsList. */
+async function getRooms() {
+  const res = await roomFetch("/api/rooms");
+  if (!res.ok) throw new Error("rooms fetch failed");
+  return res.json();
+}
+
 async function uploadPuzzlePhoto(file, title, roomId) {
   const { blob, width, height } = await shrinkForPuzzle(file);
   // consent=1 — обязательное согласие с запрещёнными категориями (см. план
@@ -307,9 +336,10 @@ async function deletePuzzle(id) {
 /** Отправка своего фото на публикацию в общую библиотеку (см. план
  *  «Модерация загруженных фото») — отдельное, более строгое согласие, не то
  *  же самое, что consent=1 при обычной загрузке в комнату. */
-async function publishPuzzle(id) {
+async function publishPuzzle(id, { categoryIds, newCategoryName } = {}) {
   const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}/publish`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ consent: true }),
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ consent: true, categoryIds, newCategoryName: newCategoryName || undefined }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "publish failed");
@@ -440,6 +470,73 @@ document.getElementById("accountModalLogout").addEventListener("click", () => {
   auth.logout();
 });
 
+/* ───────────────────────── меню «…» карточки ─────────────────────────
+ * Реверанс — тот же паттерн, что в Movies (renderCardMenu/.menu-wrap/.menu/
+ * .menu-item, один открытый список на раз, закрытие по клику вовне): все
+ * второстепенные действия карточки (Удалить/Скрыть, Опубликовать,
+ * + В комнату) собраны в один выпадающий список вместо отдельных кнопок,
+ * которые не влезали в узкую карточку. */
+let openCardMenu = null; // { menu, btn } открытого меню, либо null
+function closeCardMenu() {
+  if (!openCardMenu) return;
+  const { menu, btn } = openCardMenu;
+  menu.hidden = true;
+  btn.setAttribute("aria-expanded", "false");
+  openCardMenu = null;
+}
+document.addEventListener("click", e => {
+  if (!openCardMenu) return;
+  const { menu, btn } = openCardMenu;
+  if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) closeCardMenu();
+});
+
+/** items — [{label, danger, onClick(menuEl)}]. onClick получает сам DOM-узел
+ *  .menu — нужно пункту «+ В комнату», который подменяет содержимое меню
+ *  списком комнат вместо того, чтобы сразу закрыться (тот же приём, что
+ *  renderAddToMenu в Movies). Остальные пункты сами вызывают closeCardMenu(). */
+function renderCardMenu(items) {
+  const wrap = document.createElement("div");
+  // .menu-wrap уже существует в этом файле (шапка, #accountMenuWrap) —
+  // переиспользуем тот же класс, а не заводим новый, конкретное
+  // позиционирование поверх карточки — контекстным правилом в CSS
+  // (.puzzle-card > .menu-wrap), тем же приёмом, что у Movies
+  // (.movie-tile-poster-wrap .menu-wrap).
+  wrap.className = "menu-wrap";
+  wrap.innerHTML = `
+    <button class="icon-btn xs" type="button" title="Действия" aria-label="Действия" aria-haspopup="true" aria-expanded="false">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
+    </button>
+    <div class="menu" hidden></div>`;
+  wrap.addEventListener("click", ev => ev.stopPropagation());
+  const btn = wrap.querySelector("button");
+  const menu = wrap.querySelector(".menu");
+
+  function renderItems() {
+    menu.innerHTML = "";
+    for (const item of items) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "menu-item" + (item.danger ? " danger" : "");
+      b.textContent = item.label;
+      b.addEventListener("click", () => item.onClick(menu));
+      menu.appendChild(b);
+    }
+  }
+  renderItems();
+
+  btn.addEventListener("click", ev => {
+    ev.stopPropagation();
+    const reopening = openCardMenu && openCardMenu.menu === menu;
+    closeCardMenu();
+    if (reopening) return;
+    renderItems(); // сброс, если предыдущее открытие подменило содержимое (список комнат)
+    menu.hidden = false;
+    btn.setAttribute("aria-expanded", "true");
+    openCardMenu = { menu, btn };
+  });
+  return wrap;
+}
+
 /* ───────────────────────── библиотека ───────────────────────── */
 function buildCard(p, opts = {}) {
   const tpl = document.getElementById("tplPuzzleCard");
@@ -449,70 +546,47 @@ function buildCard(p, opts = {}) {
   img.alt = p.title;
   $(node, ".puzzle-card-title").textContent = p.title;
   const variants = p.variants || [p];
-  $(node, ".puzzle-card-meta").textContent = variants.length > 1
-    ? `${variants.length} ${plural(variants.length, "уровень", "уровня", "уровней")} сложности`
-    : `${p.gridCols}×${p.gridRows} · ${p.gridCols * p.gridRows} деталей`;
+  // «N уровней сложности» убрано — у нас нет настройки доступных уровней,
+  // их всегда PIECE_PRESETS.length (6) у любого пазла, показывать это на
+  // каждой карточке было чисто шумом. Число деталей конкретного уровня
+  // теперь видно в самой модалке выбора сложности (см. openDifficultyModal).
+  const metaEl = $(node, ".puzzle-card-meta");
+  metaEl.hidden = true;
+  const body = $(node, ".puzzle-card-body");
+  // Атрибуция (см. план «Категории many-to-many, автор карточки, профиль»)
+  // — только у ОДОБРЕННЫХ публикаций: это элемент публичной библиотеки, не
+  // черновика — на своём же приватном/ждущем модерации фото она была бы
+  // преждевременной (то, что ещё не прошло модерацию, не должно выглядеть
+  // как уже опубликованное). Встроенные/добавленные через Admin — без
+  // uploaderUsername вовсе, туда эта ветка и так не попадает. Переживает
+  // модерацию (см. server.js, uploader_* не трогаются approve/reject), в
+  // отличие от ownerUserId, который approve обнуляет.
+  if (p.uploaderUsername && p.moderationStatus === "approved") {
+    const author = document.createElement("a");
+    author.className = "puzzle-card-author";
+    author.href = `#/profile/${encodeURIComponent(p.uploaderUserId)}`;
+    author.textContent = `Добавил: ${p.uploaderUsername}`;
+    body.insertBefore(author, metaEl.nextSibling);
+  }
   const mine = p.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === p.ownerUserId;
   // Встроенный пазл (ownerUserId===null) внутри комнаты (opts.roomId задан
   // только в renderRoom) — можно скрыть из ЭТОЙ комнаты, доступно любому
   // участнику, не только владельцу комнаты (это общая настройка комнаты, не
   // личная вещь). В соло-библиотеке (opts.roomId нет) встроенные пазлы
-  // по-прежнему не удаляются никак — крестика там для них не будет.
+  // по-прежнему не удаляются никак.
   const canHideDefault = !p.ownerUserId && opts.roomId && auth.isAuthenticated();
-  if ((mine || canHideDefault) && opts.allowDelete !== false) {
-    const del = document.createElement("button");
-    del.className = "icon-btn xs puzzle-card-delete";
-    del.type = "button"; del.title = mine ? "Удалить" : "Скрыть из этой комнаты";
-    del.setAttribute("aria-label", del.title);
-    del.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
-    del.addEventListener("click", async ev => {
-      ev.stopPropagation();
-      if (mine) {
-        if (!confirm(`Удалить пазл «${p.title}»?`)) return;
-        try { await deletePuzzle(p.id); node.remove(); }
-        catch (err) { alert(err.message === "in use" ? "Этим пазлом уже играли в комнате — удалить нельзя." : "Не удалось удалить."); }
-      } else {
-        if (!confirm(`Скрыть пазл «${p.title}» из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.`)) return;
-        try { await hidePuzzleInRoom(opts.roomId, variants); node.remove(); }
-        catch { alert("Не удалось скрыть."); }
-      }
-    });
-    const thumb = $(node, ".puzzle-card-thumb");
-    thumb.classList.add("has-delete");
-    thumb.appendChild(del);
+
+  // Статус модерации — текстовая строка, не пункт меню (только на своих
+  // фото, см. план «Модерация загруженных фото»).
+  if (mine && p.moderationStatus) {
+    const status = document.createElement("p");
+    status.className = "puzzle-card-moderation " + p.moderationStatus;
+    status.textContent = p.moderationStatus === "pending" ? "На модерации"
+      : p.moderationStatus === "approved" ? "Опубликовано"
+      : `Отклонено: ${p.moderationReason || "без причины"}`;
+    body.insertBefore(status, $(node, ".puzzle-card-play"));
   }
-  // Статус модерации + кнопка «Опубликовать» — только на своих фото (см.
-  // план «Модерация загруженных фото»). Своё фото рендерится только внутри
-  // комнаты (renderRoom), соло-библиотека их не показывает вовсе (см.
-  // README «Свои фото») — mine тут достаточно, отдельно проверять
-  // opts.roomId не нужно.
-  if (mine) {
-    const body = $(node, ".puzzle-card-body");
-    const playBtnEl = $(node, ".puzzle-card-play");
-    if (p.moderationStatus) {
-      const status = document.createElement("p");
-      status.className = "puzzle-card-moderation " + p.moderationStatus;
-      status.textContent = p.moderationStatus === "pending" ? "На модерации"
-        : p.moderationStatus === "approved" ? "Опубликовано"
-        : `Отклонено: ${p.moderationReason || "без причины"}`;
-      body.insertBefore(status, playBtnEl);
-    }
-    if (!p.moderationStatus || p.moderationStatus === "rejected") {
-      const pubBtn = document.createElement("button");
-      pubBtn.className = "btn text sm puzzle-card-publish";
-      pubBtn.type = "button";
-      pubBtn.textContent = p.moderationStatus === "rejected" ? "Отправить снова" : "Опубликовать";
-      pubBtn.addEventListener("click", ev => {
-        ev.stopPropagation();
-        openPublishModal(p.id, p.title, () => {
-          p.moderationStatus = "pending"; p.moderationReason = null;
-          const fresh = buildCard(p, opts);
-          node.replaceWith(fresh);
-        });
-      });
-      body.insertBefore(pubBtn, playBtnEl);
-    }
-  }
+
   const playBtn = $(node, ".puzzle-card-play");
   const onPlay = opts.onPlay || ((v, asymmetric) => {
     location.hash = `#/table/${encodeURIComponent(v.id)}${asymmetric ? "?shape=asym" : "?shape=normal"}`;
@@ -524,6 +598,85 @@ function buildCard(p, opts = {}) {
     if (variants.length > 1) openDifficultyModal(p.title, variants, onPlay);
     else onPlay(variants[0]);
   });
+
+  // Второстепенные действия — одно меню «…» (см. renderCardMenu выше,
+  // реверанс Movies) вместо отдельных кнопок, которые не влезали в узкую
+  // карточку (см. правку). Пункты собираются условно — если ни один не
+  // подошёл, меню на карточке просто не появляется.
+  const items = [];
+  if (mine && opts.allowDelete !== false) {
+    items.push({ label: "Удалить", danger: true, onClick: async () => {
+      closeCardMenu();
+      if (!confirm(`Удалить пазл «${p.title}»?`)) return;
+      try { await deletePuzzle(p.id); node.remove(); }
+      catch (err) { alert(err.message === "in use" ? "Этим пазлом уже играли в комнате — удалить нельзя." : "Не удалось удалить."); }
+    } });
+  } else if (canHideDefault && opts.allowDelete !== false) {
+    items.push({ label: "Скрыть из этой комнаты", onClick: async () => {
+      closeCardMenu();
+      if (!confirm(`Скрыть пазл «${p.title}» из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.`)) return;
+      try { await hidePuzzleInRoom(opts.roomId, variants); node.remove(); }
+      catch { alert("Не удалось скрыть."); }
+    } });
+  }
+  if (mine && (!p.moderationStatus || p.moderationStatus === "rejected")) {
+    items.push({ label: p.moderationStatus === "rejected" ? "Отправить снова" : "Опубликовать", onClick: () => {
+      closeCardMenu();
+      openPublishModal(p.id, p.title, () => {
+        p.moderationStatus = "pending"; p.moderationReason = null;
+        const fresh = buildCard(p, opts);
+        node.replaceWith(fresh);
+      });
+    } });
+  }
+  // «+ В комнату» — только в библиотеке/профиле (opts.roomId не задан):
+  // внутри самой комнаты (renderRoom) у пазла уже есть прямое «За стол» в
+  // ЭТУ комнату, второй выбор комнаты там был бы лишним (см. план).
+  if (!opts.roomId) {
+    async function addToRoom(roomId, variant, asymmetric) {
+      try {
+        const sessionId = await startRoomSession(roomId, variant.id, asymmetric);
+        location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
+      } catch (e) {
+        alert(e.message === "room session limit reached"
+          ? `Достигнут лимит одновременных сборок в этой комнате${typeof e.limit === "number" ? ` (${e.limit})` : ""}.`
+          : "Не удалось начать сборку.");
+      }
+    }
+    function pickVariantThenAdd(roomId) {
+      if (variants.length > 1) openDifficultyModal(p.title, variants, (v, asymmetric) => addToRoom(roomId, v, asymmetric));
+      else addToRoom(roomId, variants[0]);
+    }
+    items.push({ label: "+ В комнату", onClick: async menuEl => {
+      // Подменяем содержимое меню списком комнат вместо того, чтобы сразу
+      // закрыться (тот же приём, что renderAddToMenu в Movies) — второй
+      // клик уже выбирает конкретную комнату.
+      menuEl.innerHTML = '<p class="state-note" style="padding:.5em .8em">Загрузка…</p>';
+      let rooms;
+      try { rooms = await getRooms(); }
+      catch { menuEl.innerHTML = '<p class="state-note" style="padding:.5em .8em">Не удалось загрузить комнаты.</p>'; return; }
+      if (!openCardMenu || openCardMenu.menu !== menuEl) return; // закрыли, пока грузили
+      if (!rooms.length) {
+        menuEl.innerHTML = '<p class="state-note" style="padding:.5em .8em">У вас пока нет комнат.</p>';
+        const link = document.createElement("a");
+        link.className = "menu-item";
+        link.href = "#/rooms";
+        link.textContent = "Перейти к комнатам";
+        menuEl.appendChild(link);
+        return;
+      }
+      menuEl.innerHTML = "";
+      for (const room of rooms) {
+        const item = document.createElement("button");
+        item.type = "button";
+        item.className = "menu-item";
+        item.textContent = room.title;
+        item.addEventListener("click", () => { closeCardMenu(); pickVariantThenAdd(room.id); });
+        menuEl.appendChild(item);
+      }
+    } });
+  }
+  if (items.length) node.appendChild(renderCardMenu(items));
   return node;
 }
 
@@ -594,8 +747,11 @@ async function renderLibrary(root, signal) {
   // этого единственный чип «Все» без выбора был бы бессмысленным элементом.
   if (categories.length) {
     const carouselEl = $(root, "#categoryCarouselWrap");
+    // Категория стала many-to-many (см. план «Категории many-to-many») —
+    // один пазл считается в НЕСКОЛЬКИХ счётчиках сразу, поэтому счёт идёт
+    // по каждому id из categoryIds, не по одному значению на пазл.
     const counts = new Map();
-    for (const p of allGroups) counts.set(p.categoryId || null, (counts.get(p.categoryId || null) || 0) + 1);
+    for (const p of allGroups) for (const cid of p.categoryIds || []) counts.set(cid, (counts.get(cid) || 0) + 1);
     const chips = [{ id: null, name: "Все", count: allGroups.length }, ...categories.map(c => ({ id: c.id, name: c.name, count: counts.get(c.id) || 0 }))];
     const carousel = document.createElement("div");
     carousel.className = "category-carousel";
@@ -608,7 +764,7 @@ async function renderLibrary(root, signal) {
       btn.addEventListener("click", () => {
         carousel.querySelectorAll(".category-chip").forEach(chip => chip.classList.remove("is-active"));
         btn.classList.add("is-active");
-        paintGrid(c.id === null ? allGroups : allGroups.filter(p => p.categoryId === c.id));
+        paintGrid(c.id === null ? allGroups : allGroups.filter(p => (p.categoryIds || []).includes(c.id)));
       });
       carousel.appendChild(btn);
     }
@@ -616,6 +772,42 @@ async function renderLibrary(root, signal) {
   }
 
   paintGrid(allGroups);
+}
+
+/** Профиль пользователя (см. план «Категории many-to-many, автор карточки,
+ *  профиль») — все ОДОБРЕННЫЕ публикации конкретного человека, публично,
+ *  без входа (та же логика открытости, что и у самой библиотеки). Куда
+ *  проще renderLibrary — нет карусели категорий, нет своих фото. */
+async function renderProfile(root, userId, signal) {
+  root.innerHTML = `
+    <div class="library-head" id="profileHead"><h1>Загружаем…</h1></div>
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
+
+  let data;
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/puzzles`);
+    if (!res.ok) throw new Error("profile fetch failed");
+    data = await res.json();
+  } catch {
+    if (!signal.aborted) root.innerHTML = '<p class="state-note">Не удалось загрузить профиль — обновите страницу.</p>';
+    return;
+  }
+  if (signal.aborted) return;
+
+  const headEl = $(root, "#profileHead");
+  headEl.innerHTML = data.username
+    ? `<h1>Пазлы, опубликованные ${data.username}</h1>`
+    : `<h1>Профиль</h1><p>Пользователь ничего не опубликовал.</p>`;
+
+  const grid = $(root, "#puzzleGrid");
+  grid.innerHTML = "";
+  if (!data.puzzles.length) {
+    grid.outerHTML = '<p class="state-note">Пока ничего не опубликовано.</p>';
+    return;
+  }
+  const cards = groupPuzzles(data.puzzles)
+    .map(p => { const node = buildCard(p); grid.appendChild(node); return { p, node }; });
+  for (const { p, node } of cards) applyBadge(node, p);
 }
 
 /* ───────────────────────── стол: раскладка деталей ───────────────────────── */
@@ -2593,6 +2785,7 @@ function route() {
   const roomTableMatch = hash.match(/^\/room\/([^/]+)\/table\/([^/]+)$/);
   const roomJoinMatch = hash.match(/^\/rooms\/join\/([^/]+)$/);
   const roomMatch = hash.match(/^\/room\/([^/]+)$/);
+  const profileMatch = hash.match(/^\/profile\/([^/]+)$/);
   const root = document.getElementById("app");
 
   if (currentRouteAbort) currentRouteAbort.abort();
@@ -2605,6 +2798,7 @@ function route() {
     : roomMatch ? renderRoom(root, decodeURIComponent(roomMatch[1]), signal)
     : hash === "/rooms" ? renderRoomsList(root, signal)
     : tableMatch ? renderTable(root, decodeURIComponent(tableMatch[1]), signal, tableMatch[2])
+    : profileMatch ? renderProfile(root, decodeURIComponent(profileMatch[1]), signal)
     : renderLibrary(root, signal);
   run.catch(e => {
     if (signal.aborted) return;

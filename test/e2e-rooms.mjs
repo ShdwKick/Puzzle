@@ -655,11 +655,14 @@ ur = await deviceUploadCall();
 const bannedUploadBody = await ur.json().catch(() => ({}));
 ok("после бана устройства загрузка отбита 403 ещё до записи в БД", ur.status === 403 && bannedUploadBody.error === "device banned", JSON.stringify(bannedUploadBody));
 
-// ───────── категории библиотеки (см. план «Категории пазлов в библиотеке») ─────────
+// ───────── категории many-to-many (см. план «Категории many-to-many,
+// автор карточки, профиль») ─────────
+const USER_CATEGORY_ID = "user-published"; // тот же фиксированный id, что и в server.js
+
 ir = await fetch(PUZZLE + "/api/categories"); // публичный роут, без ключа и без входа
 const initialCategories = await ir.json();
-ok("GET /api/categories без ключа и входа — 200, категорий изначально нет",
-  ir.status === 200 && Array.isArray(initialCategories) && initialCategories.length === 0, JSON.stringify(initialCategories));
+ok("GET /api/categories видит только системную «Пользовательские» изначально",
+  ir.status === 200 && initialCategories.length === 1 && initialCategories[0].id === USER_CATEGORY_ID, JSON.stringify(initialCategories));
 
 ir = await internalCall("wrong-key", "/internal/categories", { method: "POST", body: { name: "Природа" } });
 ok("POST /internal/categories без верного ключа — 403", ir.status === 403, String(ir.status));
@@ -674,59 +677,144 @@ ok("вторая категория создана", ir.status === 200 && catego
 
 ir = await fetch(PUZZLE + "/api/categories");
 const publicCategories = await ir.json();
-ok("обе категории видны в публичном списке", publicCategories.length === 2 && publicCategories.every(c => c.id && c.name), JSON.stringify(publicCategories));
+ok("все approved категории видны в публичном списке (системная + 2 новые)",
+  publicCategories.length === 3 && publicCategories.some(c => c.id === categoryA.id) && publicCategories.some(c => c.id === categoryB.id),
+  JSON.stringify(publicCategories));
 
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
-  method: "POST", body: { title: "С категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: categoryA.id },
+  method: "POST", body: { title: "С категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryIds: [categoryA.id] },
 });
 const categorizedUpload = await ir.json();
-ok("загрузка через Admin с categoryId — 200, все варианты несут категорию",
+ok("загрузка через Admin с categoryIds — 200, все варианты несут категорию",
   ir.status === 200 && categorizedUpload.variants.length === 6, JSON.stringify(categorizedUpload).slice(0, 200));
 const categorizedPuzzleId = categorizedUpload.variants[0].id;
 
 ir = await fetch(PUZZLE + "/api/puzzles");
 const libAfterCategoryUpload = await ir.json();
 const categorizedVariants = libAfterCategoryUpload.filter(p => p.imageUrl === categorizedUpload.variants[0].imageUrl);
-ok("все 6 вариантов несут одну и ту же категорию", categorizedVariants.length === 6 && categorizedVariants.every(p => p.categoryId === categoryA.id), JSON.stringify(categorizedVariants.map(p => p.categoryId)));
+ok("все 6 вариантов несут одну и ту же категорию (many-to-many)",
+  categorizedVariants.length === 6 && categorizedVariants.every(p => (p.categoryIds || []).includes(categoryA.id)),
+  JSON.stringify(categorizedVariants.map(p => p.categoryIds)));
 
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
-  method: "POST", body: { title: "С неверной категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: "no-such-category" },
+  method: "POST", body: { title: "С неверной категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryIds: ["no-such-category"] },
 });
-ok("загрузка с несуществующей categoryId — 400", ir.status === 400, String(ir.status));
+ok("загрузка с несуществующей categoryIds — 400", ir.status === 400, String(ir.status));
 
-ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}/category`, { method: "POST", body: { categoryId: categoryB.id } });
-ok("смена категории уже загруженной картинки — 200", ir.status === 200 && (await ir.json()).ok === true, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}/categories`, { method: "POST", body: { categoryIds: [categoryB.id] } });
+ok("замена набора категорий (множественное число, полный набор) — 200", ir.status === 200 && (await ir.json()).ok === true, String(ir.status));
 
 ir = await fetch(PUZZLE + "/api/puzzles");
-const afterCategoryChange = (await ir.json()).filter(p => p.id === categorizedPuzzleId || categorizedVariants.some(v => v.id === p.id));
-ok("после смены категория обновилась на всех вариантах группы", afterCategoryChange.every(p => p.categoryId === categoryB.id), JSON.stringify(afterCategoryChange.map(p => p.categoryId)));
-
-ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}/category`, { method: "POST", body: { categoryId: null } });
-ok("снятие категории (categoryId: null) — 200", ir.status === 200, String(ir.status));
+const afterCategoryChange = (await ir.json()).filter(p => categorizedVariants.some(v => v.id === p.id));
+ok("после замены — только новая категория, старой уже нет (полная замена, не добавление)",
+  afterCategoryChange.every(p => (p.categoryIds || []).includes(categoryB.id) && !(p.categoryIds || []).includes(categoryA.id)),
+  JSON.stringify(afterCategoryChange.map(p => p.categoryIds)));
 
 ir = await internalCall(null, `/internal/categories/${categoryB.id}`, { method: "DELETE" });
 ok("DELETE /internal/categories/:id без ключа — 403", ir.status === 403, String(ir.status));
 
-ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}/category`, { method: "POST", body: { categoryId: categoryB.id } });
-ok("повторно назначили категорию B перед удалением категории", ir.status === 200, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${USER_CATEGORY_ID}`, { method: "DELETE" });
+ok("удалить системную категорию «Пользовательские» нельзя — 400",
+  ir.status === 400 && (await ir.json()).error === "protected category", String(ir.status));
 
 ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryB.id}`, { method: "DELETE" });
-ok("удаление категории — 200", ir.status === 200 && (await ir.json()).ok === true, String(ir.status));
+ok("удаление обычной категории — 200", ir.status === 200 && (await ir.json()).ok === true, String(ir.status));
 
 ir = await fetch(PUZZLE + "/api/puzzles");
 const afterCategoryDelete = (await ir.json()).find(p => p.id === categorizedPuzzleId);
-ok("пазл пережил удаление своей категории — остался, но без категории",
-  afterCategoryDelete && afterCategoryDelete.categoryId === null, JSON.stringify(afterCategoryDelete));
+ok("пазл пережил удаление своей категории — остался, но без категорий (ON DELETE CASCADE на puzzle_categories)",
+  afterCategoryDelete && Array.isArray(afterCategoryDelete.categoryIds) && afterCategoryDelete.categoryIds.length === 0, JSON.stringify(afterCategoryDelete));
 
 ir = await fetch(PUZZLE + "/api/categories");
 const categoriesAfterDelete = await ir.json();
-ok("удалённой категории больше нет в публичном списке", categoriesAfterDelete.length === 1 && categoriesAfterDelete[0].id === categoryA.id, JSON.stringify(categoriesAfterDelete));
+ok("удалённой категории больше нет в публичном списке, категория A осталась",
+  !categoriesAfterDelete.some(c => c.id === categoryB.id) && categoriesAfterDelete.some(c => c.id === categoryA.id), JSON.stringify(categoriesAfterDelete));
 
-// уборка — не оставляем тестовую картинку висеть в библиотеке для следующих проверок этого файла
 ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}`, { method: "DELETE" });
 ok("уборка: тестовая картинка с категорией удалена", ir.status === 200, String(ir.status));
+
+// ───────── публикация с категориями: атрибуция переживает approve,
+// системная категория подставляется всегда, новая категория уходит на
+// модерацию отдельно от самого фото (см. план) ─────────
+r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комната для категорий при публикации" } });
+const catPublishRoomId = r.body.id;
+
+ur = await callRaw(tokenA, `/puzzles?roomId=${catPublishRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото с категориями")}`, fakePng, "image/png");
+const uploadForCatPublish = await ur.json();
+const catPublishId = uploadForCatPublish.variants[0].id;
+
+r = await asJson(tokenA, `/puzzles/${catPublishId}/publish`, {
+  method: "POST", body: { consent: true, categoryIds: [categoryA.id], newCategoryName: "Экспериментальная (тест)" },
+});
+ok("публикация с существующей категорией + новой — 200, pending", r.status === 200 && r.body.moderationStatus === "pending", JSON.stringify(r.body));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories");
+const newPendingCategory = (await ir.json()).categories.find(c => c.name === "Экспериментальная (тест)");
+ok("новая категория из публикации создана как pending", newPendingCategory && newPendingCategory.status === "pending", JSON.stringify(newPendingCategory));
+
+ir = await fetch(PUZZLE + "/api/categories");
+ok("новая pending категория ещё не видна в публичном списке", !(await ir.json()).some(c => c.id === newPendingCategory.id));
+
+r = await asJson(tokenA, `/puzzles?roomId=${catPublishRoomId}`);
+const catPublishRow = r.body.find(x => x.id === catPublishId);
+ok("на пазле сразу три категории: системная + выбранная + новая",
+  catPublishRow && [USER_CATEGORY_ID, categoryA.id, newPendingCategory.id].every(id => catPublishRow.categoryIds.includes(id)),
+  JSON.stringify(catPublishRow && catPublishRow.categoryIds));
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${catPublishId}/approve`, { method: "POST" });
+ok("Admin одобрил фото с категориями — 200", ir.status === 200, String(ir.status));
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+const approvedCatRow = (await ir.json()).find(x => x.id === catPublishId);
+ok("после approve: ownerUserId обнулён, но uploaderUsername ОСТАЛСЯ — ключевая проверка всего дизайна атрибуции",
+  approvedCatRow && approvedCatRow.ownerUserId === null && approvedCatRow.uploaderUsername === "danil" && approvedCatRow.uploaderUserId === userIdA,
+  JSON.stringify(approvedCatRow));
+
+ir = await fetch(PUZZLE + `/api/users/${userIdA}/puzzles`);
+const profileData = await ir.json();
+ok("профиль danil показывает username и опубликованный пазл",
+  ir.status === 200 && profileData.username === "danil" && profileData.puzzles.some(x => x.id === catPublishId),
+  JSON.stringify({ username: profileData.username, count: profileData.puzzles.length }));
+
+ir = await fetch(PUZZLE + `/api/users/${userIdB}/puzzles`);
+const emptyProfileData = await ir.json();
+ok("профиль без публикаций — 200 с пустым списком, а не 404",
+  ir.status === 200 && emptyProfileData.username === null && Array.isArray(emptyProfileData.puzzles) && emptyProfileData.puzzles.length === 0,
+  JSON.stringify(emptyProfileData));
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/categories/${newPendingCategory.id}/approve`, { method: "POST" });
+ok("Admin одобрил новую категорию — 200", ir.status === 200, String(ir.status));
+
+ir = await fetch(PUZZLE + "/api/categories");
+ok("одобренная категория теперь в публичном списке", (await ir.json()).some(c => c.id === newPendingCategory.id));
+
+// Отклонение категории — вторая заявка, никогда не появляется в публичном списке.
+ur = await callRaw(tokenA, `/puzzles?roomId=${catPublishRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото с отклонённой категорией")}`, fakePng, "image/png");
+const uploadForRejectCat = await ur.json();
+const rejectCatPuzzleId = uploadForRejectCat.variants[0].id;
+r = await asJson(tokenA, `/puzzles/${rejectCatPuzzleId}/publish`, { method: "POST", body: { consent: true, newCategoryName: "Отклоняемая (тест)" } });
+ok("публикация с заявкой на категорию, которую потом отклонят — 200", r.status === 200, JSON.stringify(r.body));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories");
+const rejectCategory = (await ir.json()).categories.find(c => c.name === "Отклоняемая (тест)");
+ok("категория на отклонение создана как pending", rejectCategory && rejectCategory.status === "pending", JSON.stringify(rejectCategory));
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/categories/${rejectCategory.id}/reject`, { method: "POST", body: { reason: "дубликат" } });
+ok("Admin отклонил категорию — 200", ir.status === 200, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/moderation/categories");
+ok("отклонённая категория пропала из очереди на модерацию", !(await ir.json()).categories.some(c => c.id === rejectCategory.id));
+
+ir = await fetch(PUZZLE + "/api/categories");
+ok("отклонённая категория никогда не появится в публичном списке", !(await ir.json()).some(c => c.id === rejectCategory.id));
+
+// уборка
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${catPublishId}`, { method: "DELETE" });
+ok("уборка: пазл с категориями удалён", ir.status === 200, String(ir.status));
 ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryA.id}`, { method: "DELETE" });
-ok("уборка: оставшаяся категория удалена", ir.status === 200, String(ir.status));
+ok("уборка: категория A удалена", ir.status === 200, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${newPendingCategory.id}`, { method: "DELETE" });
+ok("уборка: одобренная новая категория удалена", ir.status === 200, String(ir.status));
 
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

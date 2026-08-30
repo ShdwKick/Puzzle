@@ -153,14 +153,29 @@ a{color:inherit}
 
 /* ===================== КАРТОЧКИ ПАЗЛОВ ===================== */
 .puzzle-grid{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr))}
+/* position:relative + БЕЗ overflow:hidden на самой карточке — якорь для
+   .card-menu-wrap (кнопка «…» поверх превью, см. buildCard) и его
+   выпадающего .menu, который иначе обрезался бы (тот же баг и то же
+   решение, что в Movies — см. комментарий у .puzzle-card-thumb ниже,
+   зеркалит .movie-tile{overflow:visible} + .movie-tile-poster-wrap). */
 .puzzle-card{
-  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
-  overflow:hidden;box-shadow:var(--e1);display:flex;flex-direction:column;
+  position:relative;background:var(--md-sys-color-surface-container-low);
+  border-radius:var(--md-sys-shape-corner-l);box-shadow:var(--e1);display:flex;flex-direction:column;
 }
-.puzzle-card-thumb{position:relative;aspect-ratio:4/3;background:var(--md-sys-color-surface-container-high);overflow:hidden}
+/* Скругление верхних углов — теперь СВОЁ (border-radius + overflow:hidden
+   именно на превью), не унаследованное от overflow:hidden всей карточки:
+   картинка edge-to-edge всё ещё должна обрезаться по углам, но выпадающее
+   меню (см. .card-menu-wrap) — не должно, а раньше оба клипались одним и
+   тем же overflow:hidden на .puzzle-card. */
+.puzzle-card-thumb{
+  position:relative;aspect-ratio:4/3;background:var(--md-sys-color-surface-container-high);
+  overflow:hidden;border-radius:var(--md-sys-shape-corner-l) var(--md-sys-shape-corner-l) 0 0;
+}
 .puzzle-card-thumb img{width:100%;height:100%;object-fit:cover}
+/* top-LEFT, не right — правый верхний угол занят кнопкой «…» (.card-menu-wrap,
+   см. ниже), которая теперь есть почти на каждой карточке библиотеки. */
 .puzzle-card-badge{
-  position:absolute;top:.6rem;right:.6rem;background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 82%, transparent);
+  position:absolute;top:.6rem;left:.6rem;background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 82%, transparent);
   color:var(--md-sys-color-inverse-on-surface);font-size:.76rem;font-weight:700;padding:.28em .7em;border-radius:var(--md-sys-shape-corner-full);
 }
 .puzzle-card-badge.done{background:var(--md-ok);color:#fff}
@@ -168,23 +183,6 @@ a{color:inherit}
 .puzzle-card-title{font-size:1.05rem;font-weight:650}
 .puzzle-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);flex:1}
 .puzzle-card-play{align-self:flex-start;margin-top:.2rem}
-/* Крестик "Удалить" — поверх превью, в правом верхнем углу карточки (не в
-   .puzzle-card-body: там он утекал в конец flex-колонки, к низу карточки).
-   Виден только при наведении/фокусе на карточку — не захламляет сетку
-   постоянно висящими крестиками. На тач-устройствах наведения нет, поэтому
-   там крестик остаётся видимым всегда (hover: none). */
-.puzzle-card-delete{
-  position:absolute;top:.5rem;right:.5rem;z-index:2;
-  background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 82%, transparent);
-  color:var(--md-sys-color-inverse-on-surface);
-  opacity:0;transition:opacity .15s var(--ease-std);
-}
-.puzzle-card:hover .puzzle-card-delete,
-.puzzle-card:focus-within .puzzle-card-delete{opacity:1}
-@media (hover:none){
-  .puzzle-card-delete{opacity:1}
-}
-.puzzle-card-delete:hover::after{opacity:.16}
 /* Статус модерации своего фото (см. план «Модерация загруженных фото») —
    текстовая строка в теле карточки, не путать с .puzzle-card-badge (та —
    про прогресс сборки, поверх превью). */
@@ -192,8 +190,47 @@ a{color:inherit}
 .puzzle-card-moderation.pending{color:var(--md-warn)}
 .puzzle-card-moderation.approved{color:var(--md-ok)}
 .puzzle-card-moderation.rejected{color:var(--md-sys-color-error)}
-/* Если на той же карточке ещё и бейдж прогресса — не дать им наложиться. */
-.puzzle-card-thumb.has-delete .puzzle-card-badge{right:2.6rem}
+
+/* Атрибуция (см. план «Категории many-to-many, автор карточки, профиль»)
+   — мелкая приглушённая ссылка, отдельной строкой под .puzzle-card-meta.
+   Показывается только у ОДОБРЕННЫХ публикаций (см. buildCard) — на своём
+   же приватном/ждущем модерации фото она была бы преждевременной: это
+   элемент публичной библиотеки, а не «черновика». */
+.puzzle-card-author{font-size:.8rem;color:var(--md-sys-color-on-surface-variant);text-decoration:underline;align-self:flex-start}
+.puzzle-card-author:hover{color:var(--md-sys-color-primary)}
+
+/* Меню «…» карточки — реверанс Movies (renderCardMenu/.menu-wrap/.menu/
+   .menu-item): второстепенные действия (Удалить/Скрыть, Опубликовать,
+   + В комнату), которые раньше были отдельными кнопками и не влезали в
+   узкую карточку, теперь собраны в один выпадающий список. .menu-wrap —
+   тот же класс, что и у #accountMenuWrap в шапке (position:relative;
+   flex:none по умолчанию), тут переопределяем позицию поверх правого
+   верхнего угла превью тем же приёмом, что у Movies
+   (.movie-tile-poster-wrap .menu-wrap). Кнопка видна только при
+   наведении/фокусе (кроме тач-устройств, там hover не работает). */
+.puzzle-card>.menu-wrap{position:absolute;top:.5rem;right:.5rem;z-index:2}
+.puzzle-card>.menu-wrap>.icon-btn{
+  background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 82%, transparent);
+  color:var(--md-sys-color-inverse-on-surface);opacity:0;transition:opacity .15s var(--ease-std);
+}
+.puzzle-card:hover>.menu-wrap>.icon-btn,
+.puzzle-card:focus-within>.menu-wrap>.icon-btn,
+.puzzle-card>.menu-wrap:has(.menu:not([hidden]))>.icon-btn{opacity:1}
+@media (hover:none){
+  .puzzle-card>.menu-wrap>.icon-btn{opacity:1}
+}
+.menu{
+  position:absolute;right:0;top:calc(100% + 6px);min-width:11.5rem;z-index:10;
+  background:var(--md-sys-color-surface-container-high);border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-m);box-shadow:var(--e2);overflow:hidden;padding:6px;
+}
+.menu-item{
+  display:block;width:100%;text-align:left;background:transparent;border:0;color:inherit;
+  font:inherit;font-weight:500;font-size:.85rem;padding:.6em .8em;border-radius:var(--md-sys-shape-corner-s);
+  cursor:pointer;text-decoration:none;
+}
+.menu-item:hover{background:var(--md-sys-color-surface-container)}
+.menu-item.danger{color:var(--md-sys-color-error)}
 
 /* ===================== ЗАГРУЗКА СВОЕГО ФОТО ===================== */
 .upload-form{
@@ -421,10 +458,24 @@ a{color:inherit}
   padding:.6em .9em;font:inherit;background:var(--md-sys-color-surface-container-lowest);
   color:var(--md-sys-color-on-surface);
 }
+
+/* Категории при публикации (см. openPublishModal) — чекбоксы + поле новой
+   категории. Без явного width:100% инпут остаётся на своей intrinsic
+   ширине (узкая полоска в широкой модалке); margin-top отделяет блок от
+   кнопки подтверждения ниже. */
+.publish-categories{display:flex;flex-direction:column;gap:.5rem;margin:.9rem 0}
+.publish-categories #publishNewCategoryName{width:100%;box-sizing:border-box}
+#publishConfirmBtn{margin-top:.9rem}
 /* <select> под тем же классом (модалка выбора сложности, #difficultySelect)
    — .text-input выше уже задаёт border/padding/цвета, тут только то, что
-   специфично для select и голым инпутом не покрывается. */
-select.text-input{cursor:pointer}
+   специфично для select. Нативную стрелку браузера убираем (appearance:none)
+   и рисуем свою (--select-arrow, см. theme.css) — нативная в разных
+   браузерах/ОС рендерилась по-разному и заметно смещённой вправо. */
+select.text-input{
+  cursor:pointer;appearance:none;-webkit-appearance:none;-moz-appearance:none;
+  padding-right:2.6em;background-image:var(--select-arrow);
+  background-repeat:no-repeat;background-position:right .75em center;background-size:1.15em;
+}
 
 /* Создание/присоединение — раньше инлайн-форма, теперь две широкие кнопки
    под списком, каждая открывает свою модалку (см. #createRoomModalBackdrop/

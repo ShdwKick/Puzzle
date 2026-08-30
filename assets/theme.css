@@ -56,6 +56,14 @@
 
   --e1:0 1px 2px rgba(0,0,0,.05),0 2px 6px rgba(0,0,0,.06);
   --e2:0 2px 6px rgba(0,0,0,.07),0 8px 20px rgba(0,0,0,.08);
+
+  /* Свой SVG-шеврон для <select class="text-input"> (см. styles.css) —
+     нативная стрелка браузера рендерится по-разному между браузерами/ОС
+     (жалоба: "крива, смещена вправо"); appearance:none + этот фон даёт
+     полный контроль. Цвет зашит в data-URI (var() внутри url() не
+     подставляется), поэтому вся ссылка — отдельная переменная на тему,
+     а не только цвет. */
+  --select-arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2346464f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
 }
 [data-theme="dark"]{
   --md-sys-color-primary:#c6bfff;
@@ -91,6 +99,7 @@
   --md-ok-container:#1d4a2c;
   --md-warn:#ffb951;
   --md-warn-container:#5c3f00;
+  --select-arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c8c5d0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
@@ -127,5 +136,6 @@
     --md-ok-container:#1d4a2c;
     --md-warn:#ffb951;
     --md-warn-container:#5c3f00;
+    --select-arrow:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23c8c5d0' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
   }
 }
