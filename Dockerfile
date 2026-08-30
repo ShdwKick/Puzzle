@@ -13,7 +13,9 @@ WORKDIR /app
 COPY *.js ./
 COPY index.html ./
 COPY robots.txt ./
-COPY sitemap.xml ./
+# sitemap.xml больше НЕ копируется — теперь генерируется на лету
+# (GET /sitemap.xml в server.js, см. план «Прямые ссылки вместо #/ +
+# страница категорий»), статичный файл был бы просто мёртвым грузом.
 COPY assets/ ./assets/
 # lib/ (mailer.js, emailTemplates.js — см. план «Разделение модерации... +
 # письма») — отдельная строка, маска *.js на строке выше берёт только корень

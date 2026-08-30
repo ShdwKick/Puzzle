@@ -698,6 +698,52 @@ ok("все approved категории видны в публичном спис
   publicCategories.length === 3 && publicCategories.some(c => c.id === categoryA.id) && publicCategories.some(c => c.id === categoryB.id),
   JSON.stringify(publicCategories));
 
+// ───────── слаги категорий, sitemap.xml, SEO-заглушка serveApp (см. план
+// «Прямые ссылки вместо #/ + страница категорий») ─────────
+// Публичный /api/categories — единственный роут, который реально отдаёт slug
+// (/internal/categories POST отдаёт только {id,name}).
+const categoryASlug = publicCategories.find(c => c.id === categoryA.id)?.slug;
+const categoryBSlug = publicCategories.find(c => c.id === categoryB.id)?.slug;
+ok("слаг категории «Природа» — «природа», без транслитерации", categoryASlug === "природа", String(categoryASlug));
+ok("слаг категории «Город» — «город»", categoryBSlug === "город", String(categoryBSlug));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories", { method: "POST", body: { name: "Природа" } });
+const categoryADup = await ir.json();
+ir = await fetch(PUZZLE + "/api/categories");
+const categoriesAfterDup = await ir.json();
+const categoryADupSlug = categoriesAfterDup.find(c => c.id === categoryADup.id)?.slug;
+ok("повторное имя категории получает уникальный слаг («природа-2»)",
+  ir.status === 200 && categoryADupSlug === "природа-2", String(categoryADupSlug));
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryADup.id}`, { method: "DELETE" });
+ok("уборка: дубль-категория «Природа» (2) удалена", ir.status === 200, String(ir.status));
+
+ir = await fetch(PUZZLE + "/sitemap.xml");
+const sitemapXml = await ir.text();
+ok("sitemap.xml — content-type application/xml", (ir.headers.get("content-type") || "").includes("application/xml"), ir.headers.get("content-type"));
+ok("sitemap.xml содержит главную", sitemapXml.includes("<loc>https://puzzle.burninghouse.ru/</loc>"), "");
+ok("sitemap.xml содержит /categories", sitemapXml.includes("<loc>https://puzzle.burninghouse.ru/categories</loc>"), "");
+ok("sitemap.xml содержит /category/природа (approved-категория)",
+  sitemapXml.includes(`<loc>https://puzzle.burninghouse.ru/category/${encodeURIComponent(categoryASlug)}</loc>`), "");
+
+const titleOf = html => (html.match(/<title>([^<]*)<\/title>/) || [])[1];
+const canonicalOf = html => (html.match(/<link rel="canonical" href="([^"]*)">/) || [])[1];
+
+const homeHtml = await (await fetch(PUZZLE + "/")).text();
+const categoriesHtml = await (await fetch(PUZZLE + "/categories")).text();
+const categoryHtml = await (await fetch(PUZZLE + `/category/${encodeURIComponent(categoryASlug)}`)).text();
+const missingCategoryHtml = await (await fetch(PUZZLE + "/category/нет-такой-категории")).text();
+
+ok("/categories отдаёт свой <title>, отличный от главной",
+  titleOf(categoriesHtml) && titleOf(categoriesHtml) !== titleOf(homeHtml), titleOf(categoriesHtml));
+ok("/category/природа отдаёт <title> с названием категории",
+  (titleOf(categoryHtml) || "").includes("Природа"), titleOf(categoryHtml));
+ok("/category/природа — canonical указывает именно на эту страницу, не на главную",
+  canonicalOf(categoryHtml) === `https://puzzle.burninghouse.ru/category/${encodeURIComponent(categoryASlug)}`, canonicalOf(categoryHtml));
+ok("/categories — canonical указывает на /categories",
+  canonicalOf(categoriesHtml) === "https://puzzle.burninghouse.ru/categories", canonicalOf(categoriesHtml));
+ok("несуществующий слаг — просто дефолтная страница (тот же <title>, что и главная), без 404",
+  titleOf(missingCategoryHtml) === titleOf(homeHtml), titleOf(missingCategoryHtml));
+
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
   method: "POST", body: { title: "С категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryIds: [categoryA.id] },
 });

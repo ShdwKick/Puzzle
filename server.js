@@ -295,6 +295,15 @@ db.exec(`
 try { db.exec("ALTER TABLE categories ADD COLUMN status TEXT NOT NULL DEFAULT 'approved'"); } catch {}
 try { db.exec("ALTER TABLE categories ADD COLUMN created_by TEXT"); } catch {}
 try { db.exec("ALTER TABLE categories ADD COLUMN moderation_reason TEXT"); } catch {}
+// Слаг для /category/:slug (см. план «Прямые ссылки вместо #/ + страница
+// категорий») — кириллицей, без транслитерации: для Яндекса точное
+// совпадение ключевого слова в URL — рабочий сигнал, аудитория и контент
+// целиком русскоязычные. Уникальность — на уровне приложения (см.
+// makeUniqueSlug ниже), как и везде в этой схеме (нет ни одного DB-level
+// UNIQUE кроме PRIMARY KEY). NULL у уже существующих категорий до
+// одноразовой миграции при старте (см. ниже, после сидирования системной
+// категории).
+try { db.exec("ALTER TABLE categories ADD COLUMN slug TEXT"); } catch {}
 
 // Категория — many-to-many (см. план «Категории many-to-many»): один пазл
 // может быть в нескольких категориях сразу, поэтому связь — отдельная
@@ -382,7 +391,17 @@ const stmt = {
   listApprovedCategories: db.prepare("SELECT * FROM categories WHERE status = 'approved' ORDER BY sort_order, created_at"),
   listPendingCategories: db.prepare("SELECT * FROM categories WHERE status = 'pending' ORDER BY created_at"),
   categoryById: db.prepare("SELECT * FROM categories WHERE id = ?"),
-  insertCategory: db.prepare("INSERT INTO categories (id, name, status, created_by, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)"),
+  categoryBySlug: db.prepare("SELECT * FROM categories WHERE slug = ?"),
+  // Только ПУБЛИЧНО видимые группы (owner_user_id IS NULL — та же граница
+  // видимости, что у puzzlesPublic) — категория может быть привязана к
+  // группе ещё до одобрения публикации (см. план «Категории many-to-many»,
+  // привязка идёт сразу при /publish), считать её тут преждевременно.
+  categoryPublicPuzzleCount: db.prepare(`
+    SELECT COUNT(DISTINCT pc.image_file) AS n FROM puzzle_categories pc
+    JOIN puzzles p ON p.image_file = pc.image_file
+    WHERE pc.category_id = ? AND p.owner_user_id IS NULL`),
+  insertCategory: db.prepare("INSERT INTO categories (id, name, slug, status, created_by, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  setCategorySlug: db.prepare("UPDATE categories SET slug = ? WHERE id = ?"),
   deleteCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
   setCategoryApproved: db.prepare("UPDATE categories SET status = 'approved', moderation_reason = NULL WHERE id = ?"),
   setCategoryRejected: db.prepare("UPDATE categories SET status = 'rejected', moderation_reason = ? WHERE id = ?"),
@@ -450,6 +469,11 @@ Object.assign(stmt, {
 
 // ───────────────────────── мелкие утилиты ─────────────────────────
 const now = () => Date.now();
+// Категории — единственное место, где сервер вставляет пользовательский
+// текст (название категории) в HTML-ответ (см. serveApp/applySeoOverride
+// ниже), поэтому единственное место, где нужен escapeHtml вообще — раньше
+// он тут не требовался, весь остальной вывод либо JSON, либо статичный.
+const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 /** Заменяет ПОЛНЫЙ набор категорий для группы загрузки (image_file) —
  *  используется и при назначении категорий через Admin, и при публикации
@@ -463,6 +487,24 @@ function categoryIdsFor(imageFile) {
   return stmt.categoryIdsForImage.all(imageFile).map(r => r.category_id);
 }
 
+// Слаг для /category/:slug (см. план «Прямые ссылки вместо #/ + страница
+// категорий») — кириллица сохраняется как есть (не транслитерируется),
+// только пробелы/пунктуация схлопываются в дефис. \p{L}/\p{N} — юникодные
+// классы «буква»/«цифра» (флаг u), покрывают кириллицу так же, как латиницу.
+function slugify(name) {
+  return String(name).toLowerCase().trim()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-+|-+$/g, "") || "category";
+}
+/** Уникальность — на уровне приложения (см. комментарий у ALTER TABLE slug
+ *  выше): -2, -3... при коллизии. */
+function makeUniqueSlug(name) {
+  const base = slugify(name);
+  let slug = base, n = 2;
+  while (stmt.categoryBySlug.get(slug)) slug = `${base}-${n++}`;
+  return slug;
+}
+
 // Системная категория «Пользовательские» (см. план) — фиксированный id, тот
 // же приём, что у BUILTIN_IMAGES (hills/forest/mountains): сеется один раз,
 // id никогда не меняется, чтобы на неё можно было безопасно ссылаться из
@@ -470,7 +512,7 @@ function categoryIdsFor(imageFile) {
 // пользовательская заявка).
 const USER_CATEGORY_ID = "user-published";
 if (!stmt.categoryById.get(USER_CATEGORY_ID)) {
-  stmt.insertCategory.run(USER_CATEGORY_ID, "Пользовательские", "approved", null, 0, now());
+  stmt.insertCategory.run(USER_CATEGORY_ID, "Пользовательские", makeUniqueSlug("Пользовательские"), "approved", null, 0, now());
 }
 
 // Одноразовая миграция старого одиночного puzzles.category_id в новую
@@ -479,6 +521,12 @@ if (!stmt.categoryById.get(USER_CATEGORY_ID)) {
 // 6 строках-вариантах одной группы.
 db.exec(`INSERT OR IGNORE INTO puzzle_categories (image_file, category_id)
   SELECT DISTINCT image_file, category_id FROM puzzles WHERE category_id IS NOT NULL`);
+
+// Бэкфилл слага для категорий, заведённых до этого захода (см. план,
+// часть 1) — идемпотентно, WHERE slug IS NULL пропускает уже сгенерированные.
+for (const cat of stmt.listCategories.all()) {
+  if (!cat.slug) stmt.setCategorySlug.run(makeUniqueSlug(cat.name), cat.id);
+}
 
 function json(res, code, obj) {
   res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -653,8 +701,8 @@ function puzzlePayload(p) {
 function notifyPublishOutcome(puzzle, outcome, reason) {
   if (!puzzle.uploader_email) return;
   const mail = outcome === "approved"
-    ? mailTpl.publishApproved({ title: puzzle.title, link: `${PUBLIC_URL}/#/profile/${encodeURIComponent(puzzle.uploader_user_id)}` })
-    : mailTpl.publishRejected({ title: puzzle.title, reason, link: `${PUBLIC_URL}/#/room/${encodeURIComponent(puzzle.room_id)}` });
+    ? mailTpl.publishApproved({ title: puzzle.title, link: `${PUBLIC_URL}/profile/${encodeURIComponent(puzzle.uploader_user_id)}` })
+    : mailTpl.publishRejected({ title: puzzle.title, reason, link: `${PUBLIC_URL}/room/${encodeURIComponent(puzzle.room_id)}` });
   // mailer.send() сама ловит все свои ошибки и возвращает {ok:false},
   // никогда не бросает (см. lib/mailer.js) — тот же fire-and-forget, что и
   // у Auth (там тоже без .catch() на этом вызове).
@@ -838,10 +886,16 @@ const MIME = {
   ".webp": "image/webp", ".ico": "image/x-icon", ".woff2": "font/woff2",
   ".txt": "text/plain; charset=utf-8", ".xml": "application/xml; charset=utf-8",
 };
-// Отдельные файлы в корне репозитория рядом с index.html: robots.txt и
-// sitemap.xml роботы по конвенции ищут именно в корне сайта, а не там, куда
-// их реально положили. Каждый добавляется явно сюда И явным COPY в Dockerfile.
-const ROOT_FILES = ["robots.txt", "sitemap.xml"];
+// Отдельные файлы в корне репозитория рядом с index.html: robots.txt
+// роботы по конвенции ищут именно в корне сайта, а не там, куда его реально
+// положили. sitemap.xml сюда больше НЕ входит (см. план «Прямые ссылки
+// вместо #/ + страница категорий») — категории меняются во времени,
+// статичный файл устарел бы; генерируется на лету, см. GET /sitemap.xml
+// ниже. Каждый статичный файл добавляется явно сюда И явным COPY в
+// Dockerfile (см. историю с lib/mailer.js — забытая директория в COPY
+// роняет контейнер MODULE_NOT_FOUND, тот же принцип и тут, наоборот —
+// лишний файл в этом списке, которого нет в COPY, тихо не найдётся).
+const ROOT_FILES = ["robots.txt"];
 
 /** Отдаём только index.html, assets/ и uploads/ (свои фото). store.db и
  *  server.js снаружи недоступны. */
@@ -887,10 +941,103 @@ function serveStatic(res, pathname) {
   fs.createReadStream(file).pipe(res);
   return true;
 }
-function serveApp(res) {
+// Точечный SSR для /categories и /category/:slug (см. план «Прямые ссылки
+// вместо #/ + страница категорий») — НЕ полный рендер приложения, только
+// title/description/canonical/og/h1+интро, тем же приёмом, что уже даёт
+// главной странице реальный контент до отработки JS (см. комментарий у
+// <main id="app"> в index.html). Дословные строки-константы ниже должны
+// совпадать с текущим index.html байт-в-байт — иначе .replaceAll() просто
+// молча ничего не найдёт и подмена не сработает (никакой ошибки при этом
+// не будет, страница отдастся с дефолтным текстом — стоит проверять
+// вручную через curl после любой правки текста в index.html).
+const DEFAULT_TITLE = "Пазлы онлайн бесплатно — собрать пазл в браузере | Что собираем?";
+const DEFAULT_DESCRIPTION = "Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.";
+const DEFAULT_HEAD_BLOCK = `  <div class="library-head">
+    <h1>Пазлы онлайн бесплатно — собрать пазл в браузере</h1>
+    <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
+  </div>`;
+const DEFAULT_LOADING_NOTE = `  <p class="state-note">Загружаем библиотеку пазлов…</p>`;
+
+/** Плюрализация «пазл/пазла/пазлов» — тот же общий приём, что plural() в
+ *  assets/app.js (см. renderRoomsList «N участник/-а/-ов»), тут отдельная
+ *  копия — это единственное место в server.js, где такое нужно. */
+function pluralPuzzles(n) {
+  const mod10 = n % 10, mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return "пазл";
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return "пазла";
+  return "пазлов";
+}
+
+function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement }) {
+  if (title) html = html.replaceAll(DEFAULT_TITLE, title);
+  if (description) html = html.replaceAll(DEFAULT_DESCRIPTION, description);
+  // Канонический URL встречается 3 раза байт-в-байт (canonical, og:url,
+  // JSON-LD "url") — все заканчиваются на `.../"`, один replaceAll на
+  // "домен + слэш + кавычка" ловит все три разом, ничего больше в файле
+  // на этот паттерн не похоже (og:image, например, продолжается путём
+  // после слэша, кавычка сразу не следует).
+  if (routePath) html = html.replaceAll(`${PUBLIC_URL}/"`, `${PUBLIC_URL}${routePath}"`);
+  if (headBlock) html = html.replaceAll(DEFAULT_HEAD_BLOCK, headBlock);
+  if (loadingNoteReplacement) html = html.replaceAll(DEFAULT_LOADING_NOTE, loadingNoteReplacement);
+  return html;
+}
+
+/** Реальный список категорий прямо в HTML для /categories (см. план) — не
+ *  только клиентский рендер: сама суть страницы — список ссылок, без него
+ *  краулер без JS не увидел бы тут ничего, кроме заголовка. */
+function categoriesListHtml() {
+  const cats = stmt.listApprovedCategories.all()
+    .map(c => ({ ...c, count: stmt.categoryPublicPuzzleCount.get(c.id).n }));
+  if (!cats.length) return "";
+  const items = cats.map(c =>
+    `<li><a href="/category/${encodeURIComponent(c.slug)}">${escapeHtml(c.name)} (${c.count})</a></li>`).join("\n    ");
+  return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
+}
+
+function serveApp(res, pathname) {
   try {
+    let html = fs.readFileSync(APP_HTML, "utf8");
+    if (pathname === "/categories") {
+      html = applySeoOverride(html, {
+        title: "Категории пазлов онлайн — собрать пазл по теме | Что собираем?",
+        description: "Все категории пазлов онлайн в одном месте — выберите тему и собирайте бесплатно, без регистрации и скачивания.",
+        path: "/categories",
+        headBlock: `  <div class="library-head">
+    <h1>Категории пазлов онлайн</h1>
+    <p>Выберите категорию — соберите пазл по теме, бесплатно и без регистрации.</p>
+  </div>`,
+        loadingNoteReplacement: categoriesListHtml() || DEFAULT_LOADING_NOTE,
+      });
+    } else {
+      const slugMatch = pathname.match(/^\/category\/([^/]+)$/);
+      if (slugMatch) {
+        const category = stmt.categoryBySlug.get(decodeURIComponent(slugMatch[1]));
+        if (category && category.status === "approved") {
+          const count = stmt.categoryPublicPuzzleCount.get(category.id).n;
+          // Название категории — пользовательский текст (см. план
+          // «Категории many-to-many» — POST /api/categories), экранируем
+          // ВЕЗДЕ, где подставляем в HTML, включая title/description —
+          // <title> не парсит вложенные теги, но необработанный "&"/"<"
+          // всё равно делает разметку невалидной.
+          const name = escapeHtml(category.name);
+          html = applySeoOverride(html, {
+            title: `Пазлы: ${name} — собрать онлайн бесплатно | Что собираем?`,
+            description: `Пазлы онлайн в категории «${name}» — собирайте бесплатно, без регистрации и скачивания.`,
+            // encodeURIComponent — тем же приёмом, что sitemap.xml и
+            // categoriesListHtml ниже: без этого canonical указывал бы на
+            // ДРУГУЮ форму URL (сырую кириллицу), чем реально ведущие сюда
+            // ссылки (percent-encoded) — несовпадение вредит каноникализации.
+            path: `/category/${encodeURIComponent(category.slug)}`,
+            headBlock: `  <div class="library-head">
+    <h1>Пазлы: ${name}</h1>
+    <p>${count} ${pluralPuzzles(count)} в категории «${name}» — собирайте онлайн бесплатно.</p>
+  </div>`,
+          });
+        }
+      }
+    }
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(fs.readFileSync(APP_HTML));
+    res.end(html);
   } catch {
     res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
     res.end("index.html не найден рядом с server.js");
@@ -1189,7 +1336,7 @@ const server = http.createServer(async (req, res) => {
       // sort_order = ts — новые категории естественно уходят в конец
       // списка, та же идея, что уже используется для сортировки своих фото.
       // Admin создаёт категорию сразу approved, без created_by — не заявка.
-      stmt.insertCategory.run(id, name, "approved", null, ts, ts);
+      stmt.insertCategory.run(id, name, makeUniqueSlug(name), "approved", null, ts, ts);
       adminLog.info("Admin создал категорию", { categoryId: id, name });
       return json(res, 200, { id, name });
     }
@@ -1254,6 +1401,23 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
+    // Динамический sitemap.xml (см. план «Прямые ссылки вместо #/ +
+    // страница категорий») — раньше статичный файл (см. ROOT_FILES выше),
+    // но категории меняются во времени, статика устарела бы. Не через
+    // ROOT_FILES/serveStatic — та ветка только читает файл с диска.
+    if (p === "/sitemap.xml" && req.method === "GET") {
+      const urls = [
+        { loc: `${PUBLIC_URL}/`, priority: "1.0" },
+        { loc: `${PUBLIC_URL}/categories`, priority: "0.8" },
+        ...stmt.listApprovedCategories.all().map(c => ({ loc: `${PUBLIC_URL}/category/${encodeURIComponent(c.slug)}`, priority: "0.6" })),
+      ];
+      const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`
+        + urls.map(u => `  <url>\n    <loc>${escapeHtml(u.loc)}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`).join("\n")
+        + `\n</urlset>\n`;
+      res.writeHead(200, { "Content-Type": "application/xml; charset=utf-8" });
+      return res.end(xml);
+    }
+
     // Адрес auth отдаём с сервера, чтобы он не был зашит в статику.
     if (p === "/api/config") return json(res, 200, {
       authBase: AUTH_BASE, clientId: AUTH_CLIENT_ID,
@@ -1264,7 +1428,7 @@ const server = http.createServer(async (req, res) => {
     // карусель в renderLibrary). Только approved — pending пока не видны,
     // rejected не видны никогда.
     if (p === "/api/categories" && req.method === "GET") {
-      return json(res, 200, stmt.listApprovedCategories.all().map(c => ({ id: c.id, name: c.name })));
+      return json(res, 200, stmt.listApprovedCategories.all().map(c => ({ id: c.id, name: c.name, slug: c.slug })));
     }
 
     if (p.startsWith("/api/")) {
@@ -1277,7 +1441,11 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET") {
       if (p !== "/" && serveStatic(res, p)) return;
-      return serveApp(res);   // остальное — SPA с маршрутизацией по хэшу
+      // Остальное — SPA с маршрутизацией по прямым путям (History API, см.
+      // план «Прямые ссылки вместо #/ + страница категорий»): любой
+      // нераспознанный GET-путь получает index.html, точечно
+      // подготовленный под сам путь (см. serveApp/applySeoOverride выше).
+      return serveApp(res, p);
     }
     res.writeHead(404); res.end();
   } catch (e) {
@@ -1305,7 +1473,7 @@ async function api(req, res, url, user) {
     const name = str(body.name, 80);
     if (!name) return json(res, 400, { error: "bad name" });
     const id = crypto.randomUUID();
-    stmt.insertCategory.run(id, name, "pending", user.id, 0, now());
+    stmt.insertCategory.run(id, name, makeUniqueSlug(name), "pending", user.id, 0, now());
     adminLog.info("Пользователь предложил категорию", { userId: user.id, categoryId: id, name });
     return json(res, 200, { id, name, status: "pending" });
   }
@@ -1452,7 +1620,7 @@ async function api(req, res, url, user) {
       const name = str(body.newCategoryName, 80);
       if (name) {
         newCategory = { id: crypto.randomUUID(), name };
-        stmt.insertCategory.run(newCategory.id, name, "pending", user.id, 0, now());
+        stmt.insertCategory.run(newCategory.id, name, makeUniqueSlug(name), "pending", user.id, 0, now());
         categoryIds.add(newCategory.id);
       }
     }

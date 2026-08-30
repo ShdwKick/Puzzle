@@ -259,6 +259,13 @@ function groupPuzzles(list) {
   });
 }
 
+/** Общий фильтр групп по категории — использует и карусель на главной
+ *  (renderLibrary), и страница отдельной категории (renderCategoryPage),
+ *  см. план «Прямые ссылки + страница категорий». */
+function filterGroupsByCategory(groups, categoryId) {
+  return groups.filter(p => (p.categoryIds || []).includes(categoryId));
+}
+
 /** Верхний потолок стороны выше, чем у фото Trip (2000 против 1600) —
  *  картинка режется на десятки кусков и разглядывается вблизи при зуме. */
 async function shrinkForPuzzle(file) {
@@ -571,7 +578,7 @@ function buildCard(p, opts = {}) {
   if (p.uploaderUsername && p.moderationStatus === "approved") {
     const author = document.createElement("a");
     author.className = "puzzle-card-author";
-    author.href = `#/profile/${encodeURIComponent(p.uploaderUserId)}`;
+    author.href = `/profile/${encodeURIComponent(p.uploaderUserId)}`;
     author.textContent = `Добавил: ${p.uploaderUsername}`;
     body.insertBefore(author, metaEl.nextSibling);
   }
@@ -596,7 +603,7 @@ function buildCard(p, opts = {}) {
 
   const playBtn = $(node, ".puzzle-card-play");
   const onPlay = opts.onPlay || ((v, asymmetric) => {
-    location.hash = `#/table/${encodeURIComponent(v.id)}${asymmetric ? "?shape=asym" : "?shape=normal"}`;
+    navigate(`/table/${encodeURIComponent(v.id)}?shape=${asymmetric ? "asym" : "normal"}`);
   });
   // Всегда одна кнопка «За стол» — выбор сложности (если вариантов больше
   // одного) происходит ПОСЛЕ клика, в общей модалке (см. openDifficultyModal
@@ -643,7 +650,7 @@ function buildCard(p, opts = {}) {
     async function addToRoom(roomId, variant, asymmetric) {
       try {
         const sessionId = await startRoomSession(roomId, variant.id, asymmetric);
-        location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
+        navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`);
       } catch (e) {
         alert(e.message === "room session limit reached"
           ? `Достигнут лимит одновременных сборок в этой комнате${typeof e.limit === "number" ? ` (${e.limit})` : ""}.`
@@ -667,7 +674,7 @@ function buildCard(p, opts = {}) {
         menuEl.innerHTML = '<p class="state-note" style="padding:.5em .8em">У вас пока нет комнат.</p>';
         const link = document.createElement("a");
         link.className = "menu-item";
-        link.href = "#/rooms";
+        link.href = "/rooms";
         link.textContent = "Перейти к комнатам";
         menuEl.appendChild(link);
         return;
@@ -806,7 +813,7 @@ async function renderLibrary(root, signal) {
       btn.addEventListener("click", () => {
         carousel.querySelectorAll(".category-chip").forEach(chip => chip.classList.remove("is-active"));
         btn.classList.add("is-active");
-        paintGrid(c.id === null ? allGroups : allGroups.filter(p => (p.categoryIds || []).includes(c.id)));
+        paintGrid(c.id === null ? allGroups : filterGroupsByCategory(allGroups, c.id));
       });
       carousel.appendChild(btn);
     }
@@ -850,6 +857,145 @@ async function renderProfile(root, userId, signal) {
   const cards = groupPuzzles(data.puzzles)
     .map((p, i) => { const node = buildCard(p, { eager: i === 0 }); grid.appendChild(node); return { p, node }; });
   for (const { p, node } of cards) applyBadge(node, p);
+}
+
+/** Дефолтные title/description — дословно как в index.html и в
+ *  DEFAULT_TITLE/DEFAULT_DESCRIPTION в server.js (см. serveApp) — нужны
+ *  здесь, чтобы сбрасывать title/description при уходе с /categories или
+ *  /category/:slug на любой другой маршрут (без сброса вкладка сохраняла
+ *  бы чужой заголовок после клиентского перехода, скажем, в комнату). */
+const DEFAULT_TITLE = "Пазлы онлайн бесплатно — собрать пазл в браузере | Что собираем?";
+const DEFAULT_DESCRIPTION = "Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.";
+
+function setPageMeta(title, description) {
+  document.title = title;
+  const meta = document.querySelector('meta[name="description"]');
+  if (meta) meta.setAttribute("content", description);
+}
+
+/** Страница со всеми категориями (см. план «Прямые ссылки + страница
+ *  категорий») — блоки-карточки, клик по любой ведёт на /category/:slug
+ *  (перехватывается делегированным обработчиком кликов ниже, без
+ *  перезагрузки). Число пазлов — те же публичные группы и тот же подсчёт,
+ *  что у карусели на главной (renderLibrary): API отдаёт только
+ *  {id, name, slug}, подсчёт всегда на клиенте. */
+const CATEGORIES_TITLE = "Категории пазлов онлайн — собрать пазл по теме | Что собираем?";
+const CATEGORIES_DESCRIPTION = "Все категории пазлов онлайн в одном месте — выберите тему и собирайте бесплатно, без регистрации и скачивания.";
+
+async function renderCategories(root, signal) {
+  root.innerHTML = `
+    <div class="library-head">
+      <h1>Категории пазлов онлайн</h1>
+      <p>Выберите категорию — соберите пазл по теме, бесплатно и без регистрации.</p>
+    </div>
+    <div class="category-block-grid" id="categoryBlockGrid"><p class="state-note">Загружаем…</p></div>`;
+
+  let categories, puzzles;
+  try {
+    [categories, puzzles] = await Promise.all([getCategories(), getPuzzles()]);
+  } catch {
+    if (!signal.aborted) $(root, "#categoryBlockGrid").innerHTML = '<p class="state-note">Не удалось загрузить категории — обновите страницу.</p>';
+    return;
+  }
+  if (signal.aborted) return;
+
+  setPageMeta(CATEGORIES_TITLE, CATEGORIES_DESCRIPTION);
+
+  const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
+  const counts = new Map();
+  for (const p of allGroups) for (const cid of p.categoryIds || []) counts.set(cid, (counts.get(cid) || 0) + 1);
+
+  const gridEl = $(root, "#categoryBlockGrid");
+  if (!categories.length) {
+    gridEl.innerHTML = '<p class="state-note">Категорий пока нет.</p>';
+    return;
+  }
+  gridEl.innerHTML = "";
+  for (const c of categories) {
+    const count = counts.get(c.id) || 0;
+    const a = document.createElement("a");
+    a.className = "category-block";
+    a.href = `/category/${encodeURIComponent(c.slug)}`;
+    const name = document.createElement("span");
+    name.className = "category-block-name";
+    name.textContent = c.name;
+    const countEl = document.createElement("span");
+    countEl.className = "category-block-count";
+    countEl.textContent = `${count} ${plural(count, "пазл", "пазла", "пазлов")}`;
+    a.append(name, countEl);
+    gridEl.appendChild(a);
+  }
+}
+
+/** Страница одной категории (см. план «Прямые ссылки + страница
+ *  категорий») — категория ищется по slug на клиенте, отдельного
+ *  GET /api/categories/:slug нет (список категорий и так публичный и
+ *  короткий). Сетка — та же фильтрация, что в карусели renderLibrary,
+ *  через общий filterGroupsByCategory. */
+async function renderCategoryPage(root, slug, signal) {
+  root.innerHTML = `
+    <div class="library-head" id="categoryHead"><h1>Загружаем…</h1></div>
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
+
+  let categories, puzzles;
+  try {
+    [categories, puzzles] = await Promise.all([getCategories(), getPuzzles()]);
+  } catch {
+    if (!signal.aborted) root.innerHTML = '<p class="state-note">Не удалось загрузить категорию — обновите страницу.</p>';
+    return;
+  }
+  if (signal.aborted) return;
+
+  const category = categories.find(c => c.slug === slug);
+  const headEl = $(root, "#categoryHead");
+
+  if (!category) {
+    setPageMeta(DEFAULT_TITLE, DEFAULT_DESCRIPTION);
+    headEl.innerHTML = "";
+    const h1 = document.createElement("h1");
+    h1.textContent = "Категория не найдена";
+    const p = document.createElement("p");
+    p.textContent = "Такой категории нет — возможно, её переименовали или удалили. ";
+    const link = document.createElement("a");
+    link.href = "/categories";
+    link.textContent = "Все категории";
+    p.appendChild(link);
+    headEl.append(h1, p);
+    $(root, "#puzzleGrid").remove();
+    return;
+  }
+
+  const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
+  const groups = filterGroupsByCategory(allGroups, category.id);
+
+  setPageMeta(
+    `Пазлы: ${category.name} — собрать онлайн бесплатно | Что собираем?`,
+    `Пазлы онлайн в категории «${category.name}» — собирайте бесплатно, без регистрации и скачивания.`,
+  );
+
+  headEl.innerHTML = "";
+  const h1 = document.createElement("h1");
+  h1.textContent = `Пазлы: ${category.name}`;
+  const intro = document.createElement("p");
+  intro.textContent = `${groups.length} ${plural(groups.length, "пазл", "пазла", "пазлов")} в категории «${category.name}» — собирайте онлайн бесплатно.`;
+  headEl.append(h1, intro);
+
+  const grid = $(root, "#puzzleGrid");
+  if (!groups.length) {
+    grid.innerHTML = "";
+    const note = document.createElement("p");
+    note.className = "state-note";
+    note.textContent = "В этой категории пока нет пазлов. ";
+    const link = document.createElement("a");
+    link.href = "/categories";
+    link.textContent = "Все категории";
+    note.appendChild(link);
+    grid.appendChild(note);
+    return;
+  }
+  grid.innerHTML = "";
+  const cards = groups.map((pz, i) => { const node = buildCard(pz, { eager: i === 0 }); grid.appendChild(node); return { pz, node }; });
+  for (const { pz, node } of cards) applyBadge(node, pz);
 }
 
 /* ───────────────────────── стол: раскладка деталей ───────────────────────── */
@@ -1150,7 +1296,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
              теперь иконка в левом верхнем углу доски (не в .board-tools внизу
              — выход со стола не инструмент сборки). -->
         <div class="board-back">
-          <a class="btn outlined icon" href="#/" title="Библиотека" aria-label="Библиотека">
+          <a class="btn outlined icon" href="/" title="Библиотека" aria-label="Библиотека">
             <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
           </a>
         </div>
@@ -1190,7 +1336,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   const puzzle = puzzles.find(p => p.id === puzzleId);
   if (!puzzle) { stage.innerHTML = '<p class="state-note">Такого пазла нет.</p>'; return; }
   if (puzzle.ownerUserId) {
-    stage.innerHTML = '<p class="state-note">Пазлы из своих фото собираются только в комнатах. <a class="btn text sm" href="#/rooms">К комнатам</a></p>';
+    stage.innerHTML = '<p class="state-note">Пазлы из своих фото собираются только в комнатах. <a class="btn text sm" href="/rooms">К комнатам</a></p>';
     return;
   }
   $(root, "#tableTitle").textContent = puzzle.title;
@@ -1654,7 +1800,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     stayBtn.addEventListener("click", () => overlay.remove());
     const homeBtn = document.createElement("button");
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = "На главную";
-    homeBtn.addEventListener("click", () => { location.hash = "#/"; });
+    homeBtn.addEventListener("click", () => { navigate("/"); });
     actions.append(stayBtn, homeBtn);
     card.append(img, h2, p, actions);
     overlay.appendChild(card);
@@ -1795,7 +1941,7 @@ document.getElementById("createRoomBtn").addEventListener("click", async () => {
     const room = await res.json();
     input.value = "";
     closeModal("createRoomModalBackdrop");
-    location.hash = `#/room/${encodeURIComponent(room.id)}`;
+    navigate(`/room/${encodeURIComponent(room.id)}`);
   } catch { /* останемся на месте, поле не очистится — можно повторить */ }
 });
 document.getElementById("newRoomTitle").addEventListener("keydown", e => {
@@ -1806,7 +1952,7 @@ function goToRoomCode(raw) {
   if (!code) return;
   closeModal("joinRoomModalBackdrop");
   // Переиспользует уже существующий маршрут/экран (см. renderRoomJoin ниже).
-  location.hash = `#/rooms/join/${encodeURIComponent(code)}`;
+  navigate(`/rooms/join/${encodeURIComponent(code)}`);
 }
 document.getElementById("joinCodeBtn").addEventListener("click", () => {
   goToRoomCode(document.getElementById("joinCodeInput").value);
@@ -1882,7 +2028,7 @@ async function renderRoomsList(root, signal) {
         `${r.membersCount} ${plural(r.membersCount, "участник", "участника", "участников")}`
         + (r.role === "owner" ? " · вы владелец" : "")
         + ` · обновлено ${fmtDate(r.updatedAt)}`;
-      card.addEventListener("click", () => { location.hash = `#/room/${encodeURIComponent(r.id)}`; });
+      card.addEventListener("click", () => { navigate(`/room/${encodeURIComponent(r.id)}`); });
       list.appendChild(card);
     }
 
@@ -1941,7 +2087,7 @@ async function renderRoom(root, roomId, signal) {
   }
   if (signal.aborted) return;
 
-  const inviteUrl = `${location.origin}${location.pathname}#/rooms/join/${room.joinCode}`;
+  const inviteUrl = `${location.origin}/rooms/join/${room.joinCode}`;
 
   body.innerHTML = `
     <div class="room-head">
@@ -2036,7 +2182,7 @@ async function renderRoom(root, roomId, signal) {
     + '<div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">Загружаем пазлы…</p></div><p class="state-note" id="sessionLimitNote" hidden></p>';
   for (const btn of activeEl.querySelectorAll(".join-table-btn")) {
     btn.addEventListener("click", () => {
-      location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(btn.dataset.session)}`;
+      navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(btn.dataset.session)}`);
     }, { signal });
   }
   // «Лишний» сеанс, начатый по ошибке — освобождает слот из лимита
@@ -2067,7 +2213,7 @@ async function renderRoom(root, roomId, signal) {
   async function playVariant(variant, asymmetric) {
     try {
       const sessionId = await startRoomSession(roomId, variant.id, asymmetric);
-      location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`;
+      navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`);
     } catch (e) {
       if (e.message === "room session limit reached") {
         const note = $(activeEl, "#sessionLimitNote");
@@ -2135,7 +2281,7 @@ async function renderRoom(root, roomId, signal) {
         e.target.disabled = true;
         try {
           const newId = await startRoomSession(roomId, s.puzzle.id);
-          location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`;
+          navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`);
         } catch { e.target.disabled = false; }
       }, { signal });
       // Завершённый сеанс — за столом никого уже нет (completedAt выставлен),
@@ -2172,7 +2318,7 @@ async function renderRoomJoin(root, code, signal) {
     if (!res.ok) throw new Error("join failed");
     const data = await res.json();
     if (signal.aborted) return;
-    location.hash = `#/room/${encodeURIComponent(data.roomId)}`;
+    navigate(`/room/${encodeURIComponent(data.roomId)}`);
   } catch {
     if (!signal.aborted) body.innerHTML = '<p class="state-note">Приглашение не найдено или больше не действует.</p>';
   }
@@ -2204,7 +2350,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
              теперь иконка в левом верхнем углу доски (не в .board-tools внизу
              — выход со стола не инструмент сборки). -->
         <div class="board-back">
-          <a class="btn outlined icon" href="#/room/${encodeURIComponent(roomId)}" title="Комната" aria-label="Комната">
+          <a class="btn outlined icon" href="/room/${encodeURIComponent(roomId)}" title="Комната" aria-label="Комната">
             <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
           </a>
         </div>
@@ -2276,13 +2422,13 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       <div class="state-note">
         <p>Этот пазл уже собран.</p>
         <button class="btn filled sm" id="replayBtn" type="button">Собрать ещё раз</button>
-        <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a>
+        <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a>
       </div>`;
     $(stage, "#replayBtn").addEventListener("click", async e => {
       e.target.disabled = true;
       try {
         const newId = await startRoomSession(roomId, session.puzzle.id);
-        location.hash = `#/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`;
+        navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`);
       } catch { e.target.disabled = false; }
     }, { signal });
     return;
@@ -2602,7 +2748,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     stayBtn.addEventListener("click", () => overlay.remove());
     const homeBtn = document.createElement("button");
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = "В комнату";
-    homeBtn.addEventListener("click", () => { location.hash = `#/room/${encodeURIComponent(roomId)}`; });
+    homeBtn.addEventListener("click", () => { navigate(`/room/${encodeURIComponent(roomId)}`); });
     actions.append(stayBtn, homeBtn);
     card.append(img, h2, p, actions);
     overlay.appendChild(card);
@@ -2799,48 +2945,83 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     onClose: () => { progressEl.classList.add("offline"); },
     onGiveUp: () => {
       progressEl.classList.remove("offline");
-      stage.insertAdjacentHTML("beforeend", `<p class="state-note table-give-up">Не удаётся подключиться к столу. <a class="btn text sm" href="#/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a> или обновите страницу.</p>`);
+      stage.insertAdjacentHTML("beforeend", `<p class="state-note table-give-up">Не удаётся подключиться к столу. <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a> или обновите страницу.</p>`);
     },
   });
 }
 
 /* ───────────────────────── Яндекс.Метрика: переходы внутри SPA ─────────────────────────
  * Счётчик считает автоматически только самый первый заход (обычная загрузка
- * страницы) — переходы между комнатами/столом идут через hashchange без
- * перезагрузки, поэтому на каждую смену hash шлём hit вручную, тем же
- * приёмом, что и в Brain (assets/app.js). Puzzle, в отличие от Brain,
- * document.title по маршрутам не меняет — везде статичный «Что собираем? —
- * BurningHouse» (см. index.html), так что title в hit будет одинаковым для
- * всех страниц; различает их сам url (location.href, hash — часть адреса). */
+ * страницы) — переходы между комнатами/столом идут через History API без
+ * перезагрузки (см. план «Прямые ссылки вместо #/»), поэтому на каждую
+ * смену пути шлём hit вручную, тем же приёмом, что и в Brain (assets/app.js).
+ * document.title по большинству маршрутов не меняется (везде статичный
+ * «Что собираем? — BurningHouse», см. index.html) — так их различает сам
+ * url (location.href). Исключение — /categories и /category/:slug, там
+ * title меняется (см. renderCategories/renderCategoryPage), для лучшего
+ * SEO-сигнала эти два маршрута тоже стоило разделить в самой Метрике. */
 const METRIKA_ID = 112035178;
 function trackPageview() {
   if (typeof ym === "function") ym(METRIKA_ID, "hit", location.href, { title: document.title, referer: document.referrer });
 }
 
-/* ───────────────────────── роутер ───────────────────────── */
+/* ───────────────────────── роутер ─────────────────────────
+ * История переходов — pushState/popstate (см. план «Прямые ссылки вместо
+ * #/ + страница категорий»), не hashchange: обычные пути индексируются
+ * поисковиками, фрагмент после # — нет. navigate() — единственная точка,
+ * которая меняет URL и перерисовывает; popstate (кнопки «назад»/«вперёд»)
+ * зовёт route() напрямую, без pushState — история уже сдвинута браузером. */
+function navigate(path) {
+  history.pushState(null, "", path);
+  route();
+  trackPageview();
+}
+window.addEventListener("popstate", () => { route(); trackPageview(); });
+
+// Перехват кликов по внутренним ссылкам — без этого обычный <a href="/...">
+// даёт полную перезагрузку страницы (регресс: WS переподключается заново,
+// теряется мгновенность SPA). Пропускает клики с модификаторами (новая
+// вкладка/окно — стандартное поведение браузера не должно ломаться),
+// внешние ссылки и ссылки с target/download.
+document.addEventListener("click", e => {
+  if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  const a = e.target.closest("a[href]");
+  if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
+  const url = new URL(a.href, location.href);
+  if (url.origin !== location.origin) return;
+  e.preventDefault();
+  navigate(url.pathname + url.search);
+});
+
 function route() {
-  const hash = location.hash.replace(/^#/, "") || "/";
-  // ([^?]+) — id отдельно от необязательного ?shape=asym (см. buildCard,
-  // клетка «Ассиметричная форма» в модалке выбора сложности): жадный (.+)
-  // раньше забирал бы весь query в сам id.
-  const tableMatch = hash.match(/^\/table\/([^?]+)(?:\?(.*))?$/);
-  const roomTableMatch = hash.match(/^\/room\/([^/]+)\/table\/([^/]+)$/);
-  const roomJoinMatch = hash.match(/^\/rooms\/join\/([^/]+)$/);
-  const roomMatch = hash.match(/^\/room\/([^/]+)$/);
-  const profileMatch = hash.match(/^\/profile\/([^/]+)$/);
+  const pathname = location.pathname;
+  const tableMatch = pathname.match(/^\/table\/([^/]+)$/);
+  const roomTableMatch = pathname.match(/^\/room\/([^/]+)\/table\/([^/]+)$/);
+  const roomJoinMatch = pathname.match(/^\/rooms\/join\/([^/]+)$/);
+  const roomMatch = pathname.match(/^\/room\/([^/]+)$/);
+  const profileMatch = pathname.match(/^\/profile\/([^/]+)$/);
+  const categoryMatch = pathname.match(/^\/category\/([^/]+)$/);
   const root = document.getElementById("app");
 
   if (currentRouteAbort) currentRouteAbort.abort();
   currentRouteAbort = new AbortController();
   const signal = currentRouteAbort.signal;
 
+  // Сброс title/description перед КАЖДЫМ переходом — без этого вкладка
+  // сохраняла бы заголовок категории после клиентского перехода, скажем,
+  // на /room/... Сами renderCategories/renderCategoryPage переопределяют
+  // это после загрузки своих данных (см. setPageMeta там).
+  setPageMeta(DEFAULT_TITLE, DEFAULT_DESCRIPTION);
+
   const run = roomTableMatch
     ? renderRoomTable(root, decodeURIComponent(roomTableMatch[1]), decodeURIComponent(roomTableMatch[2]), signal)
     : roomJoinMatch ? renderRoomJoin(root, decodeURIComponent(roomJoinMatch[1]), signal)
     : roomMatch ? renderRoom(root, decodeURIComponent(roomMatch[1]), signal)
-    : hash === "/rooms" ? renderRoomsList(root, signal)
-    : tableMatch ? renderTable(root, decodeURIComponent(tableMatch[1]), signal, tableMatch[2])
+    : pathname === "/rooms" ? renderRoomsList(root, signal)
+    : tableMatch ? renderTable(root, decodeURIComponent(tableMatch[1]), signal, location.search)
     : profileMatch ? renderProfile(root, decodeURIComponent(profileMatch[1]), signal)
+    : pathname === "/categories" ? renderCategories(root, signal)
+    : categoryMatch ? renderCategoryPage(root, decodeURIComponent(categoryMatch[1]), signal)
     : renderLibrary(root, signal);
   run.catch(e => {
     if (signal.aborted) return;
@@ -2848,18 +3029,34 @@ function route() {
     root.innerHTML = '<p class="state-note">Что-то пошло не так — обновите страницу.</p>';
   });
 }
-window.addEventListener("hashchange", () => { route(); trackPageview(); });
 
 /* ───────────────────────── старт ───────────────────────── */
 async function init() {
   const cfg = await (await fetch("/api/config")).json();
-  auth = createAuthClient({ authBase: cfg.authBase, clientId: cfg.clientId, storagePrefix: "bh_puzzle" });
+  // redirectUri — ЯВНО корень, не дефолт auth-client.js (location.origin +
+  // location.pathname): с прямыми путями пользователь может открыть вход
+  // прямо с /category/... или /room/..., и дефолт увёл бы на редирект,
+  // которого нет в Auth (там зарегистрирован только корень, см.
+  // client-add). Возврат на исходную страницу после входа — ниже,
+  // через sessionStorage (auth.login обёрнут после создания клиента).
+  auth = createAuthClient({ authBase: cfg.authBase, clientId: cfg.clientId, storagePrefix: "bh_puzzle", redirectUri: location.origin + "/" });
+  const originalLogin = auth.login;
+  auth.login = (...args) => {
+    sessionStorage.setItem("puzzle_return_to", location.pathname + location.search);
+    return originalLogin(...args);
+  };
   // Обязательно ДО первого запроса к своему API: обменивает ?code=… на токены.
   // Принудительного редиректа на вход НЕТ — гостевой режим полноценный
   // (см. README «Идея в двух режимах»).
-  await auth.handleRedirect();
+  const loggedIn = await auth.handleRedirect();
   renderAuthArea();
-  route();
+  const returnTo = loggedIn && sessionStorage.getItem("puzzle_return_to");
+  if (returnTo) {
+    sessionStorage.removeItem("puzzle_return_to");
+    navigate(returnTo);
+  } else {
+    route();
+  }
 }
 init().catch(e => {
   console.error(e);

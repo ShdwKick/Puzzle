@@ -151,6 +151,20 @@ a{color:inherit}
 }
 .category-chip.is-active{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary)}
 
+/* Блоки на отдельной странице /categories (см. план «Прямые ссылки +
+   страница категорий») — крупнее и весомее .category-chip: там это был
+   узкий переключатель фильтра рядом с сеткой, здесь — единственное
+   содержимое страницы, сама навигация к каждой категории. */
+.category-block-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(14rem,1fr));gap:1rem}
+.category-block{
+  display:flex;flex-direction:column;gap:.4rem;padding:1.4rem 1.2rem;border-radius:1rem;
+  background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
+  text-decoration:none;transition:background .15s,transform .15s;
+}
+.category-block:hover{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);transform:translateY(-.15rem)}
+.category-block-name{font-size:1.15rem;font-weight:650}
+.category-block-count{color:inherit;opacity:.75;font-size:.9rem}
+
 /* ===================== КАРТОЧКИ ПАЗЛОВ ===================== */
 .puzzle-grid{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr))}
 /* position:relative + БЕЗ overflow:hidden на самой карточке — якорь для

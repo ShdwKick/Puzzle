@@ -5,9 +5,9 @@
 
 <!-- Yandex.Metrika counter — как можно раньше в <head>: так точнее отказы
      (accurateTrackBounce) и время начала сессии. Переходы между комнатами/
-     столом не перезагружают страницу (hash-роутер, см. assets/app.js) —
-     обычный автосчёт увидел бы только самый первый заход, поэтому там же
-     есть отдельный ym(…, "hit", …) на каждую смену hash. -->
+     столом не перезагружают страницу (History API SPA-роутер, см.
+     assets/app.js) — обычный автосчёт увидел бы только самый первый заход,
+     поэтому там же есть отдельный ym(…, "hit", …) на каждую смену пути. -->
 <script type="text/javascript">
     (function(m,e,t,r,i,k,a){
         m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
@@ -55,8 +55,11 @@
 
 <!-- JSON-LD (см. план «SEO») — помогает Google/Яндекс понять тип сущности
      страницы (веб-приложение, бесплатное, категория «игра»), не влияет на
-     то, что видит пользователь. Один объект на всю SPA — у сервиса нет
-     отдельных публично индексируемых URL кроме "/", см. sitemap.xml. -->
+     то, что видит пользователь. Один объект описывает сервис в целом —
+     страницы /categories и /category/:slug (см. план «Прямые ссылки +
+     страница категорий») получают собственные title/description/canonical
+     на сервере (см. server.js, serveApp), но отдельной JSON-LD разметки
+     под каждую из них здесь нет. -->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
@@ -145,7 +148,7 @@
         <span class="bh-name">BurningHouse</span>
       </a>
       <span class="bh-sep" aria-hidden="true"></span>
-      <a class="bh-lockup-service" href="#/" aria-label="Что собираем? — на главную сервиса">
+      <a class="bh-lockup-service" href="/" aria-label="Что собираем? — на главную сервиса">
         <span class="bh-service">Что собираем?</span>
       </a>
     </div>
@@ -157,7 +160,10 @@
       <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 21h14"/></svg>
     </button>
     <button class="icon-btn" id="themeBtn" title="Тема" aria-label="Тема"></button>
-    <a class="icon-btn" href="#/rooms" title="Комнаты" aria-label="Комнаты">
+    <a class="icon-btn" href="/categories" title="Категории" aria-label="Категории">
+      <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+    </a>
+    <a class="icon-btn" href="/rooms" title="Комнаты" aria-label="Комнаты">
       <svg class="icon" viewBox="0 0 24 24"><path d="M5 21V7l7-4 7 4v14"/><path d="M5 21h14"/><path d="M9 21v-6h6v6"/></svg>
     </a>
     <!-- Гость видит «Войти», вошедший — иконку-человечка (#accountMenuWrap),
