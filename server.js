@@ -32,6 +32,9 @@
  *                   Нужен, только если фронтенд отдаётся отдельно (сейчас не так).
  *   ADMIN_INTERNAL_KEY — общий секрет для Admin (/internal/*, см. admin-internal.js).
  *   MAX_PHOTO_BYTES (по умолчанию 4 МиБ) — потолок размера своего фото на пазл.
+ *   PUBLIC_URL      (по умолчанию https://puzzle.burninghouse.ru) — для ссылок в письмах.
+ *   RESEND_API_KEY, MAIL_FROM — почта о результате публикации (см. lib/mailer.js).
+ *                   Без RESEND_API_KEY письма просто логируются, не отправляются.
  */
 "use strict";
 
@@ -41,11 +44,18 @@ const path = require("path");
 const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { checkAdminKey, createAdminLog } = require("./admin-internal");
+const mailer = require("./lib/mailer");
+const mailTpl = require("./lib/emailTemplates");
 const ws = require("./ws-server");
 const { buildClusters, largestClusterSize, connectedPiecesCount, tolerance } = require("./assets/puzzle-clusters.js");
 
 const PORT = parseInt(process.env.PORT || "8796", 10);
 const HOST = process.env.HOST || "127.0.0.1";
+// Публичный адрес сервиса (см. план «Разделение модерации... + письма») —
+// нужен для ссылок в письмах о результате публикации (mailTpl), больше
+// нигде: canonical/OG в index.html зашиты напрямую, тут же ссылка строится
+// динамически (профиль/комната конкретного получателя).
+const PUBLIC_URL = (process.env.PUBLIC_URL || "https://puzzle.burninghouse.ru").replace(/\/+$/, "");
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, "data");
 const DB_PATH = path.join(DATA_DIR, "store.db");
 const APP_HTML = path.join(__dirname, "index.html");
@@ -223,6 +233,24 @@ try { db.exec("ALTER TABLE puzzles ADD COLUMN category_id TEXT REFERENCES catego
 try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_user_id TEXT"); } catch {}
 try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_username TEXT"); } catch {}
 try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_name TEXT"); } catch {}
+// Почта загрузившего (см. план «Разделение модерации: загрузка в комнату
+// vs публикация + письма») — нужна для письма о результате ПУБЛИКАЦИИ:
+// одобряет/отклоняет админ, а не сам загрузивший, значит на момент письма
+// его JWT под рукой уже нет — адрес неоткуда взять, кроме как сохранить
+// заранее. Может быть NULL (на аккаунте нет почты) — тогда письмо просто
+// не уходит, без ошибки.
+try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_email TEXT"); } catch {}
+
+// Фоновая модерация ЗАГРУЗКИ В КОМНАТУ (см. тот же план) — отдельная от
+// moderation_status выше, который целиком про ПУБЛИКАЦИЮ в общую
+// библиотеку. Правила разные: своя фотография в комнате видна сразу же
+// (самосертификация галочкой при загрузке, см. mountUploadForm), но всё
+// равно уходит в очередь админу постфактум — 'pending' сразу при вставке
+// (self-upload), 'approved' после ручной проверки. NULL у встроенных/
+// добавленных через Admin — для них эта очередь не применима вовсе.
+// 'rejected' как значение не хранится — отклонение форс-удаляет всю
+// группу (см. forceDeletePuzzleGroup), держать отклонённую запись незачем.
+try { db.exec("ALTER TABLE puzzles ADD COLUMN room_review_status TEXT"); } catch {}
 
 // Встроенные пазлы (Холмы/Лес/Горы) видны во ВСЕХ комнатах сразу (owner_user_id
 // IS NULL — см. puzzlesForRoom) — не всем участникам конкретной комнаты они
@@ -324,8 +352,8 @@ const stmt = {
   insertCustomPuzzle: db.prepare(`INSERT INTO puzzles
       (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id,room_id,
        moderation_status,moderation_reason,consent_at,upload_device,category_id,
-       uploader_user_id,uploader_username,uploader_name)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
+       uploader_user_id,uploader_username,uploader_name,uploader_email,room_review_status)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`),
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
   sessionIdsForPuzzle: db.prepare("SELECT id FROM room_sessions WHERE puzzle_id = ?"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
@@ -335,10 +363,20 @@ const stmt = {
   // тут нас интересует вся группа своего фото (owner_user_id IS NOT NULL —
   // проверяется в JS до вызова), не важно, кто именно её загрузил.
   puzzlesByImageAny: db.prepare("SELECT * FROM puzzles WHERE image_file = ?"),
-  allUserPhotos: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NOT NULL ORDER BY created_at DESC"),
+  // Только заявки на ПУБЛИКАЦИЮ (см. план «Разделение модерации») — раньше
+  // тут было вообще всё загруженное в комнаты, включая никогда не
+  // отправлявшееся на публикацию, из-за чего в Admin было не разобрать,
+  // что вообще требует его внимания. Фоновая модерация загрузки в комнату
+  // теперь отдельная очередь — roomReviewPending выше.
+  allUserPhotos: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NOT NULL AND moderation_status IS NOT NULL ORDER BY created_at DESC"),
   setModerationPending: db.prepare("UPDATE puzzles SET moderation_status = 'pending', moderation_reason = NULL WHERE image_file = ?"),
   setModerationApproved: db.prepare("UPDATE puzzles SET owner_user_id = NULL, room_id = NULL, moderation_status = 'approved', moderation_reason = NULL WHERE image_file = ?"),
   setModerationRejected: db.prepare("UPDATE puzzles SET moderation_status = 'rejected', moderation_reason = ? WHERE image_file = ?"),
+  // Фоновая модерация загрузки в комнату (см. план «Разделение модерации:
+  // загрузка в комнату vs публикация + письма») — отдельная очередь от
+  // moderation_status/публикации выше.
+  roomReviewPending: db.prepare("SELECT * FROM puzzles WHERE room_review_status = 'pending' ORDER BY created_at DESC"),
+  setRoomReviewApproved: db.prepare("UPDATE puzzles SET room_review_status = 'approved' WHERE image_file = ?"),
   // Категории (см. план «Категории many-to-many, автор карточки, профиль»).
   listCategories: db.prepare("SELECT * FROM categories ORDER BY sort_order, created_at"),
   listApprovedCategories: db.prepare("SELECT * FROM categories WHERE status = 'approved' ORDER BY sort_order, created_at"),
@@ -590,6 +628,50 @@ function puzzlePayload(p) {
     uploaderUsername: p.uploader_username || null,
     uploaderName: p.uploader_name || null,
   };
+}
+
+/** Форс-удаление целой группы (все уровни сложности одной загрузки) —
+ *  общая логика для двух мест: модерационное удаление заявки на
+ *  публикацию (/internal/moderation/photos/:id DELETE) и отклонение
+ *  загрузки в комнату (/internal/moderation/room-uploads/:id/reject, см.
+ *  план «Разделение модерации»). В отличие от self-service DELETE
+ *  /api/puzzles/:id — НЕ блокируется тем, что пазлом уже играли: если
+ *  контент нарушает правила, факт, что кто-то успел его увидеть в
+ *  сессии, не повод его оставить. room_sessions.puzzle_id ссылается на
+ *  puzzles(id) без ON DELETE CASCADE (см. схему) — сперва рвём сами
+ *  сеансы (и живые WS-подключения за столом, если кто-то сидит прямо
+ *  сейчас — иначе FOREIGN KEY constraint упадёт на самом DELETE FROM
+ *  puzzles). */
+/** Письмо о результате ПУБЛИКАЦИИ (см. план «Разделение модерации... +
+ *  письма») — только approve/reject заявки на публикацию, НЕ фоновая
+ *  модерация загрузки в комнату (там email не предусмотрен пользователем).
+ *  puzzle — строка, прочитанная ДО UPDATE (см. вызовы в modApproveMatch/
+ *  modRejectMatch) — uploader_email/room_id ещё на месте (approve обнуляет
+ *  owner_user_id/room_id, но не uploader_*, см. схему; для письма нужен
+ *  room_id именно из этого снимка). Fire-and-forget — не блокирует ответ
+ *  админу и не роняет запрос при сбое почты, только логирует. */
+function notifyPublishOutcome(puzzle, outcome, reason) {
+  if (!puzzle.uploader_email) return;
+  const mail = outcome === "approved"
+    ? mailTpl.publishApproved({ title: puzzle.title, link: `${PUBLIC_URL}/#/profile/${encodeURIComponent(puzzle.uploader_user_id)}` })
+    : mailTpl.publishRejected({ title: puzzle.title, reason, link: `${PUBLIC_URL}/#/room/${encodeURIComponent(puzzle.room_id)}` });
+  // mailer.send() сама ловит все свои ошибки и возвращает {ok:false},
+  // никогда не бросает (см. lib/mailer.js) — тот же fire-and-forget, что и
+  // у Auth (там тоже без .catch() на этом вызове).
+  mailer.send({ to: puzzle.uploader_email, subject: mail.subject, html: mail.html, text: mail.text });
+}
+
+function forceDeletePuzzleGroup(puzzle) {
+  const group = stmt.puzzlesByImageAny.all(puzzle.image_file);
+  for (const gp of group) {
+    for (const s of stmt.sessionIdsForPuzzle.all(gp.id)) {
+      const live = liveSessions.get(s.id);
+      if (live) { for (const conn of live.conns) { try { conn.ws.close(); } catch {} } liveSessions.delete(s.id); }
+      stmt.deleteSession.run(s.id);
+    }
+  }
+  for (const gp of group) stmt.deletePuzzle.run(gp.id);
+  try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
 }
 
 // Пришедшие с фронта детали — доверенный документ хранится как есть, но
@@ -951,7 +1033,7 @@ const server = http.createServer(async (req, res) => {
         // которого нужно домодерировать: сам факт, что картинку кладёт
         // Admin, УЖЕ модерация. upload_device=null — не с браузера.
         // uploader_*=null — у добавленного через Admin атрибуции нет.
-        stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, null, null, "approved", null, ts, null, null, null, null, null);
+        stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, null, null, "approved", null, ts, null, null, null, null, null, null, null);
         return puzzlePayload(stmt.puzzle.get(id));
       });
       adminLog.info("Admin добавил картинку в библиотеку", { title, variants: variants.length });
@@ -979,12 +1061,12 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true });
     }
 
-    // Модерация загруженных пользователями фото (см. план «Модерация
-    // загруженных фото»). В отличие от /internal/puzzles выше (там —
-    // библиотека built-in картинок ОТ Admin) — тут ВСЕ фото от ВСЕХ
-    // пользователей, любого статуса, не только pending: админ должен видеть
-    // вообще всё когда-либо загруженное, даже то, что осталось приватным в
-    // комнате и никогда не отправлялось на публикацию (см. план, часть 2).
+    // Модерация ЗАЯВОК НА ПУБЛИКАЦИЮ (см. план «Разделение модерации:
+    // загрузка в комнату vs публикация + письма») — тут только фото,
+    // которые хоть раз отправлялись на публикацию (moderation_status не
+    // NULL: pending/rejected — approved пропадает само, см. allUserPhotos).
+    // Фото, просто загруженные в комнату и никогда не публиковавшиеся —
+    // отдельная очередь, /internal/moderation/room-uploads ниже.
     if (p === "/internal/moderation/photos" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       const groups = new Map();
@@ -1013,6 +1095,7 @@ const server = http.createServer(async (req, res) => {
       if (puzzle.moderation_status !== "pending") return json(res, 400, { error: "not pending" });
       stmt.setModerationApproved.run(puzzle.image_file);
       adminLog.info("Admin одобрил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, ownerUserId: puzzle.owner_user_id });
+      notifyPublishOutcome(puzzle, "approved");
       return json(res, 200, { ok: true });
     }
     const modRejectMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)\/reject$/);
@@ -1024,6 +1107,7 @@ const server = http.createServer(async (req, res) => {
       const reason = str(body.reason, 400) || null;
       stmt.setModerationRejected.run(reason, puzzle.image_file);
       adminLog.info("Admin отклонил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, reason });
+      notifyPublishOutcome(puzzle, "rejected", reason);
       return json(res, 200, { ok: true });
     }
     const modDeleteMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)$/);
@@ -1031,25 +1115,57 @@ const server = http.createServer(async (req, res) => {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       const puzzle = stmt.puzzle.get(modDeleteMatch[1]);
       if (!puzzle) return json(res, 404, { error: "not found" });
-      // В отличие от self-service DELETE /api/puzzles/:id — модерационное
-      // удаление НЕ блокируется тем, что пазлом уже играли (см. план, часть
-      // 2): если контент нарушает правила, факт, что кто-то успел его
-      // увидеть в сессии, не повод его оставить. room_sessions.puzzle_id
-      // ссылается на puzzles(id) без ON DELETE CASCADE (см. схему) — сперва
-      // рвём сами сеансы (и живые WS-подключения за столом, если кто-то
-      // сидит прямо сейчас — иначе FOREIGN KEY constraint упадёт на самом
-      // DELETE FROM puzzles ниже).
-      const group = stmt.puzzlesByImageAny.all(puzzle.image_file);
-      for (const gp of group) {
-        for (const s of stmt.sessionIdsForPuzzle.all(gp.id)) {
-          const live = liveSessions.get(s.id);
-          if (live) { for (const conn of live.conns) { try { conn.ws.close(); } catch {} } liveSessions.delete(s.id); }
-          stmt.deleteSession.run(s.id);
-        }
-      }
-      for (const gp of group) stmt.deletePuzzle.run(gp.id);
-      try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
+      forceDeletePuzzleGroup(puzzle);
       adminLog.warn("Admin удалил загруженное фото (модерация)", { puzzleId: puzzle.id, title: puzzle.title, ownerUserId: puzzle.owner_user_id });
+      return json(res, 200, { ok: true });
+    }
+
+    // Модерация ЗАГРУЗКИ В КОМНАТУ (см. план «Разделение модерации») —
+    // фоновая очередь, отдельная от заявок на публикацию выше: своё фото
+    // видно в комнате сразу после загрузки (самосертификация галочкой), но
+    // всё равно ждёт проверки админом постфактум (room_review_status
+    // 'pending' — проставляется при self-upload, см. POST /api/puzzles).
+    if (p === "/internal/moderation/room-uploads" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const groups = new Map();
+      for (const row of stmt.roomReviewPending.all()) {
+        if (!groups.has(row.image_file)) {
+          const room = row.room_id ? stmt.room.get(row.room_id) : null;
+          groups.set(row.image_file, {
+            id: row.id, title: row.title, imageUrl: `/uploads/${row.image_file}`,
+            ownerUserId: row.owner_user_id, uploadDevice: row.upload_device,
+            roomId: row.room_id, roomTitle: room ? room.title : null,
+            createdAt: row.created_at, consentAt: row.consent_at,
+            variants: 0,
+          });
+        }
+        groups.get(row.image_file).variants++;
+      }
+      return json(res, 200, { photos: [...groups.values()].sort((a, b) => b.createdAt - a.createdAt) });
+    }
+    const roomReviewApproveMatch = p.match(/^\/internal\/moderation\/room-uploads\/([\w-]+)\/approve$/);
+    if (roomReviewApproveMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(roomReviewApproveMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      if (puzzle.room_review_status !== "pending") return json(res, 400, { error: "not pending" });
+      stmt.setRoomReviewApproved.run(puzzle.image_file);
+      adminLog.info("Admin одобрил загрузку в комнату", { puzzleId: puzzle.id, title: puzzle.title, ownerUserId: puzzle.owner_user_id });
+      return json(res, 200, { ok: true });
+    }
+    const roomReviewRejectMatch = p.match(/^\/internal\/moderation\/room-uploads\/([\w-]+)\/reject$/);
+    if (roomReviewRejectMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(roomReviewRejectMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      const body = await readJson(req);
+      const reason = str(body.reason, 400) || null;
+      // В отличие от отклонения ПУБЛИКАЦИИ (остаётся приватным для
+      // возможной переотправки) — тут отклонение сразу удаляет: раз фото
+      // уже нарушает правила самой загрузки в комнату, держать его там
+      // незачем (см. план). 'rejected' поэтому не хранится как статус.
+      forceDeletePuzzleGroup(puzzle);
+      adminLog.warn("Admin отклонил загрузку в комнату — удалено", { puzzleId: puzzle.id, title: puzzle.title, ownerUserId: puzzle.owner_user_id, reason });
       return json(res, 200, { ok: true });
     }
 
@@ -1276,7 +1392,7 @@ async function api(req, res, url, user) {
       const { rows, cols } = gridForPieceTarget(total, width, height);
       const id = crypto.randomUUID();
       const seed = crypto.randomInt(1, 2 ** 31 - 1);
-      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId, null, null, ts, deviceId, null, user.id, user.username || null, user.name || null);
+      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId, null, null, ts, deviceId, null, user.id, user.username || null, user.name || null, user.email || null, "pending");
       return puzzlePayload(stmt.puzzle.get(id));
     });
     adminLog.info("Загружено своё фото", { userId: user.id, roomId, title, variants: variants.length });

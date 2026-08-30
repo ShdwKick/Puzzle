@@ -39,10 +39,27 @@ authCli("adduser", "danil", "ПарольДляТеста-2026");
 authCli("adduser", "sputnik", "ПарольПопутчика-2026");
 
 const procs = [];
+// Буфер stdout+stderr по имени процесса — нужен, чтобы проверить письма
+// мейлера (см. план «Разделение модерации... + письма»): без RESEND_API_KEY
+// mailer.js логирует "письмо не отправлено" через console.log (stdout),
+// который раньше тут просто отбрасывался (пустой обработчик). stderr
+// по-прежнему дублируется в вывод теста с префиксом, как раньше.
+const logs = new Map();
 function start(name, cwd, env) {
   const p = spawn("node", [...NODE_ARGS, "server.js"], { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-  p.stdout.on("data", () => {}); p.stderr.on("data", d => process.stderr.write(`[${name}] ${d}`));
+  logs.set(name, "");
+  const append = d => logs.set(name, logs.get(name) + d.toString());
+  p.stdout.on("data", append);
+  p.stderr.on("data", d => { process.stderr.write(`[${name}] ${d}`); append(d); });
   procs.push(p);
+}
+async function waitForLog(name, substring, timeoutMs = 3000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if ((logs.get(name) || "").includes(substring)) return true;
+    await sleep(100);
+  }
+  return false;
 }
 const ADMIN_KEY = "test-admin-key";
 start("auth", AUTH_DIR, { ...authEnv, DEV: "1", ISSUER: AUTH, PORT: String(AUTH_PORT), HOST: "127.0.0.1", ADMIN_INTERNAL_KEY: ADMIN_KEY });
@@ -815,6 +832,89 @@ ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryA.id}`, { met
 ok("уборка: категория A удалена", ir.status === 200, String(ir.status));
 ir = await internalCall(ADMIN_KEY, `/internal/categories/${newPendingCategory.id}`, { method: "DELETE" });
 ok("уборка: одобренная новая категория удалена", ir.status === 200, String(ir.status));
+
+// ───────── разделение модерации: загрузка в комнату vs публикация + письма
+// (см. план «Разделение модерации: загрузка в комнату vs публикация +
+// письма») ─────────
+r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комната для фоновой модерации" } });
+const reviewRoomId = r.body.id;
+
+ur = await callRaw(tokenA, `/puzzles?roomId=${reviewRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото на фоновую проверку")}`, fakePng, "image/png");
+const uploadForReview = await ur.json();
+const reviewPuzzleId = uploadForReview.variants[0].id;
+
+ir = await internalCall("wrong-key", "/internal/moderation/room-uploads");
+ok("GET /internal/moderation/room-uploads без ключа — 403", ir.status === 403, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/moderation/room-uploads");
+const roomQueueAfterUpload = await ir.json();
+ok("свежая загрузка в комнату сразу попадает в очередь фоновой модерации",
+  roomQueueAfterUpload.photos.some(x => x.id === reviewPuzzleId), JSON.stringify(roomQueueAfterUpload.photos.map(x => x.id)));
+
+ir = await internalCall(ADMIN_KEY, "/internal/moderation/photos");
+const publishQueueBeforePublish = await ir.json();
+ok("КЛЮЧЕВАЯ ПРОВЕРКА разделения: фото, которое никогда не публиковалось, НЕ видно в очереди заявок на публикацию",
+  !publishQueueBeforePublish.photos.some(x => x.id === reviewPuzzleId), JSON.stringify(publishQueueBeforePublish.photos.map(x => x.id)));
+
+r = await asJson(tokenA, `/puzzles?roomId=${reviewRoomId}`);
+ok("фото уже доступно в комнате МГНОВЕННО, не дожидаясь фоновой модерации",
+  r.body.some(x => x.id === reviewPuzzleId), JSON.stringify(r.body.map(x => x.id)));
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/room-uploads/${reviewPuzzleId}/approve`, { method: "POST" });
+ok("Admin одобрил загрузку в комнату — 200", ir.status === 200, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/moderation/room-uploads");
+ok("одобренная загрузка пропала из очереди фоновой модерации", !(await ir.json()).photos.some(x => x.id === reviewPuzzleId));
+
+r = await asJson(tokenA, `/puzzles?roomId=${reviewRoomId}`);
+ok("после одобрения фото по-прежнему в комнате (одобрение ничего не меняет для пользователя)",
+  r.body.some(x => x.id === reviewPuzzleId));
+
+// Отклонение — вторая загрузка, фоновая модерация находит нарушение и форс-удаляет.
+ur = await callRaw(tokenA, `/puzzles?roomId=${reviewRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото, которое отклонят")}`, fakePng, "image/png");
+const uploadToReject = await ur.json();
+const rejectReviewPuzzleId = uploadToReject.variants[0].id;
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/room-uploads/${rejectReviewPuzzleId}/reject`, {
+  method: "POST", body: { reason: "нарушает правила загрузки" },
+});
+ok("Admin отклонил загрузку в комнату — 200", ir.status === 200, String(ir.status));
+
+r = await asJson(tokenA, `/puzzles?roomId=${reviewRoomId}`);
+ok("отклонённое фото форс-удалено — пропало из комнаты (в отличие от отклонения ПУБЛИКАЦИИ, тут не остаётся приватным)",
+  !r.body.some(x => x.id === rejectReviewPuzzleId), JSON.stringify(r.body.map(x => x.id)));
+
+ir = await internalCall(ADMIN_KEY, "/internal/moderation/room-uploads");
+ok("отклонённая загрузка пропала из очереди", !(await ir.json()).photos.some(x => x.id === rejectReviewPuzzleId));
+
+// ───────── письма о результате публикации ─────────
+// Отдельный пользователь С почтой — danil/sputnik заведены без неё
+// (authCli adduser без третьего аргумента), а без puzzle.uploader_email
+// notifyPublishOutcome молча не отправляет письмо вовсе (см. server.js) —
+// для проверки самой отправки нужен аккаунт, где есть что положить в это
+// поле при self-upload.
+authCli("adduser", "mailtest", "ПочтаДляТеста-2026", "mailtest@example.com");
+const tokenMail = await login("mailtest", "ПочтаДляТеста-2026");
+r = await asJson(tokenMail, "/rooms", { method: "POST", body: { title: "Комната для проверки писем" } });
+const mailRoomId = r.body.id;
+
+ur = await callRaw(tokenMail, `/puzzles?roomId=${mailRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото для письма-одобрения")}`, fakePng, "image/png");
+const uploadForMailApprove = await ur.json();
+const mailApproveId = uploadForMailApprove.variants[0].id;
+await asJson(tokenMail, `/puzzles/${mailApproveId}/publish`, { method: "POST", body: { consent: true } });
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${mailApproveId}/approve`, { method: "POST" });
+ok("Admin одобрил публикацию (для проверки письма) — 200", ir.status === 200, String(ir.status));
+ok("письмо-одобрение залогировано мейлером (нет RESEND_API_KEY в тестовом окружении — лог вместо отправки)",
+  await waitForLog("puzzle", "опубликовано в библиотеке"), "тема письма-одобрения не найдена в логе puzzle");
+ok("письмо ушло именно на mailtest@example.com", await waitForLog("puzzle", "mailtest@example.com"), "");
+
+ur = await callRaw(tokenMail, `/puzzles?roomId=${mailRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото для письма-отказа")}`, fakePng, "image/png");
+const uploadForMailReject = await ur.json();
+const mailRejectId = uploadForMailReject.variants[0].id;
+await asJson(tokenMail, `/puzzles/${mailRejectId}/publish`, { method: "POST", body: { consent: true } });
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${mailRejectId}/reject`, { method: "POST", body: { reason: "тестовая причина отказа" } });
+ok("Admin отклонил публикацию (для проверки письма) — 200", ir.status === 200, String(ir.status));
+ok("письмо-отказ залогировано мейлером", await waitForLog("puzzle", `«Фото для письма-отказа» отклонено`), "тема письма-отказа не найдена в логе puzzle");
 
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);
