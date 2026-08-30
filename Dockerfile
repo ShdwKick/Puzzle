@@ -15,15 +15,21 @@ COPY index.html ./
 COPY robots.txt ./
 COPY sitemap.xml ./
 COPY assets/ ./assets/
+# lib/ (mailer.js, emailTemplates.js — см. план «Разделение модерации... +
+# письма») — отдельная строка, маска *.js на строке выше берёт только корень
+# каталога, не подкаталоги. Ровно тот случай, о котором предупреждает
+# комментарий выше про "забытый файл роняет контейнер MODULE_NOT_FOUND" —
+# сюда же он и попал при первой версии этого Dockerfile.
+COPY lib/ ./lib/
 
 # Проверка на этапе сборки: пропавший модуль ломает сборку, а не контейнер на
 # сервере. Запускать сервер нельзя — он бы занял порт и повис, поэтому только
 # наличие файлов и разбор синтаксиса.
 RUN set -e; \
-    for f in server.js auth-client.js admin-internal.js index.html; do \
+    for f in server.js auth-client.js admin-internal.js index.html lib/mailer.js lib/emailTemplates.js; do \
       test -f "$f" || { echo "В образе нет $f — проверьте COPY в Dockerfile"; exit 1; }; \
     done; \
-    for f in server.js auth-client.js admin-internal.js; do node --check "$f"; done; \
+    for f in server.js auth-client.js admin-internal.js lib/mailer.js lib/emailTemplates.js; do node --check "$f"; done; \
     for f in assets/app.js assets/puzzle-shapes.js assets/auth-client.js; do node --check "$f"; done
 
 # Каталог данных: store.db. В контейнере он смонтирован томом —
