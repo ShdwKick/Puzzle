@@ -415,6 +415,11 @@ const stmt = {
     ORDER BY p.sort_order, p.created_at LIMIT 1`),
   insertCategory: db.prepare("INSERT INTO categories (id, name, slug, status, created_by, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   setCategorySlug: db.prepare("UPDATE categories SET slug = ? WHERE id = ?"),
+  // Редактирование категории Админом (см. план «Алиас и публичное название
+  // категории») — имя (видимое пользователям) и слаг/алиас (технический,
+  // идёт в URL, см. /category/:slug) правятся раздельно и независимо друг
+  // от друга — PATCH-хендлер ниже сам решает, какой из двух вызвать.
+  setCategoryName: db.prepare("UPDATE categories SET name = ? WHERE id = ?"),
   deleteCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
   setCategoryApproved: db.prepare("UPDATE categories SET status = 'approved', moderation_reason = NULL WHERE id = ?"),
   setCategoryRejected: db.prepare("UPDATE categories SET status = 'rejected', moderation_reason = ? WHERE id = ?"),
@@ -1350,21 +1355,39 @@ const server = http.createServer(async (req, res) => {
     if (p === "/internal/categories" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       // Все статусы разом — админу нужно видеть и pending (для будущей
-      // модерации), не только approved.
-      return json(res, 200, { categories: stmt.listCategories.all().map(c => ({ id: c.id, name: c.name, status: c.status, createdBy: c.created_by, createdAt: c.created_at })) });
+      // модерации), не только approved. slug — тут же (см. план «Алиас и
+      // публичное название категории»): Admin показывает и правит его
+      // отдельно от name.
+      return json(res, 200, { categories: stmt.listCategories.all().map(c => ({ id: c.id, name: c.name, slug: c.slug, status: c.status, createdBy: c.created_by, createdAt: c.created_at })) });
     }
     if (p === "/internal/categories" && req.method === "POST") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       const body = await readJson(req);
       const name = str(body.name, 80);
       if (!name) return json(res, 400, { error: "bad name" });
+      // Алиас — необязателен (см. план «Алиас и публичное название
+      // категории»): name — то, что видят люди на странице («Кошки»),
+      // slug — технический, идёт в путь (/category/cats). Без явного
+      // значения — прежнее поведение, вывести из name (кириллица как есть).
+      // С явным — берём ЕГО за основу для slugify, а не name, и требуем
+      // точного совпадения на уникальность (не подбираем -2/-3 молча —
+      // раз админ написал конкретный алиас, тихая подмена на другой была бы
+      // сюрпризом).
+      const customSlug = str(body.slug, 60);
+      let slug;
+      if (customSlug) {
+        slug = slugify(customSlug);
+        if (stmt.categoryBySlug.get(slug)) return json(res, 400, { error: "slug taken" });
+      } else {
+        slug = makeUniqueSlug(name);
+      }
       const id = crypto.randomUUID(), ts = now();
       // sort_order = ts — новые категории естественно уходят в конец
       // списка, та же идея, что уже используется для сортировки своих фото.
       // Admin создаёт категорию сразу approved, без created_by — не заявка.
-      stmt.insertCategory.run(id, name, makeUniqueSlug(name), "approved", null, ts, ts);
-      adminLog.info("Admin создал категорию", { categoryId: id, name });
-      return json(res, 200, { id, name });
+      stmt.insertCategory.run(id, name, slug, "approved", null, ts, ts);
+      adminLog.info("Admin создал категорию", { categoryId: id, name, slug });
+      return json(res, 200, { id, name, slug });
     }
     const categoryDeleteMatch = p.match(/^\/internal\/categories\/([\w-]+)$/);
     if (categoryDeleteMatch && req.method === "DELETE") {
@@ -1377,6 +1400,35 @@ const server = http.createServer(async (req, res) => {
       stmt.deleteCategory.run(category.id);
       adminLog.info("Admin удалил категорию", { categoryId: category.id, name: category.name });
       return json(res, 200, { ok: true });
+    }
+    // Редактирование имени/алиаса существующей категории (см. план «Алиас и
+    // публичное название категории») — оба поля необязательны в теле
+    // запроса, правится только то, что реально прислали (частичный PATCH),
+    // не полная замена. protected category тут НЕ проверяем — в отличие от
+    // DELETE, переименовать «Пользовательские» безопасно, id (используемый
+    // как внешний ключ у puzzle_categories) не меняется.
+    const categoryUpdateMatch = p.match(/^\/internal\/categories\/([\w-]+)$/);
+    if (categoryUpdateMatch && req.method === "PATCH") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const category = stmt.categoryById.get(categoryUpdateMatch[1]);
+      if (!category) return json(res, 404, { error: "not found" });
+      const body = await readJson(req);
+      let { name, slug } = category;
+      if (body.name !== undefined) {
+        name = str(body.name, 80);
+        if (!name) return json(res, 400, { error: "bad name" });
+        stmt.setCategoryName.run(name, category.id);
+      }
+      if (body.slug !== undefined) {
+        const customSlug = str(body.slug, 60);
+        if (!customSlug) return json(res, 400, { error: "bad slug" });
+        slug = slugify(customSlug);
+        const existing = stmt.categoryBySlug.get(slug);
+        if (existing && existing.id !== category.id) return json(res, 400, { error: "slug taken" });
+        stmt.setCategorySlug.run(slug, category.id);
+      }
+      adminLog.info("Admin изменил категорию", { categoryId: category.id, name, slug });
+      return json(res, 200, { id: category.id, name, slug });
     }
     // Переименование уже загруженной через Admin картинки (см. Admin
     // app.js wirePuzzleLibrary) — импорт с Pexels без alt-текста у фото

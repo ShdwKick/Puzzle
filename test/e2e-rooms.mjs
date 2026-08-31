@@ -698,10 +698,50 @@ ok("все approved категории видны в публичном спис
   publicCategories.length === 3 && publicCategories.some(c => c.id === categoryA.id) && publicCategories.some(c => c.id === categoryB.id),
   JSON.stringify(publicCategories));
 
+// ───────── алиас и публичное название категории (см. план «Алиас и
+// публичное название категории») — name видят люди на странице, slug идёт
+// в путь и может задаваться явно, независимо от name ─────────
+ir = await internalCall(ADMIN_KEY, "/internal/categories", { method: "POST", body: { name: "Кошки", slug: "cats" } });
+const categoryCats = await ir.json();
+ok("категория с явным алиасом — slug именно 'cats', не производный от «Кошки»",
+  ir.status === 200 && categoryCats.id && categoryCats.name === "Кошки" && categoryCats.slug === "cats", JSON.stringify(categoryCats));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories", { method: "POST", body: { name: "Котики", slug: "cats" } });
+ok("повторный явный алиас 'cats' — 400 slug taken (не подбирается тихо cats-2)",
+  ir.status === 400 && (await ir.json()).error === "slug taken", String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryCats.id}`, { method: "PATCH", body: { name: "Котята" } });
+const catsRenamed = await ir.json();
+ok("PATCH — переименование (name) не трогает alias (slug)",
+  ir.status === 200 && catsRenamed.name === "Котята" && catsRenamed.slug === "cats", JSON.stringify(catsRenamed));
+
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryCats.id}`, { method: "PATCH", body: { slug: "kittens" } });
+const catsResluged = await ir.json();
+ok("PATCH — смена алиаса (slug) не трогает имя (name)",
+  ir.status === 200 && catsResluged.slug === "kittens" && catsResluged.name === "Котята", JSON.stringify(catsResluged));
+
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryB.id}`, { method: "PATCH", body: { slug: "kittens" } });
+ok("PATCH — чужой уже занятый алиас отбит 400 (id себя самого не считается конфликтом)",
+  ir.status === 400 && (await ir.json()).error === "slug taken", String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories/no-such-id", { method: "PATCH", body: { name: "x" } });
+ok("PATCH несуществующей категории — 404", ir.status === 404, String(ir.status));
+
+ir = await internalCall("wrong-key", `/internal/categories/${categoryCats.id}`, { method: "PATCH", body: { name: "x" } });
+ok("PATCH без верного ключа — 403", ir.status === 403, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories");
+const adminCategoriesList = (await ir.json()).categories;
+ok("GET /internal/categories отдаёт slug у каждой категории",
+  adminCategoriesList.every(c => typeof c.slug === "string" && c.slug.length > 0), JSON.stringify(adminCategoriesList.map(c => c.slug)));
+
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryCats.id}`, { method: "DELETE" });
+ok("уборка: тестовая категория «Котята» (cats/kittens) удалена", ir.status === 200, String(ir.status));
+
 // ───────── слаги категорий, sitemap.xml, SEO-заглушка serveApp (см. план
 // «Прямые ссылки вместо #/ + страница категорий») ─────────
-// Публичный /api/categories — единственный роут, который реально отдаёт slug
-// (/internal/categories POST отдаёт только {id,name}).
+// Публичный /api/categories отдаёт то же поле slug (кроме name), что и
+// /internal/categories теперь тоже отдаёт (см. блок с алиасом выше).
 const categoryASlug = publicCategories.find(c => c.id === categoryA.id)?.slug;
 const categoryBSlug = publicCategories.find(c => c.id === categoryB.id)?.slug;
 ok("слаг категории «Природа» — «природа», без транслитерации", categoryASlug === "природа", String(categoryASlug));
