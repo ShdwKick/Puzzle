@@ -598,7 +598,10 @@ function buildCard(p, opts = {}) {
     status.textContent = p.moderationStatus === "pending" ? "На модерации"
       : p.moderationStatus === "approved" ? "Опубликовано"
       : `Отклонено: ${p.moderationReason || "без причины"}`;
-    body.insertBefore(status, $(node, ".puzzle-card-play"));
+    // Просто appendChild — «За стол» теперь в .puzzle-card-title-row, не
+    // прямой child body (см. index.html, tplPuzzleCard), insertBefore
+    // относительно него больше не имеет смысла как ориентир позиции.
+    body.appendChild(status);
   }
 
   const playBtn = $(node, ".puzzle-card-play");
@@ -712,6 +715,52 @@ async function applyBadge(node, p) {
   badge.hidden = true;
 }
 
+const PUZZLE_PAGE_SIZE = 48;
+const PAGER_HTML = `
+  <div class="pager" hidden>
+    <button class="btn outlined sm pager-prev" type="button">← Назад</button>
+    <span class="muted pager-label"></span>
+    <button class="btn outlined sm pager-next" type="button">Вперёд →</button>
+  </div>`;
+
+/** Общая пагинация сеток пазлов (библиотека/категория/профиль, см. план
+ *  «Пагинация») — тот же паттерн, что ROOMS_PAGE_SIZE у комнат (см.
+ *  renderRoomsList), просто с шагом 48 и карточками пазлов. gridEl/pagerEl
+ *  — уже существующие в root контейнеры (см. PAGER_HTML выше). Возвращает
+ *  show(items) — вызвать с полным списком карточек этой страницы;
+ *  повторный вызов (смена фильтра категории и т.п.) сбрасывает на первую
+ *  страницу пагинации. */
+function mountPuzzleGridPager(gridEl, pagerEl, signal) {
+  let items = [];
+  let page = 0;
+  const prevBtn = $(pagerEl, ".pager-prev");
+  const nextBtn = $(pagerEl, ".pager-next");
+  const label = $(pagerEl, ".pager-label");
+
+  function renderPage() {
+    const pages = Math.max(1, Math.ceil(items.length / PUZZLE_PAGE_SIZE));
+    page = Math.min(page, pages - 1);
+    const start = page * PUZZLE_PAGE_SIZE;
+    const pageItems = items.slice(start, start + PUZZLE_PAGE_SIZE);
+
+    gridEl.innerHTML = "";
+    const cards = pageItems.map((p, i) => { const node = buildCard(p, { eager: page === 0 && i === 0 }); gridEl.appendChild(node); return { p, node }; });
+    for (const { p, node } of cards) applyBadge(node, p);
+
+    const showPager = items.length > PUZZLE_PAGE_SIZE;
+    pagerEl.hidden = !showPager;
+    if (showPager) {
+      label.textContent = `Стр. ${page + 1} из ${pages}`;
+      prevBtn.disabled = page <= 0;
+      nextBtn.disabled = page >= pages - 1;
+    }
+  }
+  prevBtn.addEventListener("click", () => { page = Math.max(0, page - 1); renderPage(); gridEl.scrollIntoView({ block: "start" }); }, { signal });
+  nextBtn.addEventListener("click", () => { page += 1; renderPage(); gridEl.scrollIntoView({ block: "start" }); }, { signal });
+
+  return newItems => { items = newItems; page = 0; renderPage(); };
+}
+
 async function renderLibrary(root, signal) {
   // Тот же текст, что в index.html — статичная заглушка ДО отработки JS
   // (см. план «SEO», комментарий там же) — расхождение тут читалось бы
@@ -725,7 +774,8 @@ async function renderLibrary(root, signal) {
     </div>
     <div id="guestNoteWrap"></div>
     <div id="categoryCarouselWrap"></div>
-    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>
+    ${PAGER_HTML}`;
 
   if (!auth.isAuthenticated()) {
     const note = document.createElement("div");
@@ -754,24 +804,22 @@ async function renderLibrary(root, signal) {
   // сложности одного изображения (общий imageUrl) в одну карточку — иначе
   // Холмы/Лес/Горы показались бы по 6 раз каждый (см. server.js, BUILTIN_IMAGES).
   const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
-  const grid = $(root, "#puzzleGrid");
+  const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, ".pager"), signal);
 
-  function paintGrid(groups) {
-    grid.innerHTML = "";
-    const cards = groups.map((p, i) => { const node = buildCard(p, { eager: i === 0 }); grid.appendChild(node); return { p, node }; });
-    for (const { p, node } of cards) applyBadge(node, p);
-  }
-
-  // Карусель рисуем только если категории вообще заведены (см. план) — без
-  // этого единственный чип «Все» без выбора был бы бессмысленным элементом.
-  if (categories.length) {
+  // Категория стала many-to-many (см. план «Категории many-to-many») —
+  // один пазл считается в НЕСКОЛЬКИХ счётчиках сразу, поэтому счёт идёт
+  // по каждому id из categoryIds, не по одному значению на пазл.
+  const counts = new Map();
+  for (const p of allGroups) for (const cid of p.categoryIds || []) counts.set(cid, (counts.get(cid) || 0) + 1);
+  // Пустые категории (0 пазлов) не показываем вовсе (см. план) — чип-фильтр
+  // на пустое множество только сбивал бы с толку. Карусель рисуем, только
+  // если после этого хоть одна категория осталась — иначе единственный чип
+  // «Все» без выбора был бы бессмысленным элементом (см. план «Категории
+  // пазлов»).
+  const nonEmptyCategories = categories.filter(c => (counts.get(c.id) || 0) > 0);
+  if (nonEmptyCategories.length) {
     const carouselEl = $(root, "#categoryCarouselWrap");
-    // Категория стала many-to-many (см. план «Категории many-to-many») —
-    // один пазл считается в НЕСКОЛЬКИХ счётчиках сразу, поэтому счёт идёт
-    // по каждому id из categoryIds, не по одному значению на пазл.
-    const counts = new Map();
-    for (const p of allGroups) for (const cid of p.categoryIds || []) counts.set(cid, (counts.get(cid) || 0) + 1);
-    const chips = [{ id: null, name: "Все", count: allGroups.length }, ...categories.map(c => ({ id: c.id, name: c.name, count: counts.get(c.id) || 0 }))];
+    const chips = [{ id: null, name: "Все", count: allGroups.length }, ...nonEmptyCategories.map(c => ({ id: c.id, name: c.name, count: counts.get(c.id) }))];
     const carousel = document.createElement("div");
     carousel.className = "category-carousel";
     for (const c of chips) {
@@ -783,14 +831,14 @@ async function renderLibrary(root, signal) {
       btn.addEventListener("click", () => {
         carousel.querySelectorAll(".category-chip").forEach(chip => chip.classList.remove("is-active"));
         btn.classList.add("is-active");
-        paintGrid(c.id === null ? allGroups : filterGroupsByCategory(allGroups, c.id));
+        showPage(c.id === null ? allGroups : filterGroupsByCategory(allGroups, c.id));
       });
       carousel.appendChild(btn);
     }
     carouselEl.appendChild(carousel);
   }
 
-  paintGrid(allGroups);
+  showPage(allGroups);
 }
 
 /** Профиль пользователя (см. план «Категории many-to-many, автор карточки,
@@ -800,7 +848,8 @@ async function renderLibrary(root, signal) {
 async function renderProfile(root, userId, signal) {
   root.innerHTML = `
     <div class="library-head" id="profileHead"><h1>Загружаем…</h1></div>
-    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>
+    ${PAGER_HTML}`;
 
   let data;
   try {
@@ -818,15 +867,13 @@ async function renderProfile(root, userId, signal) {
     ? `<h1>Пазлы, опубликованные ${data.username}</h1>`
     : `<h1>Профиль</h1><p>Пользователь ничего не опубликовал.</p>`;
 
-  const grid = $(root, "#puzzleGrid");
-  grid.innerHTML = "";
   if (!data.puzzles.length) {
-    grid.outerHTML = '<p class="state-note">Пока ничего не опубликовано.</p>';
+    $(root, "#puzzleGrid").outerHTML = '<p class="state-note">Пока ничего не опубликовано.</p>';
+    $(root, ".pager").remove();
     return;
   }
-  const cards = groupPuzzles(data.puzzles)
-    .map((p, i) => { const node = buildCard(p, { eager: i === 0 }); grid.appendChild(node); return { p, node }; });
-  for (const { p, node } of cards) applyBadge(node, p);
+  const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, ".pager"), signal);
+  showPage(groupPuzzles(data.puzzles));
 }
 
 /** Дефолтные title/description — дословно как в index.html и в
@@ -875,24 +922,44 @@ async function renderCategories(root, signal) {
   const counts = new Map();
   for (const p of allGroups) for (const cid of p.categoryIds || []) counts.set(cid, (counts.get(cid) || 0) + 1);
 
+  // Пустые категории (0 пазлов) не показываем — вести на страницу без
+  // единой карточки незачем (см. план).
+  const nonEmptyCategories = categories.filter(c => (counts.get(c.id) || 0) > 0);
+
   const gridEl = $(root, "#categoryBlockGrid");
-  if (!categories.length) {
+  if (!nonEmptyCategories.length) {
     gridEl.innerHTML = '<p class="state-note">Категорий пока нет.</p>';
     return;
   }
   gridEl.innerHTML = "";
-  for (const c of categories) {
-    const count = counts.get(c.id) || 0;
+  for (const c of nonEmptyCategories) {
+    const count = counts.get(c.id);
+    // Обложка — первый пазл категории (см. план «Обложка категории»), тот
+    // же порядок, что и allGroups: с сервера уже ORDER BY sort_order,
+    // created_at (см. server.js, stmt.puzzlesPublic), groupPuzzles его не
+    // меняет — так что group[0] тут и есть «первый» в том же смысле,
+    // что и в остальной библиотеке.
+    const cover = filterGroupsByCategory(allGroups, c.id)[0];
     const a = document.createElement("a");
     a.className = "category-block";
     a.href = `/category/${encodeURIComponent(c.slug)}`;
+    const thumb = document.createElement("div");
+    thumb.className = "category-block-thumb";
+    const img = document.createElement("img");
+    img.src = cover.imageUrl;
+    img.alt = "";
+    img.loading = "lazy";
+    thumb.appendChild(img);
+    const body = document.createElement("div");
+    body.className = "category-block-body";
     const name = document.createElement("span");
     name.className = "category-block-name";
     name.textContent = c.name;
     const countEl = document.createElement("span");
     countEl.className = "category-block-count";
     countEl.textContent = `${count} ${plural(count, "пазл", "пазла", "пазлов")}`;
-    a.append(name, countEl);
+    body.append(name, countEl);
+    a.append(thumb, body);
     gridEl.appendChild(a);
   }
 }
@@ -905,7 +972,8 @@ async function renderCategories(root, signal) {
 async function renderCategoryPage(root, slug, signal) {
   root.innerHTML = `
     <div class="library-head" id="categoryHead"><h1>Загружаем…</h1></div>
-    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>`;
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>
+    ${PAGER_HTML}`;
 
   let categories, puzzles;
   try {
@@ -932,6 +1000,7 @@ async function renderCategoryPage(root, slug, signal) {
     p.appendChild(link);
     headEl.append(h1, p);
     $(root, "#puzzleGrid").remove();
+    $(root, ".pager").remove();
     return;
   }
 
@@ -950,8 +1019,8 @@ async function renderCategoryPage(root, slug, signal) {
   intro.textContent = `${groups.length} ${plural(groups.length, "пазл", "пазла", "пазлов")} в категории «${category.name}» — собирайте онлайн бесплатно.`;
   headEl.append(h1, intro);
 
-  const grid = $(root, "#puzzleGrid");
   if (!groups.length) {
+    const grid = $(root, "#puzzleGrid");
     grid.innerHTML = "";
     const note = document.createElement("p");
     note.className = "state-note";
@@ -961,11 +1030,11 @@ async function renderCategoryPage(root, slug, signal) {
     link.textContent = "Все категории";
     note.appendChild(link);
     grid.appendChild(note);
+    $(root, ".pager").remove();
     return;
   }
-  grid.innerHTML = "";
-  const cards = groups.map((pz, i) => { const node = buildCard(pz, { eager: i === 0 }); grid.appendChild(node); return { pz, node }; });
-  for (const { pz, node } of cards) applyBadge(node, pz);
+  const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, ".pager"), signal);
+  showPage(groups);
 }
 
 /* ───────────────────────── стол: раскладка деталей ───────────────────────── */

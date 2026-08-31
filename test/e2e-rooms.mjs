@@ -717,13 +717,31 @@ ok("повторное имя категории получает уникаль
 ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryADup.id}`, { method: "DELETE" });
 ok("уборка: дубль-категория «Природа» (2) удалена", ir.status === 200, String(ir.status));
 
+// Пустые категории (0 пазлов) не попадают в sitemap.xml (см. план «Не
+// показываем категорию, если в ней 0 пазлов») — обе, А и Б, пока пусты.
 ir = await fetch(PUZZLE + "/sitemap.xml");
-const sitemapXml = await ir.text();
+let sitemapXml = await ir.text();
 ok("sitemap.xml — content-type application/xml", (ir.headers.get("content-type") || "").includes("application/xml"), ir.headers.get("content-type"));
 ok("sitemap.xml содержит главную", sitemapXml.includes("<loc>https://puzzle.burninghouse.ru/</loc>"), "");
 ok("sitemap.xml содержит /categories", sitemapXml.includes("<loc>https://puzzle.burninghouse.ru/categories</loc>"), "");
-ok("sitemap.xml содержит /category/природа (approved-категория)",
+ok("sitemap.xml НЕ содержит пустую категорию «Природа» (0 пазлов)",
+  !sitemapXml.includes(`/category/${encodeURIComponent(categoryASlug)}`), "");
+
+// Прикрепляем тестовый пазл к категории А — теперь она непустая и должна
+// появиться и в sitemap.xml, и в GET /api/categories (после cleanup — уже
+// проверено ниже сразу, отдельным запросом, до удаления).
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "Для проверки sitemap", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryIds: [categoryA.id] },
+});
+const sitemapSeedUpload = await ir.json();
+
+ir = await fetch(PUZZLE + "/sitemap.xml");
+sitemapXml = await ir.text();
+ok("sitemap.xml содержит /category/природа, как только в ней появился пазл",
   sitemapXml.includes(`<loc>https://puzzle.burninghouse.ru/category/${encodeURIComponent(categoryASlug)}</loc>`), "");
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${sitemapSeedUpload.variants[0].id}`, { method: "DELETE" });
+ok("уборка: тестовый пазл для проверки sitemap удалён", ir.status === 200, String(ir.status));
 
 const titleOf = html => (html.match(/<title>([^<]*)<\/title>/) || [])[1];
 const canonicalOf = html => (html.match(/<link rel="canonical" href="([^"]*)">/) || [])[1];
@@ -758,6 +776,14 @@ const categorizedVariants = libAfterCategoryUpload.filter(p => p.imageUrl === ca
 ok("все 6 вариантов несут одну и ту же категорию (many-to-many)",
   categorizedVariants.length === 6 && categorizedVariants.every(p => (p.categoryIds || []).includes(categoryA.id)),
   JSON.stringify(categorizedVariants.map(p => p.categoryIds)));
+
+// Обложка категории (см. план «Обложка категории») — серверная заглушка
+// /categories (categoriesListHtml, до отработки JS) несёт <img> с адресом
+// первого пазла категории; тот же адрес отдаёт /api/puzzles.
+ir = await fetch(PUZZLE + "/categories");
+const categoriesPageHtml = await ir.text();
+ok("серверная заглушка /categories несёт обложку — src первого пазла категории",
+  categoriesPageHtml.includes(`<img src="${categorizedUpload.variants[0].imageUrl}"`), "");
 
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
   method: "POST", body: { title: "С неверной категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryIds: ["no-such-category"] },

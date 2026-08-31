@@ -404,6 +404,15 @@ const stmt = {
     SELECT COUNT(DISTINCT pc.image_file) AS n FROM puzzle_categories pc
     JOIN puzzles p ON p.image_file = pc.image_file
     WHERE pc.category_id = ? AND p.owner_user_id IS NULL`),
+  // Обложка категории (см. план «Обложка категории») — первый пазл в том же
+  // порядке, что и сама библиотека (ORDER BY sort_order, created_at, см.
+  // puzzlesPublic) — тем же порядком group[0] в клиентском groupPuzzles
+  // (assets/app.js), просто без похода за всем списком целиком.
+  categoryFirstImage: db.prepare(`
+    SELECT p.image_file FROM puzzle_categories pc
+    JOIN puzzles p ON p.image_file = pc.image_file
+    WHERE pc.category_id = ? AND p.owner_user_id IS NULL
+    ORDER BY p.sort_order, p.created_at LIMIT 1`),
   insertCategory: db.prepare("INSERT INTO categories (id, name, slug, status, created_by, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   setCategorySlug: db.prepare("UPDATE categories SET slug = ? WHERE id = ?"),
   deleteCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
@@ -663,10 +672,12 @@ async function isDeviceBanned(deviceId) {
 // фото пользователей. .svg бывает только у трёх стартовых картинок —
 // sniffImage вообще не пропускает SVG на вход POST /api/puzzles и
 // POST /internal/puzzles, так что путаницы файл↔расширение тут не бывает.
+const imageUrlFor = imageFile => imageFile.endsWith(".svg") ? `/assets/puzzles/${imageFile}` : `/uploads/${imageFile}`;
+
 function puzzlePayload(p) {
   return {
     id: p.id, title: p.title, gridRows: p.grid_rows, gridCols: p.grid_cols,
-    imageUrl: p.image_file.endsWith(".svg") ? `/assets/puzzles/${p.image_file}` : `/uploads/${p.image_file}`,
+    imageUrl: imageUrlFor(p.image_file),
     seed: p.seed, ownerUserId: p.owner_user_id || null,
     // Только для показа автору (клиент сам решает, кому рисовать бейдж —
     // buildCard в app.js гейтит по mine), см. план «Модерация загруженных
@@ -990,11 +1001,22 @@ function applySeoOverride(html, { title, description, path: routePath, headBlock
  *  только клиентский рендер: сама суть страницы — список ссылок, без него
  *  краулер без JS не увидел бы тут ничего, кроме заголовка. */
 function categoriesListHtml() {
+  // Пустые категории (0 пазлов) не показываем — см. план «Не показываем
+  // категорию, если в ней 0 пазлов» — та же фильтрация, что клиентская
+  // renderCategories (assets/app.js), иначе краулер увидел бы в статичной
+  // заглушке ссылки, которых нет у пользователя после JS.
   const cats = stmt.listApprovedCategories.all()
-    .map(c => ({ ...c, count: stmt.categoryPublicPuzzleCount.get(c.id).n }));
+    .map(c => ({ ...c, count: stmt.categoryPublicPuzzleCount.get(c.id).n }))
+    .filter(c => c.count > 0);
   if (!cats.length) return "";
-  const items = cats.map(c =>
-    `<li><a href="/category/${encodeURIComponent(c.slug)}">${escapeHtml(c.name)} (${c.count})</a></li>`).join("\n    ");
+  // Обложка (см. план «Обложка категории») — тем же запросом, что и
+  // клиентский renderCategories берёт group[0]: первый пазл категории в
+  // порядке sort_order/created_at (см. stmt.categoryFirstImage).
+  const items = cats.map(c => {
+    const cover = stmt.categoryFirstImage.get(c.id);
+    const img = cover ? `<img src="${escapeHtml(imageUrlFor(cover.image_file))}" alt="" loading="lazy">` : "";
+    return `<li><a href="/category/${encodeURIComponent(c.slug)}">${img}${escapeHtml(c.name)} (${c.count})</a></li>`;
+  }).join("\n    ");
   return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
 }
 
@@ -1432,10 +1454,15 @@ const server = http.createServer(async (req, res) => {
     // но категории меняются во времени, статика устарела бы. Не через
     // ROOT_FILES/serveStatic — та ветка только читает файл с диска.
     if (p === "/sitemap.xml" && req.method === "GET") {
+      // Пустые категории (0 пазлов) — не в sitemap: страница без единой
+      // карточки не стоит краулингового бюджета (см. план «Не показываем
+      // категорию, если в ней 0 пазлов», та же фильтрация — categoriesListHtml выше).
       const urls = [
         { loc: `${PUBLIC_URL}/`, priority: "1.0" },
         { loc: `${PUBLIC_URL}/categories`, priority: "0.8" },
-        ...stmt.listApprovedCategories.all().map(c => ({ loc: `${PUBLIC_URL}/category/${encodeURIComponent(c.slug)}`, priority: "0.6" })),
+        ...stmt.listApprovedCategories.all()
+          .filter(c => stmt.categoryPublicPuzzleCount.get(c.id).n > 0)
+          .map(c => ({ loc: `${PUBLIC_URL}/category/${encodeURIComponent(c.slug)}`, priority: "0.6" })),
       ];
       const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`
         + urls.map(u => `  <url>\n    <loc>${escapeHtml(u.loc)}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`).join("\n")
