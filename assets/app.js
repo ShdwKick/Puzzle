@@ -762,6 +762,69 @@ function mountPuzzleGridPager(gridEl, pagerEl, signal) {
   return newItems => { items = newItems; page = 0; renderPage(); };
 }
 
+/** «Не нашли нужные пазлы?» — подвал библиотеки/категорий (см. план),
+ *  ведёт в уже существующий POST /api/categories — пользовательскую
+ *  заявку на новую категорию (см. server.js, api()): уходит в pending,
+ *  дальше — обычная модерация в Admin («Модерация категорий»), та же
+ *  очередь, что и у заявок из формы публикации своего фото. Ничего нового
+ *  на бэкенде заводить не пришлось — этой кнопки просто не было у уже
+ *  готового примитива. Гостю показываем «Войти», не саму форму — роут
+ *  отбивает 401 без входа, тот же принцип, что у guest-note в
+ *  renderLibrary (тут это отдельная функция, не общий блок с ней, потому
+ *  что нужна на трёх разных страницах — библиотека, категории, страница
+ *  категории — с разными местами вставки, но одинаковым содержимым). */
+function renderCategorySuggestBox(signal) {
+  const section = document.createElement("section");
+  section.className = "category-suggest";
+  section.innerHTML = `
+    <h2>Не нашли нужные пазлы?</h2>
+    <p>Предложите категорию, которой не хватает — рассмотрим и добавим.</p>`;
+
+  if (!auth.isAuthenticated()) {
+    const btn = document.createElement("button");
+    btn.className = "btn tonal sm";
+    btn.type = "button";
+    btn.textContent = "Войти, чтобы предложить категорию";
+    btn.addEventListener("click", () => auth.login(), { signal });
+    section.appendChild(btn);
+    return section;
+  }
+
+  const form = document.createElement("form");
+  form.className = "category-suggest-form";
+  form.innerHTML = `
+    <input class="text-input" type="text" maxlength="80" placeholder="Например: Космос" required>
+    <button class="btn filled sm" type="submit">Предложить</button>`;
+  const note = document.createElement("p");
+  note.className = "state-note";
+  note.hidden = true;
+  section.append(form, note);
+
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    const input = $(form, "input");
+    const name = input.value.trim();
+    if (!name) return;
+    const btn = $(form, "button[type=submit]");
+    btn.disabled = true;
+    note.hidden = true;
+    try {
+      const res = await auth.fetch("/api/categories", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }),
+      });
+      if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "failed");
+      input.value = "";
+      note.textContent = "Спасибо! Категория отправлена на рассмотрение.";
+    } catch {
+      note.textContent = "Не удалось отправить — попробуйте ещё раз.";
+    }
+    note.hidden = false;
+    btn.disabled = false;
+  }, { signal });
+
+  return section;
+}
+
 async function renderLibrary(root, signal) {
   // Тот же текст, что в index.html — статичная заглушка ДО отработки JS
   // (см. план «SEO», комментарий там же) — расхождение тут читалось бы
@@ -840,6 +903,7 @@ async function renderLibrary(root, signal) {
   }
 
   showPage(allGroups);
+  root.appendChild(renderCategorySuggestBox(signal));
 }
 
 /** Профиль пользователя (см. план «Категории many-to-many, автор карточки,
@@ -930,6 +994,7 @@ async function renderCategories(root, signal) {
   const gridEl = $(root, "#categoryBlockGrid");
   if (!nonEmptyCategories.length) {
     gridEl.innerHTML = '<p class="state-note">Категорий пока нет.</p>';
+    root.appendChild(renderCategorySuggestBox(signal));
     return;
   }
   gridEl.innerHTML = "";
@@ -963,6 +1028,7 @@ async function renderCategories(root, signal) {
     a.append(thumb, body);
     gridEl.appendChild(a);
   }
+  root.appendChild(renderCategorySuggestBox(signal));
 }
 
 /** Страница одной категории (см. план «Прямые ссылки + страница
@@ -1002,6 +1068,7 @@ async function renderCategoryPage(root, slug, signal) {
     headEl.append(h1, p);
     $(root, "#puzzleGrid").remove();
     $(root, ".pager").remove();
+    root.appendChild(renderCategorySuggestBox(signal));
     return;
   }
 
@@ -1032,10 +1099,12 @@ async function renderCategoryPage(root, slug, signal) {
     note.appendChild(link);
     grid.appendChild(note);
     $(root, ".pager").remove();
+    root.appendChild(renderCategorySuggestBox(signal));
     return;
   }
   const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, ".pager"), signal);
   showPage(groups);
+  root.appendChild(renderCategorySuggestBox(signal));
 }
 
 /* ───────────────────────── стол: раскладка деталей ───────────────────────── */
