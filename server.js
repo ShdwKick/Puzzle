@@ -1490,7 +1490,12 @@ const server = http.createServer(async (req, res) => {
     // /internal/moderation/photos/* выше один в один.
     if (p === "/internal/moderation/categories" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
-      return json(res, 200, { categories: stmt.listPendingCategories.all().map(c => ({ id: c.id, name: c.name, createdBy: c.created_by, createdAt: c.created_at })) });
+      // slug — тут же (см. план «Алиас и публичное название категории»):
+      // он уже сгенерирован из name при заявке (см. makeUniqueSlug ниже,
+      // POST /api/categories), просто автоматически — Admin показывает его
+      // как черновик прямо в диалоге одобрения, чтобы поправить сразу, не
+      // уходя потом отдельно редактировать уже одобренную категорию.
+      return json(res, 200, { categories: stmt.listPendingCategories.all().map(c => ({ id: c.id, name: c.name, slug: c.slug, createdBy: c.created_by, createdAt: c.created_at })) });
     }
     const catModApproveMatch = p.match(/^\/internal\/moderation\/categories\/([\w-]+)\/approve$/);
     if (catModApproveMatch && req.method === "POST") {
@@ -1498,9 +1503,22 @@ const server = http.createServer(async (req, res) => {
       const category = stmt.categoryById.get(catModApproveMatch[1]);
       if (!category) return json(res, 404, { error: "not found" });
       if (category.status !== "pending") return json(res, 400, { error: "not pending" });
+      const body = await readJson(req);
+      // slug необязателен — не прислали, остаётся автосгенерированный при
+      // заявке (см. GET выше); тот же приём валидации/уникальности, что и у
+      // PATCH /internal/categories/:id ниже.
+      let slug = category.slug;
+      if (body.slug) {
+        const customSlug = str(body.slug, 60);
+        if (!customSlug) return json(res, 400, { error: "bad slug" });
+        slug = slugify(customSlug);
+        const existing = stmt.categoryBySlug.get(slug);
+        if (existing && existing.id !== category.id) return json(res, 400, { error: "slug taken" });
+        stmt.setCategorySlug.run(slug, category.id);
+      }
       stmt.setCategoryApproved.run(category.id);
-      adminLog.info("Admin одобрил категорию", { categoryId: category.id, name: category.name });
-      return json(res, 200, { ok: true });
+      adminLog.info("Admin одобрил категорию", { categoryId: category.id, name: category.name, slug });
+      return json(res, 200, { ok: true, slug });
     }
     const catModRejectMatch = p.match(/^\/internal\/moderation\/categories\/([\w-]+)\/reject$/);
     if (catModRejectMatch && req.method === "POST") {

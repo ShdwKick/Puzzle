@@ -852,16 +852,16 @@ function renderCategorySuggestBox(signal) {
   // Иконка — лампочка (идея/предложение), тот же фирменный зелёный
   // градиент, что у акцентной полоски карточки комнаты (см. CSS,
   // .category-suggest-icon) — единственное яркое цветовое пятно на
-  // подсказке, весь остальной текст — нейтральный.
+  // подсказке, весь остальной текст — нейтральный. Всё центрировано одной
+  // колонкой (см. CSS) — без обёртки .category-suggest-body: раньше текст
+  // и форма жили в ней рядом с иконкой в строку, теперь все прямые дети
+  // секции просто идут друг под другом.
   section.innerHTML = `
     <div class="category-suggest-icon">
       <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2.3v.5a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-.5c0-1.1.4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>
     </div>
-    <div class="category-suggest-body">
-      <h2>Не нашли нужные пазлы?</h2>
-      <p>Предложите категорию, которой не хватает — рассмотрим и добавим.</p>
-    </div>`;
-  const body = $(section, ".category-suggest-body");
+    <h2>Не нашли нужные пазлы?</h2>
+    <p>Предложите категорию, которой не хватает — рассмотрим и добавим.</p>`;
 
   if (!auth.isAuthenticated()) {
     const btn = document.createElement("button");
@@ -869,7 +869,7 @@ function renderCategorySuggestBox(signal) {
     btn.type = "button";
     btn.textContent = "Войти, чтобы предложить категорию";
     btn.addEventListener("click", () => auth.login(), { signal });
-    body.appendChild(btn);
+    section.appendChild(btn);
     return section;
   }
 
@@ -881,7 +881,7 @@ function renderCategorySuggestBox(signal) {
   const note = document.createElement("p");
   note.className = "state-note";
   note.hidden = true;
-  body.append(form, note);
+  section.append(form, note);
 
   form.addEventListener("submit", async e => {
     e.preventDefault();
