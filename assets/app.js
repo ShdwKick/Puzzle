@@ -478,46 +478,97 @@ async function inProgressPuzzles(allPuzzles) {
   return out;
 }
 
+const IN_PROGRESS_PAGE_SIZE = 5;
+
+/** Карточка одной незавершённой сборки — переиспользует классы .puzzle-card
+ *  целиком (thumb/badge/title-row/play), тот же вид, что и у обычной
+ *  карточки библиотеки, только картинка теперь есть (см. план — раньше
+ *  список был текстовыми строками .history-row без превью). Кнопка
+ *  удаления — не buildCard (там куча лишнего: меню «…», автор, статус
+ *  модерации, выбор сложности) — своя маленькая, одно действие,
+ *  тем же приёмом наведения/фокуса, что у .puzzle-card>.menu-wrap
+ *  (см. CSS, .progress-card-delete). onDeleted вызывается ПОСЛЕ того, как
+ *  прогресс реально стёрт — рендер страницы сам решает, что дальше. */
+function buildInProgressCard(ip, signal, onDeleted) {
+  const card = document.createElement("article");
+  card.className = "puzzle-card";
+  card.innerHTML = `
+    <div class="puzzle-card-thumb">
+      <img alt="" loading="lazy">
+      <span class="puzzle-card-badge"></span>
+    </div>
+    <button class="icon-btn xs progress-card-delete" type="button" title="Удалить прогресс" aria-label="Удалить прогресс">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="puzzle-card-body">
+      <div class="puzzle-card-title-row">
+        <h3 class="puzzle-card-title"></h3>
+        <button class="btn filled sm" type="button">За стол</button>
+      </div>
+      <p class="puzzle-card-meta"></p>
+    </div>`;
+  $(card, "img").src = ip.imageUrl;
+  $(card, ".puzzle-card-title").textContent = ip.title;
+  const badge = $(card, ".puzzle-card-badge");
+  badge.textContent = `${Math.round((ip.piecesPlaced / ip.piecesTotal) * 100)}%`;
+  badge.hidden = false;
+  $(card, ".puzzle-card-meta").textContent = `${ip.piecesPlaced}/${ip.piecesTotal} деталей собрано`;
+  $(card, ".btn.filled.sm").addEventListener("click", () => {
+    navigate(`/table/${encodeURIComponent(ip.puzzleId)}`);
+  }, { signal });
+  $(card, ".progress-card-delete").addEventListener("click", async () => {
+    if (!confirm(`Удалить прогресс сборки «${ip.title}»?`)) return;
+    if (auth.isAuthenticated()) {
+      try { await auth.fetch(`/api/puzzles/${encodeURIComponent(ip.puzzleId)}/progress`, { method: "DELETE" }); } catch { /* при следующей загрузке страницы просто снова покажется — не критично */ }
+    } else {
+      localStorage.removeItem(localKey(ip.puzzleId));
+    }
+    onDeleted();
+  }, { signal });
+  return card;
+}
+
 /** Рисует список незавершённых сборок в контейнер wrap (см. план
- *  «Продолжить сборку») — та же вёрстка, что у истории сборок в комнате
- *  (.room-section-title/.room-history/.history-row, см. renderRoom), одна
- *  реализация на оба места вызова (сейчас — только renderLibrary, «над
- *  библиотекой», как просили). Ничего не рисует, если список пуст. */
+ *  «Продолжить сборку») — сетка карточек .puzzle-grid (та же, что у самой
+ *  библиотеки) вместо текстовых строк, с пагинацией (см. план) — тот же
+ *  паттерн .pager/PAGER_HTML, что у пагинации библиотеки и у комнат
+ *  (ROOMS_PAGE_SIZE), просто с шагом 5. Пагинатор появляется, только если
+ *  сборок больше одной страницы. Ничего не рисует, если список пуст. */
 function renderInProgressList(wrap, items, signal) {
   if (!items.length) return;
-  wrap.innerHTML = `<h3 class="room-section-title">Продолжить сборку</h3><div class="room-history" id="inProgressList"></div>`;
-  const listEl = $(wrap, "#inProgressList");
-  for (const ip of items) {
-    const row = document.createElement("div");
-    row.className = "history-row";
-    row.innerHTML = `
-      <div class="history-info">
-        <span class="history-puzzle"></span>
-        <span class="history-meta"></span>
-      </div>
-      <div class="history-actions">
-        <button class="btn filled sm" type="button">За стол</button>
-        <button class="icon-btn xs" type="button" title="Удалить" aria-label="Удалить">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-        </button>
-      </div>`;
-    $(row, ".history-puzzle").textContent = ip.title;
-    $(row, ".history-meta").textContent = `${ip.piecesPlaced}/${ip.piecesTotal} деталей собрано`;
-    $(row, ".btn.filled.sm").addEventListener("click", () => {
-      navigate(`/table/${encodeURIComponent(ip.puzzleId)}`);
-    }, { signal });
-    $(row, ".icon-btn.xs").addEventListener("click", async () => {
-      if (!confirm(`Удалить прогресс сборки «${ip.title}»?`)) return;
-      if (auth.isAuthenticated()) {
-        try { await auth.fetch(`/api/puzzles/${encodeURIComponent(ip.puzzleId)}/progress`, { method: "DELETE" }); } catch { /* лучше молча оставить строку, чем сломать список */ }
-      } else {
-        localStorage.removeItem(localKey(ip.puzzleId));
-      }
-      row.remove();
-      if (!listEl.children.length) wrap.innerHTML = "";
-    }, { signal });
-    listEl.appendChild(row);
+  wrap.innerHTML = `<h3 class="room-section-title">Продолжить сборку</h3><div class="puzzle-grid" id="inProgressGrid"></div>${PAGER_HTML}`;
+  const gridEl = $(wrap, "#inProgressGrid");
+  const pagerEl = $(wrap, ".pager");
+  const prevBtn = $(pagerEl, ".pager-prev");
+  const nextBtn = $(pagerEl, ".pager-next");
+  const label = $(pagerEl, ".pager-label");
+  let page = 0;
+
+  function renderPage() {
+    const pages = Math.max(1, Math.ceil(items.length / IN_PROGRESS_PAGE_SIZE));
+    page = Math.min(page, pages - 1);
+    const start = page * IN_PROGRESS_PAGE_SIZE;
+
+    gridEl.innerHTML = "";
+    for (const ip of items.slice(start, start + IN_PROGRESS_PAGE_SIZE)) {
+      gridEl.appendChild(buildInProgressCard(ip, signal, () => {
+        items.splice(items.indexOf(ip), 1);
+        if (!items.length) { wrap.innerHTML = ""; return; }
+        renderPage();
+      }));
+    }
+
+    const showPager = items.length > IN_PROGRESS_PAGE_SIZE;
+    pagerEl.hidden = !showPager;
+    if (showPager) {
+      label.textContent = `Стр. ${page + 1} из ${pages}`;
+      prevBtn.disabled = page <= 0;
+      nextBtn.disabled = page >= pages - 1;
+    }
   }
+  prevBtn.addEventListener("click", () => { page = Math.max(0, page - 1); renderPage(); }, { signal });
+  nextBtn.addEventListener("click", () => { page += 1; renderPage(); }, { signal });
+  renderPage();
 }
 
 /* ───────────────────────── шапка: аккаунт ─────────────────────────
