@@ -513,15 +513,19 @@ a{color:inherit}
 }
 .win-actions{display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap}
 
-/* Светлый фон стола — постоянные светлые тона, не зависят от темы
-   интерфейса: тёмная деталь на тёмном (в тёмной теме) фоне почти не
-   отличима от пустой доски, пока не собрана. Переключается кнопкой
-   на самом столе, не через общую тему сайта. */
-.table-stage.light-board{
-  background:
-    radial-gradient(circle at 1px 1px, #d9d6c9 1px, transparent 0) 0 0/22px 22px,
-    #f8f6ef;
-}
+/* Фон стола — свободный выбор цвета (см. план «RGB-фон стола», bindBoardBackground
+   в app.js) — не пресет светлый/тёмный, как раньше (см. историю, .light-board):
+   деталь на фоне того же тона почти не видна по краям, пока не собрана,
+   поэтому даём выбрать ЛЮБОЙ цвет, а не два готовых. --table-bg — инлайновая
+   custom property (JS), .custom-bg просто переключает background на неё,
+   заменяя точечный узор сплошной заливкой. */
+.table-stage.custom-bg{background:var(--table-bg)}
+/* Нативный <input type="color"> — визуально спрятан (не display:none, чтобы
+   клик по <label>, который его оборачивает, надёжно открывал системный
+   пикер во всех браузерах), сама кнопка — обычная .btn.outlined.icon
+   с иконкой палитры поверх. */
+#boardBgBtn{position:relative}
+#boardBgBtn input[type="color"]{position:absolute;width:0;height:0;opacity:0;pointer-events:none}
 
 /* ===================== КОМНАТЫ: СПИСОК ===================== */
 .text-input{

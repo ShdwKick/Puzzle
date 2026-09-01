@@ -40,9 +40,10 @@ const PROHIBITED_TIER_B = [
 /* ───────────────────────── тема приложения ─────────────────────────
  * Общий переключатель светлой/тёмной темы (data-theme на <html>) — тот же
  * приём, что и во всех остальных сервисах BurningHouse (Movies/Trip/
- * Финансы/Brain). НЕ путать с #boardThemeBtn/.light-board на столе ниже —
- * та кнопка переключает ТОЛЬКО фон игрового стола, а не тему всего
- * приложения; обе кнопки остаются, это разные вещи. Puzzle's $ — по
+ * Финансы/Brain). НЕ путать с #boardBgBtn на столе ниже (см. план
+ * «RGB-фон стола») — та кнопка красит ТОЛЬКО фон игрового стола
+ * произвольным цветом, а не тему всего приложения; обе кнопки остаются,
+ * это разные вещи. Puzzle's $ — по
  * селектору внутри корня (см. выше), для элементов шапки, которые вне
  * #app и живут в DOM всегда, используем document.getElementById напрямую. */
 const SUN = '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
@@ -1316,6 +1317,39 @@ function bindPreviewThumb(stage, panel, img, handle, toggleBtn, imageUrl, title,
   handle.addEventListener("lostpointercapture", finishResize, { signal });
 }
 
+const TABLE_BG_KEY = "puzzle_table_bg";
+
+/** Фон стола — свободный выбор цвета через нативный <input type="color">
+ *  (см. план «RGB-фон стола»), не пресет светлый/тёмный, как раньше
+ *  (см. .light-board — убрано). Личная настройка браузера, не
+ *  синхронизируется с сервером — localStorage, тот же приём, что и у
+ *  остального чисто локального UI стола (bindPreviewThumb выше). Общая
+ *  для соло и комнаты, вызывается из обоих renderTable/renderRoomTable. */
+function bindBoardBackground(stage, colorInput, resetBtn, signal) {
+  function apply(hex) {
+    if (hex) {
+      stage.style.setProperty("--table-bg", hex);
+      stage.classList.add("custom-bg");
+      colorInput.value = hex;
+      resetBtn.hidden = false;
+    } else {
+      stage.style.removeProperty("--table-bg");
+      stage.classList.remove("custom-bg");
+      resetBtn.hidden = true;
+    }
+  }
+  apply(localStorage.getItem(TABLE_BG_KEY));
+
+  colorInput.addEventListener("input", () => {
+    localStorage.setItem(TABLE_BG_KEY, colorInput.value);
+    apply(colorInput.value);
+  }, { signal });
+  resetBtn.addEventListener("click", () => {
+    localStorage.removeItem(TABLE_BG_KEY);
+    apply(null);
+  }, { signal });
+}
+
 async function renderTable(root, puzzleId, signal, queryString) {
   root.innerHTML = `
     <div class="table-screen">
@@ -1349,8 +1383,12 @@ async function renderTable(root, puzzleId, signal, queryString) {
           <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
             <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
           </button>
-          <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
-            <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor" stroke="none"/></svg>
+          <label class="btn outlined icon" id="boardBgBtn" title="Фон стола — выбрать цвет" aria-label="Фон стола — выбрать цвет">
+            <svg class="icon" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+            <input type="color" id="boardBgInput" value="#f8f6ef">
+          </label>
+          <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="Вернуть фон по умолчанию" aria-label="Вернуть фон по умолчанию" hidden>
+            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
           <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
                (тянуть рамку по пустому месту вместо панорамы), пока включён,
@@ -1664,13 +1702,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
 
   bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzle.title, signal);
 
-  // Светлый фон стола — постоянно фиксированные светлые тона, не тема
-  // сайта: тёмная деталь на тёмной (в тёмной теме) доске почти не видна
-  // по краям, пока не собрана — переключатель никак не зависит от того,
-  // светлая сейчас тема интерфейса или нет.
-  $(root, "#boardThemeBtn").addEventListener("click", () => {
-    stage.classList.toggle("light-board");
-  }, { signal });
+  bindBoardBackground(stage, $(root, "#boardBgInput"), $(root, "#boardBgResetBtn"), signal);
 
   // Тач-замена Shift для рамки выделения — см. комментарий у marqueeState
   // выше. На десктопе не нужна (там уже работает Shift+тяни), но не мешает
@@ -2404,8 +2436,12 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
           <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
             <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
           </button>
-          <button class="btn outlined icon" id="boardThemeBtn" type="button" title="Светлый фон" aria-label="Светлый фон">
-            <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 2a10 10 0 0 1 0 20z" fill="currentColor" stroke="none"/></svg>
+          <label class="btn outlined icon" id="boardBgBtn" title="Фон стола — выбрать цвет" aria-label="Фон стола — выбрать цвет">
+            <svg class="icon" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+            <input type="color" id="boardBgInput" value="#f8f6ef">
+          </label>
+          <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="Вернуть фон по умолчанию" aria-label="Вернуть фон по умолчанию" hidden>
+            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
           <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
                (тянуть рамку по пустому месту вместо панорамы), пока включён,
@@ -2715,13 +2751,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
 
   bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzle.title, signal);
 
-  // Светлый фон стола — постоянно фиксированные светлые тона, не тема
-  // сайта: тёмная деталь на тёмной (в тёмной теме) доске почти не видна
-  // по краям, пока не собрана — переключатель никак не зависит от того,
-  // светлая сейчас тема интерфейса или нет.
-  $(root, "#boardThemeBtn").addEventListener("click", () => {
-    stage.classList.toggle("light-board");
-  }, { signal });
+  bindBoardBackground(stage, $(root, "#boardBgInput"), $(root, "#boardBgResetBtn"), signal);
 
   // Тач-замена Shift для рамки выделения — см. комментарий у marqueeState
   // выше. На десктопе не нужна (там уже работает Shift+тяни), но не мешает
