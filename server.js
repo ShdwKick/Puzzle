@@ -304,6 +304,13 @@ try { db.exec("ALTER TABLE categories ADD COLUMN moderation_reason TEXT"); } cat
 // одноразовой миграции при старте (см. ниже, после сидирования системной
 // категории).
 try { db.exec("ALTER TABLE categories ADD COLUMN slug TEXT"); } catch {}
+// Английское название (см. план «Английский язык в интерфейсе») —
+// НЕОБЯЗАТЕЛЬНОЕ, ставит только Admin. name остаётся основным (русским) —
+// клиент сам решает, что показать: nameEn, если он есть и выбран
+// английский интерфейс, иначе всегда name (см. categoryDisplayName в
+// app.js). Слаг (выше) НЕ зависит от name_en — путь всегда один и тот же
+// вне зависимости от языка интерфейса, менять его тут не нужно.
+try { db.exec("ALTER TABLE categories ADD COLUMN name_en TEXT"); } catch {}
 
 // Категория — many-to-many (см. план «Категории many-to-many»): один пазл
 // может быть в нескольких категориях сразу, поэтому связь — отдельная
@@ -433,6 +440,12 @@ const stmt = {
   // идёт в URL, см. /category/:slug) правятся раздельно и независимо друг
   // от друга — PATCH-хендлер ниже сам решает, какой из двух вызвать.
   setCategoryName: db.prepare("UPDATE categories SET name = ? WHERE id = ?"),
+  // Английское название (см. план «Английский язык в интерфейсе») —
+  // отдельный UPDATE, а не колонка в insertCategory: только Admin когда-либо
+  // его ставит (при создании ИЛИ отдельно потом), self-service заявки
+  // (POST /api/categories) и системная категория остаются без него, клиент
+  // просто показывает name, пока nameEn не выставлен явно.
+  setCategoryNameEn: db.prepare("UPDATE categories SET name_en = ? WHERE id = ?"),
   deleteCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
   setCategoryApproved: db.prepare("UPDATE categories SET status = 'approved', moderation_reason = NULL WHERE id = ?"),
   setCategoryRejected: db.prepare("UPDATE categories SET status = 'rejected', moderation_reason = ? WHERE id = ?"),
@@ -1370,8 +1383,8 @@ const server = http.createServer(async (req, res) => {
       // Все статусы разом — админу нужно видеть и pending (для будущей
       // модерации), не только approved. slug — тут же (см. план «Алиас и
       // публичное название категории»): Admin показывает и правит его
-      // отдельно от name.
-      return json(res, 200, { categories: stmt.listCategories.all().map(c => ({ id: c.id, name: c.name, slug: c.slug, status: c.status, createdBy: c.created_by, createdAt: c.created_at })) });
+      // отдельно от name. nameEn — см. план «Английский язык в интерфейсе».
+      return json(res, 200, { categories: stmt.listCategories.all().map(c => ({ id: c.id, name: c.name, nameEn: c.name_en, slug: c.slug, status: c.status, createdBy: c.created_by, createdAt: c.created_at })) });
     }
     if (p === "/internal/categories" && req.method === "POST") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
@@ -1399,8 +1412,13 @@ const server = http.createServer(async (req, res) => {
       // списка, та же идея, что уже используется для сортировки своих фото.
       // Admin создаёт категорию сразу approved, без created_by — не заявка.
       stmt.insertCategory.run(id, name, slug, "approved", null, ts, ts);
-      adminLog.info("Admin создал категорию", { categoryId: id, name, slug });
-      return json(res, 200, { id, name, slug });
+      // Английское название — необязательное поле (см. план «Английский
+      // язык в интерфейсе»), отдельный UPDATE сразу после INSERT — тот же
+      // приём, что и остальные опциональные поля этого роута (slug выше).
+      const nameEn = str(body.nameEn, 80);
+      if (nameEn) stmt.setCategoryNameEn.run(nameEn, id);
+      adminLog.info("Admin создал категорию", { categoryId: id, name, slug, nameEn });
+      return json(res, 200, { id, name, slug, nameEn: nameEn || null });
     }
     const categoryDeleteMatch = p.match(/^\/internal\/categories\/([\w-]+)$/);
     if (categoryDeleteMatch && req.method === "DELETE") {
@@ -1427,6 +1445,7 @@ const server = http.createServer(async (req, res) => {
       if (!category) return json(res, 404, { error: "not found" });
       const body = await readJson(req);
       let { name, slug } = category;
+      let nameEn = category.name_en;
       if (body.name !== undefined) {
         name = str(body.name, 80);
         if (!name) return json(res, 400, { error: "bad name" });
@@ -1440,8 +1459,16 @@ const server = http.createServer(async (req, res) => {
         if (existing && existing.id !== category.id) return json(res, 400, { error: "slug taken" });
         stmt.setCategorySlug.run(slug, category.id);
       }
-      adminLog.info("Admin изменил категорию", { categoryId: category.id, name, slug });
-      return json(res, 200, { id: category.id, name, slug });
+      // Английское название (см. план «Английский язык в интерфейсе») —
+      // пустая строка явно СБРАСЫВАЕТ nameEn (в отличие от name/slug, у
+      // которых пустое значение — ошибка): английского названия может
+      // законно не быть вовсе, это не обязательное поле.
+      if (body.nameEn !== undefined) {
+        nameEn = str(body.nameEn, 80) || null;
+        stmt.setCategoryNameEn.run(nameEn, category.id);
+      }
+      adminLog.info("Admin изменил категорию", { categoryId: category.id, name, slug, nameEn });
+      return json(res, 200, { id: category.id, name, slug, nameEn });
     }
     // Переименование уже загруженной через Admin картинки (см. Admin
     // app.js wirePuzzleLibrary) — импорт с Pexels без alt-текста у фото
@@ -1562,9 +1589,12 @@ const server = http.createServer(async (req, res) => {
 
     // Категории — публично, без входа, как и сама библиотека (см. план,
     // карусель в renderLibrary). Только approved — pending пока не видны,
-    // rejected не видны никогда.
+    // rejected не видны никогда. nameEn — см. план «Английский язык в
+    // интерфейсе»: null, если Admin его не задавал, клиент сам решает,
+    // показывать nameEn или падать обратно на name (см. categoryDisplayName
+    // в app.js).
     if (p === "/api/categories" && req.method === "GET") {
-      return json(res, 200, stmt.listApprovedCategories.all().map(c => ({ id: c.id, name: c.name, slug: c.slug })));
+      return json(res, 200, stmt.listApprovedCategories.all().map(c => ({ id: c.id, name: c.name, nameEn: c.name_en, slug: c.slug })));
     }
 
     if (p.startsWith("/api/")) {

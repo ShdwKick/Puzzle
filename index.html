@@ -162,6 +162,11 @@
     <button class="icon-btn" id="installBtn" title="Установить как приложение" aria-label="Установить как приложение" hidden>
       <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 21h14"/></svg>
     </button>
+    <!-- Переключатель языка интерфейса (см. план «Английский язык в
+         интерфейсе») — RU/EN текстом, не флагом: у RU/EN нет однозначного
+         флага-соответствия (English — не только UK/US), а текст в кружке —
+         тот же приём, что уже намечен на Home (см. #langBtn там). -->
+    <button class="icon-btn" id="langBtn" type="button"></button>
     <button class="icon-btn" id="themeBtn" title="Тема" aria-label="Тема"></button>
     <a class="icon-btn" href="/categories" title="Категории" aria-label="Категории">
       <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
@@ -216,17 +221,17 @@
           </svg>
           <span class="bh-name">Что собираем?</span>
         </div>
-        <p>Пазлы онлайн бесплатно — часть семьи сервисов BurningHouse.</p>
+        <p id="footerTagline">Пазлы онлайн бесплатно — часть семьи сервисов BurningHouse.</p>
       </div>
       <nav class="bh-footer-links" aria-label="Сервис">
-        <h3>Сервис</h3>
-        <a href="/">Библиотека пазлов</a>
-        <a href="/categories">Категории</a>
-        <a href="/rooms">Комнаты</a>
+        <h3 id="footerServiceHeading">Сервис</h3>
+        <a href="/" id="footerLinkLibrary">Библиотека пазлов</a>
+        <a href="/categories" id="footerLinkCategories">Категории</a>
+        <a href="/rooms" id="footerLinkRooms">Комнаты</a>
       </nav>
       <nav class="bh-footer-links" aria-label="Семья BurningHouse">
-        <h3>Семья BurningHouse</h3>
-        <a href="https://burninghouse.ru">Все сервисы</a>
+        <h3 id="footerFamilyHeading">Семья BurningHouse</h3>
+        <a href="https://burninghouse.ru" id="footerLinkAllServices">Все сервисы</a>
         <a href="https://brain.burninghouse.ru">Пораскинем мозгами?</a>
         <a href="https://money.burninghouse.ru">Мои финансы</a>
         <a href="https://movies.burninghouse.ru">Что смотрим?</a>
@@ -235,32 +240,36 @@
     </div>
 
     <!-- FAQPage-разметка в <head> должна дословно совпадать с этим блоком
-         (см. комментарий там же). -->
+         НА РУССКОМ (см. комментарий там же) — id-шники ниже переводит
+         applyStaticTranslations (app.js) только когда выбран английский
+         интерфейс, JSON-LD в <head> при этом не трогается: несовпадение
+         с англ. версией не страшно, крауле ей не видит переключённый язык,
+         это чисто клиентская настройка. -->
     <section class="faq">
-      <h2>Частые вопросы о сборке пазлов онлайн</h2>
+      <h2 id="faqHeading">Частые вопросы о сборке пазлов онлайн</h2>
       <details>
-        <summary>Нужна ли регистрация, чтобы собирать пазлы онлайн?</summary>
-        <p>Нет — играть можно сразу и бесплатно, без регистрации. Прогресс в этом случае хранится в браузере; вход нужен только для того, чтобы он не терялся при смене устройства.</p>
+        <summary id="faqQ0">Нужна ли регистрация, чтобы собирать пазлы онлайн?</summary>
+        <p id="faqA0">Нет — играть можно сразу и бесплатно, без регистрации. Прогресс в этом случае хранится в браузере; вход нужен только для того, чтобы он не терялся при смене устройства.</p>
       </details>
       <details>
-        <summary>Можно ли собрать пазл из своей фотографии?</summary>
-        <p>Да — в комнате можно загрузить любую фотографию, и сервис сам нарежет её на фигурные детали нужной сложности.</p>
+        <summary id="faqQ1">Можно ли собрать пазл из своей фотографии?</summary>
+        <p id="faqA1">Да — в комнате можно загрузить любую фотографию, и сервис сам нарежет её на фигурные детали нужной сложности.</p>
       </details>
       <details>
-        <summary>Можно ли собирать пазл вместе с друзьями онлайн?</summary>
-        <p>Да — создайте комнату и поделитесь ссылкой: все участники видят один стол и собирают пазл вместе в реальном времени.</p>
+        <summary id="faqQ2">Можно ли собирать пазл вместе с друзьями онлайн?</summary>
+        <p id="faqA2">Да — создайте комнату и поделитесь ссылкой: все участники видят один стол и собирают пазл вместе в реальном времени.</p>
       </details>
       <details>
-        <summary>Сколько это стоит?</summary>
-        <p>Ничего — сервис полностью бесплатный.</p>
+        <summary id="faqQ3">Сколько это стоит?</summary>
+        <p id="faqA3">Ничего — сервис полностью бесплатный.</p>
       </details>
       <details>
-        <summary>На каких устройствах это работает?</summary>
-        <p>В любом браузере — на компьютере, планшете или телефоне, ничего скачивать не нужно.</p>
+        <summary id="faqQ4">На каких устройствах это работает?</summary>
+        <p id="faqA4">В любом браузере — на компьютере, планшете или телефоне, ничего скачивать не нужно.</p>
       </details>
     </section>
 
-    <p class="bh-footer-copy">© BurningHouse</p>
+    <p class="bh-footer-copy" id="footerCopy">© BurningHouse</p>
   </div>
 </footer>
 

@@ -67,6 +67,10 @@ a{color:inherit}
 .icon-btn:hover::after{opacity:.08}
 .icon-btn:active::after{opacity:.12}
 .icon-btn.tonal{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container)}
+/* #langBtn — текстом (RU/EN), не иконкой (см. план «Английский язык в
+   интерфейсе», index.html) — тому же .icon-btn нужен свой размер/вес
+   шрифта, у остальных кнопок этого ряда контент — <svg>, тут plain text. */
+#langBtn{font-size:.78rem;font-weight:700;letter-spacing:.02em}
 /* Компактный размер для инлайновых точечных действий (крестик "Удалить" в
    карточке пазла/строке истории/карточке активной сессии) — полноразмерный
    44px там слишком тяжёл рядом с мелким текстом строки. */

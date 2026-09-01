@@ -735,6 +735,44 @@ const adminCategoriesList = (await ir.json()).categories;
 ok("GET /internal/categories отдаёт slug у каждой категории",
   adminCategoriesList.every(c => typeof c.slug === "string" && c.slug.length > 0), JSON.stringify(adminCategoriesList.map(c => c.slug)));
 
+// ───────── nameEn (см. план «Английский язык в интерфейсе») — необязательное
+// английское название категории для клиента, никак не влияет на slug ─────────
+ir = await internalCall(ADMIN_KEY, "/internal/categories", { method: "POST", body: { name: "Птицы", nameEn: "Birds" } });
+const categoryBirds = await ir.json();
+ok("создание категории с nameEn — отдаёт его в ответе",
+  ir.status === 200 && categoryBirds.name === "Птицы" && categoryBirds.nameEn === "Birds", JSON.stringify(categoryBirds));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories", { method: "POST", body: { name: "Рыбы" } });
+const categoryFish = await ir.json();
+ok("создание категории без nameEn — nameEn === null",
+  ir.status === 200 && categoryFish.nameEn === null, JSON.stringify(categoryFish));
+
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryFish.id}`, { method: "PATCH", body: { nameEn: "Fish" } });
+const fishPatched = await ir.json();
+ok("PATCH — установка nameEn у категории, где его не было",
+  ir.status === 200 && fishPatched.nameEn === "Fish" && fishPatched.name === "Рыбы", JSON.stringify(fishPatched));
+
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryBirds.id}`, { method: "PATCH", body: { nameEn: "" } });
+const birdsCleared = await ir.json();
+ok("PATCH — очистка nameEn пустой строкой возвращает null",
+  ir.status === 200 && birdsCleared.nameEn === null, JSON.stringify(birdsCleared));
+
+ir = await internalCall(ADMIN_KEY, "/internal/categories");
+const listWithNameEn = (await ir.json()).categories;
+ok("GET /internal/categories отдаёт nameEn (null или строка) у каждой категории",
+  listWithNameEn.find(c => c.id === categoryFish.id)?.nameEn === "Fish" && listWithNameEn.find(c => c.id === categoryBirds.id)?.nameEn === null,
+  JSON.stringify(listWithNameEn.map(c => [c.name, c.nameEn])));
+
+ir = await fetch(PUZZLE + "/api/categories");
+const publicWithNameEn = await ir.json();
+ok("публичный GET /api/categories тоже отдаёт nameEn",
+  publicWithNameEn.find(c => c.id === categoryFish.id)?.nameEn === "Fish", JSON.stringify(publicWithNameEn.find(c => c.id === categoryFish.id)));
+
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryFish.id}`, { method: "DELETE" });
+ok("уборка: тестовая категория «Рыбы»/Fish удалена", ir.status === 200, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryBirds.id}`, { method: "DELETE" });
+ok("уборка: тестовая категория «Птицы» удалена", ir.status === 200, String(ir.status));
+
 ir = await internalCall(ADMIN_KEY, `/internal/categories/${categoryCats.id}`, { method: "DELETE" });
 ok("уборка: тестовая категория «Котята» (cats/kittens) удалена", ir.status === 200, String(ir.status));
 

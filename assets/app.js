@@ -56,6 +56,301 @@ function applyTheme(theme) {
 document.getElementById("themeBtn").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
 applyTheme(localStorage.getItem("puzzle.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 
+/* ───────────────────────── язык интерфейса ─────────────────────────
+ * Только интерфейс (кнопки/подписи/сообщения) — контент (названия пазлов,
+ * комнат, категорий без явного nameEn) остаётся как есть, это данные, а
+ * не текст интерфейса. SEO-тексты (title/description/H1 на сервере,
+ * serveApp) НЕ переключаются — сайт русскоязычный, под англоязычную
+ * аудиторию в будущем планируется отдельный домен, не /en/-путь. Выбор —
+ * localStorage, чисто клиентская настройка, тот же приём, что у темы
+ * (applyTheme выше) и фона стола (bindBoardBackground). EN — словарь
+ * "русский текст" → "английский текст", а не абстрактные ключи: t(ru)
+ * оборачивает уже существующую русскую строку без переименования, и
+ * отсутствующий перевод просто молча показывает русский оригинал, а не
+ * падает. Новые пары добавляются перед строкой EN_END ниже. */
+const LANG_KEY = "puzzle_lang";
+function getLang() {
+  return localStorage.getItem(LANG_KEY) === "en" ? "en" : "ru";
+}
+/** t(ru) — вернуть перевод строки ru на текущий язык интерфейса, либо
+ *  саму ru, если язык русский или перевода в словаре нет. */
+function t(ru) {
+  return getLang() === "en" ? (EN[ru] || ru) : ru;
+}
+/** tn(n, [ru1,ru2,ru3], [en1,en2]) — число + склонение на текущем языке:
+ *  по-русски — три формы через plural() (определена ниже в файле, но
+ *  вызывается только во время реального рендера, не при разборе этого
+ *  файла, так что порядок объявления не важен), по-английски — обычные
+ *  единственное/множественное. */
+function tn(n, ru, en) {
+  return getLang() === "en" ? (n === 1 ? en[0] : en[1]) : plural(n, ru[0], ru[1], ru[2]);
+}
+/** Английское название категории, если задано И выбран английский
+ *  интерфейс — иначе всегда name (см. план «Английский язык в
+ *  интерфейсе», nameEn — необязательное поле, ставит только Admin). */
+function categoryDisplayName(c) {
+  return getLang() === "en" && c.nameEn ? c.nameEn : c.name;
+}
+/** «Стр. X из Y» — общий текст пагинатора (см. .pager/PAGER_HTML), везде
+ *  один и тот же формат — библиотека, категории, комнаты, «Продолжить
+ *  сборку» — поэтому один общий хелпер, а не отдельный t() на каждом
+ *  месте использования. */
+function pagerLabel(current, total) {
+  return getLang() === "en" ? `Page ${current} of ${total}` : `Стр. ${current} из ${total}`;
+}
+const EN = {
+  "Тема": "Theme",
+  "Категории": "Categories",
+  "Комнаты": "Rooms",
+  "Войти": "Log in",
+  "Установить как приложение": "Install app",
+  "Аккаунт": "Account",
+  "аккаунт": "account",
+  "Управление аккаунтом →": "Manage account →",
+  "Выйти": "Log out",
+  "Создать комнату": "Create room",
+  "Название комнаты": "Room name",
+  "Создать": "Create",
+  "Присоединиться к комнате": "Join a room",
+  "Код комнаты": "Room code",
+  "Найти": "Find",
+  "Добавить пазл": "Add puzzle",
+  "Выберите сложность": "Choose difficulty",
+  "Играть": "Play",
+  "Опубликовать в общую библиотеку": "Publish to the library",
+  "Отправить на модерацию": "Submit for review",
+  "Предложить новую категорию (пойдёт на модерацию) — необязательно": "Suggest a new category (goes to review) — optional",
+  "Закрыть": "Close",
+  "Пазлы онлайн бесплатно — часть семьи сервисов BurningHouse.": "Free online jigsaw puzzles — part of the BurningHouse family of services.",
+  "Сервис": "Service",
+  "Библиотека пазлов": "Puzzle library",
+  "Семья BurningHouse": "BurningHouse family",
+  "Все сервисы": "All services",
+  "© BurningHouse": "© BurningHouse",
+  "Частые вопросы о сборке пазлов онлайн": "Frequently asked questions about online jigsaw puzzles",
+  "Нужна ли регистрация, чтобы собирать пазлы онлайн?": "Do I need to register to solve puzzles online?",
+  "Нет — играть можно сразу и бесплатно, без регистрации. Прогресс в этом случае хранится в браузере; вход нужен только для того, чтобы он не терялся при смене устройства.": "No — you can start playing right away, for free, without registering. Progress is then stored in your browser; logging in is only needed so it isn't lost when you switch devices.",
+  "Можно ли собрать пазл из своей фотографии?": "Can I make a puzzle from my own photo?",
+  "Да — в комнате можно загрузить любую фотографию, и сервис сам нарежет её на фигурные детали нужной сложности.": "Yes — in a room you can upload any photo, and the service will cut it into jigsaw pieces at the difficulty you choose.",
+  "Можно ли собирать пазл вместе с друзьями онлайн?": "Can I solve a puzzle together with friends online?",
+  "Да — создайте комнату и поделитесь ссылкой: все участники видят один стол и собирают пазл вместе в реальном времени.": "Yes — create a room and share the link: everyone sees the same table and solves the puzzle together in real time.",
+  "Сколько это стоит?": "How much does it cost?",
+  "Ничего — сервис полностью бесплатный.": "Nothing — the service is completely free.",
+  "На каких устройствах это работает?": "What devices does it work on?",
+  "В любом браузере — на компьютере, планшете или телефоне, ничего скачивать не нужно.": "In any browser — on a computer, tablet or phone, nothing to download.",
+  "Выберите файл": "Choose a file",
+  "Загрузка категорий…": "Loading categories…",
+  "Мой пазл": "My puzzle",
+  "Название — необязательно": "Title — optional",
+  "Не удалось загрузить — попробуйте ещё раз.": "Upload failed — please try again.",
+  "Не удалось отправить на модерацию — попробуйте ещё раз.": "Couldn't submit for review — please try again.",
+  "Нельзя загружать фото, которые относятся к следующим категориям:": "You can't upload photos that fall into the following categories:",
+  "Нужно подтвердить согласие с правилами публикации.": "You need to agree to the publishing rules.",
+  "Опубликовать": "Publish",
+  "Собрать из фото": "Build from photo",
+  "Уровень": "Level",
+  "Файл не похож на изображение (JPEG/PNG/WebP).": "This doesn't look like an image (JPEG/PNG/WebP).",
+  "Файл слишком большой даже после сжатия.": "The file is too large even after compression.",
+  "Я подтверждаю, что несу ответственность за загруженное фото и что оно не относится к перечисленным категориям": "I confirm I'm responsible for the uploaded photo and that it doesn't fall into the listed categories",
+  "Легко": "Easy",
+  "Средне": "Medium",
+  "Сложно": "Hard",
+  "Эксперт": "Expert",
+  "Мастер": "Master",
+  "Легенда": "Legend",
+  "материалы с сексуализацией несовершеннолетних": "material sexualizing minors",
+  "порнография и откровенно сексуальный контент": "pornography and explicit sexual content",
+  "интимные фото и видео человека без его согласия": "intimate photos or videos of a person without their consent",
+  "реальное насилие, жестокость, материалы, пропагандирующие терроризм": "real violence, cruelty, material promoting terrorism",
+  "экстремистская символика, разжигание ненависти по признаку расы, религии, национальности, пола, ориентации": "extremist symbols, hate speech based on race, religion, nationality, gender, or orientation",
+  "чужие личные документы (паспорт, карты, переписка) без согласия владельца": "someone else's personal documents (passport, cards, correspondence) without the owner's consent",
+  "любая обнажённость, не только откровенная порнография": "any nudity, not just explicit pornography",
+  "жестокость и шокирующий контент, даже нереалистичный": "cruelty and shocking content, even unrealistic",
+  "чужой копирайт без разрешения правообладателя": "someone else's copyrighted work without the rights holder's permission",
+  "узнаваемые люди без явного согласия на публичный показ": "recognizable people without explicit consent to be shown publicly",
+  "Назад": "Back",
+  "Вперёд": "Next",
+  "Продолжить сборку": "Continue building",
+  "За стол": "Play",
+  "Удалить прогресс": "Delete progress",
+  "Пазлы онлайн бесплатно — собрать пазл в браузере": "Free online jigsaw puzzles — solve them right in your browser",
+  "Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.":
+    "Solve jigsaw puzzles online for free, no downloads — ready-made from the library or your own from any photo. Pieces are shaped, the table zooms and pans, and you can solve alone or with friends in a room. Logging in is only needed to keep your progress between visits.",
+  "Загружаем…": "Loading…",
+  "Играть можно без входа — прогресс тогда хранится только в этом браузере.": "You can play without logging in — progress is then stored only in this browser.",
+  "Войти и сохранять прогресс": "Log in and save progress",
+  "Не удалось загрузить пазлы — обновите страницу.": "Couldn't load puzzles — please refresh the page.",
+  "Все": "All",
+  "Не нашли нужные пазлы?": "Didn't find the puzzles you wanted?",
+  "Предложите категорию, которой не хватает — рассмотрим и добавим.": "Suggest a category that's missing — we'll take a look and add it.",
+  "Войти, чтобы предложить категорию": "Log in to suggest a category",
+  "Например: Космос": "e.g. Space",
+  "Предложить": "Suggest",
+  "Спасибо! Категория отправлена на рассмотрение.": "Thanks! The category has been sent for review.",
+  "Не удалось отправить — попробуйте ещё раз.": "Couldn't submit — please try again.",
+  "Пазлы, опубликованные": "Puzzles published by",
+  "Профиль": "Profile",
+  "Пользователь ничего не опубликовал.": "This user hasn't published anything.",
+  "Не удалось загрузить профиль — обновите страницу.": "Couldn't load the profile — please refresh the page.",
+  "Пока ничего не опубликовано.": "Nothing published yet.",
+  "Категории пазлов онлайн": "Online puzzle categories",
+  "Выберите категорию — соберите пазл по теме, бесплатно и без регистрации.": "Choose a category — solve a puzzle on that theme, free and without registration.",
+  "Не удалось загрузить категории — обновите страницу.": "Couldn't load categories — please refresh the page.",
+  "Категорий пока нет.": "No categories yet.",
+  "Категория не найдена": "Category not found",
+  "Такой категории нет — возможно, её переименовали или удалили. ": "This category doesn't exist — it may have been renamed or removed. ",
+  "Все категории": "All categories",
+  "Пазлы:": "Puzzles:",
+  "В этой категории пока нет пазлов. ": "There are no puzzles in this category yet. ",
+  "Не удалось загрузить категорию — обновите страницу.": "Couldn't load the category — please refresh the page.",
+  "Добавил:": "Added by:",
+  "На модерации": "Under review",
+  "Опубликовано": "Published",
+  "Отклонено:": "Rejected:",
+  "без причины": "no reason given",
+  "Удалить": "Delete",
+  "Удалить пазл": "Delete puzzle",
+  "Этим пазлом уже играли в комнате — удалить нельзя.": "This puzzle has already been played in a room — it can't be deleted.",
+  "Не удалось удалить.": "Couldn't delete.",
+  "Скрыть из этой комнаты": "Hide from this room",
+  "Скрыть пазл": "Hide puzzle",
+  "из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.": "from this room? It will stay available in all other rooms and in the solo library.",
+  "Не удалось скрыть.": "Couldn't hide.",
+  "Отправить снова": "Resubmit",
+  "+ В комнату": "+ Add to room",
+  "Загрузка…": "Loading…",
+  "Не удалось загрузить комнаты.": "Couldn't load rooms.",
+  "У вас пока нет комнат.": "You don't have any rooms yet.",
+  "Перейти к комнатам": "Go to rooms",
+  "Не удалось начать сборку.": "Couldn't start the build.",
+  "Готово": "Done",
+  "Изменить размер": "Resize",
+  "Библиотека": "Library",
+  "Перемешать": "Shuffle",
+  "Показать картинку": "Show picture",
+  "Фон стола — выбрать цвет": "Table background — pick a color",
+  "Вернуть фон по умолчанию": "Reset to default background",
+  "Режим выделения": "Selection mode",
+  "Приблизить": "Zoom in",
+  "Показать всё": "Fit to view",
+  "Отдалить": "Zoom out",
+  "Не удалось загрузить пазл — обновите страницу.": "Couldn't load the puzzle — please refresh the page.",
+  "Такого пазла нет.": "This puzzle doesn't exist.",
+  "Пазлы из своих фото собираются только в комнатах.": "Puzzles from your own photos can only be solved in rooms.",
+  "К комнатам": "To rooms",
+  "Готово!": "Done!",
+  "Остаться": "Stay",
+  "На главную": "To home",
+  "В комнату": "To room",
+  "Действия": "Actions",
+  "Комната": "Room",
+  "Соберите пазл вместе с друзьями — детали двигаются в реальном времени для всех, кто за столом.": "Solve a puzzle together with friends — pieces move in real time for everyone at the table.",
+  "Пока нет ни одной комнаты — создайте первую.": "No rooms yet — create the first one.",
+  "Не удалось загрузить комнаты — обновите страницу.": "Couldn't load rooms — please refresh the page.",
+  "Войдите, чтобы комната была видна и с других устройств.": "Sign in so the room is visible on other devices too.",
+  "Вы не участник этой комнаты.": "You're not a member of this room.",
+  "Не удалось загрузить комнату — обновите страницу.": "Couldn't load the room — please refresh the page.",
+  "Скопировать код": "Copy code",
+  "Скопировать ссылку": "Copy link",
+  "Скопировано": "Copied",
+  "История сборок": "Build history",
+  "Не удалось убрать участника.": "Couldn't remove the member.",
+  "Начать сборку": "Start a build",
+  "Загружаем пазлы…": "Loading puzzles…",
+  "За этим столом сейчас кто-то сидит — сначала все должны выйти.": "Someone is currently at this table — everyone needs to leave first.",
+  "Не удалось загрузить пазлы.": "Couldn't load puzzles.",
+  "Войдите, чтобы добавить своё фото.": "Sign in to add your own photo.",
+  "Ещё ничего не собрано.": "Nothing solved yet.",
+  "Собрать ещё раз": "Solve again",
+  "Секунду…": "One second…",
+  "Приглашение не найдено или больше не действует.": "This invite wasn't found or is no longer valid.",
+  "Не удалось открыть стол — обновите страницу.": "Couldn't open the table — please refresh the page.",
+  "Участники за столом": "People at the table",
+  "За столом": "At the table",
+  "Этот пазл уже собран.": "This puzzle is already solved.",
+  "Вернуться в комнату": "Back to room",
+  "Что-то пошло не так — обновите страницу.": "Something went wrong — please refresh the page.",
+  "Не удалось запуститься — обновите страницу.": "Couldn't start — please refresh the page.",
+  "участник": "member",
+  // EN_END — новые пары словаря добавляются строго перед этой строкой.
+};
+function applyLangButton() {
+  const btn = document.getElementById("langBtn");
+  btn.textContent = getLang() === "en" ? "RU" : "EN";
+  btn.title = getLang() === "en" ? "Switch to Russian" : "Переключить на английский";
+  btn.setAttribute("aria-label", btn.title);
+}
+// Дословно те же вопрос/ответ, что в футере index.html (faqQ0..4/faqA0..4)
+// — id-шники там расставлены именно под этот массив, менять один без
+// другого нельзя.
+const FAQ_ITEMS = [
+  { q: "Нужна ли регистрация, чтобы собирать пазлы онлайн?", a: "Нет — играть можно сразу и бесплатно, без регистрации. Прогресс в этом случае хранится в браузере; вход нужен только для того, чтобы он не терялся при смене устройства." },
+  { q: "Можно ли собрать пазл из своей фотографии?", a: "Да — в комнате можно загрузить любую фотографию, и сервис сам нарежет её на фигурные детали нужной сложности." },
+  { q: "Можно ли собирать пазл вместе с друзьями онлайн?", a: "Да — создайте комнату и поделитесь ссылкой: все участники видят один стол и собирают пазл вместе в реальном времени." },
+  { q: "Сколько это стоит?", a: "Ничего — сервис полностью бесплатный." },
+  { q: "На каких устройствах это работает?", a: "В любом браузере — на компьютере, планшете или телефоне, ничего скачивать не нужно." },
+];
+/** Переводит статичную разметку index.html — шапку/футер/модалки — то,
+ *  что живёт вне #app и не перерисовывается роутером (см. план «Английский
+ *  язык в интерфейсе»). Вызывается один раз при загрузке (подхватить
+ *  сохранённый выбор) и при каждом переключении языка (setLang ниже);
+ *  JS-рендер внутри #app сам подхватывает t()/tn() при следующем route(). */
+function applyStaticTranslations() {
+  const byId = (id, fn) => { const el = document.getElementById(id); if (el) fn(el); };
+  byId("installBtn", el => { el.title = t("Установить как приложение"); el.setAttribute("aria-label", el.title); });
+  byId("themeBtn", el => { el.title = t("Тема"); el.setAttribute("aria-label", el.title); });
+  byId("headerLoginBtn", el => { el.textContent = t("Войти"); });
+  byId("accountBtn", el => { el.title = t("Аккаунт"); el.setAttribute("aria-label", el.title); });
+  document.querySelectorAll('a.icon-btn[href="/categories"]').forEach(el => { el.title = t("Категории"); el.setAttribute("aria-label", el.title); });
+  document.querySelectorAll('a.icon-btn[href="/rooms"]').forEach(el => { el.title = t("Комнаты"); el.setAttribute("aria-label", el.title); });
+
+  // Модалки — статичный текст (заголовки/кнопки/подписи), сам контент
+  // (списки категорий, имя аккаунта и т.п.) остаётся динамическим и
+  // переводится там, где рендерится (openPublishModal и т.п. — см. ниже).
+  byId("accountModalTitle", el => { el.textContent = t("Аккаунт"); });
+  byId("accountModalManage", el => { el.textContent = t("Управление аккаунтом →"); });
+  byId("accountModalLogout", el => { el.textContent = t("Выйти"); });
+  byId("createRoomModalTitle", el => { el.textContent = t("Создать комнату"); });
+  byId("newRoomTitle", el => { el.placeholder = t("Название комнаты"); });
+  byId("createRoomBtn", el => { el.textContent = t("Создать"); });
+  byId("joinRoomModalTitle", el => { el.textContent = t("Присоединиться к комнате"); });
+  byId("joinCodeInput", el => { el.placeholder = t("Код комнаты"); });
+  byId("joinCodeBtn", el => { el.title = t("Найти"); el.setAttribute("aria-label", el.title); });
+  byId("uploadPuzzleModalTitle", el => { el.textContent = t("Добавить пазл"); });
+  byId("difficultyModalTitle", el => { el.textContent = t("Выберите сложность"); });
+  byId("difficultyPlayBtn", el => { el.textContent = t("Играть"); });
+  byId("publishModalTitle", el => { el.textContent = t("Опубликовать в общую библиотеку"); });
+  byId("publishConfirmBtn", el => { el.textContent = t("Отправить на модерацию"); });
+  byId("publishNewCategoryName", el => { el.placeholder = t("Предложить новую категорию (пойдёт на модерацию) — необязательно"); });
+  document.querySelectorAll('.modal-backdrop .icon-btn[aria-label="Закрыть"]').forEach(el => { el.setAttribute("aria-label", t("Закрыть")); });
+
+  // Футер — вне #app, живёт постоянно (см. план «Футер»).
+  byId("footerTagline", el => { el.textContent = t("Пазлы онлайн бесплатно — часть семьи сервисов BurningHouse."); });
+  byId("footerServiceHeading", el => { el.textContent = t("Сервис"); });
+  byId("footerFamilyHeading", el => { el.textContent = t("Семья BurningHouse"); });
+  byId("footerLinkLibrary", el => { el.textContent = t("Библиотека пазлов"); });
+  byId("footerLinkCategories", el => { el.textContent = t("Категории"); });
+  byId("footerLinkRooms", el => { el.textContent = t("Комнаты"); });
+  byId("footerLinkAllServices", el => { el.textContent = t("Все сервисы"); });
+  byId("footerCopy", el => { el.textContent = t("© BurningHouse"); });
+  byId("faqHeading", el => { el.textContent = t("Частые вопросы о сборке пазлов онлайн"); });
+  FAQ_ITEMS.forEach((item, i) => {
+    byId(`faqQ${i}`, el => { el.textContent = t(item.q); });
+    byId(`faqA${i}`, el => { el.textContent = t(item.a); });
+  });
+}
+function setLang(lang) {
+  localStorage.setItem(LANG_KEY, lang);
+  document.documentElement.lang = lang;
+  applyLangButton();
+  applyStaticTranslations();
+  route();
+}
+document.getElementById("langBtn").onclick = () => setLang(getLang() === "en" ? "ru" : "en");
+applyLangButton();
+document.documentElement.lang = getLang();
+applyStaticTranslations();
+
 /* ───────────────────────── установка как PWA ─────────────────────────
  * Chrome/Edge не показывают системный баннер установки сами — вместо этого
  * шлют beforeinstallprompt и ждут явного вызова .prompt() из интерфейса.
@@ -115,7 +410,7 @@ function bindModal(backdropId, openBtnId, closeBtnId) {
  * стол», а не вместо него (раньше — ряд мелких кнопок прямо на карточке). */
 let pendingDifficultyChoice = null; // {variants, onPlay} между открытием модалки и подтверждением выбора
 function openDifficultyModal(title, variants, onPlay) {
-  document.getElementById("difficultyModalTitle").textContent = `Выберите сложность — «${title}»`;
+  document.getElementById("difficultyModalTitle").textContent = `${t("Выберите сложность")} — «${title}»`;
   const select = document.getElementById("difficultySelect");
   select.innerHTML = "";
   variants.forEach((v, i) => {
@@ -124,7 +419,8 @@ function openDifficultyModal(title, variants, onPlay) {
     // Число деталей — рядом с названием уровня (см. правку): без него все
     // уровни выглядят одинаково информативными, хотя разница между ними —
     // именно в количестве деталей.
-    opt.textContent = `${DIFFICULTY_LABELS[i] || `Уровень ${i + 1}`} — ${v.gridRows * v.gridCols} деталей`;
+    const total = v.gridRows * v.gridCols;
+    opt.textContent = `${t(DIFFICULTY_LABELS[i]) || `${t("Уровень")} ${i + 1}`} — ${total} ${tn(total, ["деталь", "детали", "деталей"], ["piece", "pieces"])}`;
     select.appendChild(opt);
   });
   document.getElementById("difficultyAsymmetric").checked = false; // не запоминаем между открытиями — осознанный выбор каждый раз
@@ -150,9 +446,9 @@ document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
  * подтверждением. */
 let pendingPublishId = null;
 async function openPublishModal(id, title, onDone) {
-  document.getElementById("publishModalTitle").textContent = `Опубликовать «${title}»`;
+  document.getElementById("publishModalTitle").textContent = `${t("Опубликовать")} «${title}»`;
   const list = document.getElementById("publishCategoryList");
-  list.innerHTML = [...PROHIBITED_TIER_A, ...PROHIBITED_TIER_B].map(c => `<li>${c}</li>`).join("");
+  list.innerHTML = [...PROHIBITED_TIER_A, ...PROHIBITED_TIER_B].map(c => `<li>${t(c)}</li>`).join("");
   document.getElementById("publishConsent").checked = false;
   document.getElementById("publishNewCategoryName").value = "";
   document.getElementById("publishError").hidden = true;
@@ -160,13 +456,13 @@ async function openPublishModal(id, title, onDone) {
   // many-to-many»), список — только approved (pending пока не выбрать,
   // их ещё не видно в публичном GET /api/categories).
   const categoriesBox = document.getElementById("publishLibraryCategories");
-  categoriesBox.innerHTML = '<p class="state-note">Загрузка категорий…</p>';
+  categoriesBox.innerHTML = `<p class="state-note">${t("Загрузка категорий…")}</p>`;
   try {
     const categories = await getCategories();
     categoriesBox.innerHTML = categories.length
       ? categories.map(c => `
           <label style="display:inline-flex;align-items:center;gap:.3em;margin:0 .8em .3em 0">
-            <input type="checkbox" name="publishCategory" value="${c.id}"> ${c.name}
+            <input type="checkbox" name="publishCategory" value="${c.id}"> ${categoryDisplayName(c)}
           </label>`).join("")
       : "";
   } catch { categoriesBox.innerHTML = ""; }
@@ -179,7 +475,7 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
   const errEl = document.getElementById("publishError");
   errEl.hidden = true;
   if (!document.getElementById("publishConsent").checked) {
-    errEl.textContent = "Нужно подтвердить согласие с правилами публикации.";
+    errEl.textContent = t("Нужно подтвердить согласие с правилами публикации.");
     errEl.hidden = false;
     return;
   }
@@ -194,7 +490,7 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
     pendingPublishId = null;
     onDone();
   } catch (err) {
-    errEl.textContent = "Не удалось отправить на модерацию — попробуйте ещё раз.";
+    errEl.textContent = t("Не удалось отправить на модерацию — попробуйте ещё раз.");
     errEl.hidden = false;
   }
   btn.disabled = false;
@@ -307,7 +603,7 @@ async function uploadPuzzlePhoto(file, title, roomId) {
   // «Модерация загруженных фото»): форма физически не даёт сюда попасть без
   // отмеченной галочки (mountUploadForm ниже), но сервер всё равно
   // перепроверяет сам — клиент не источник доверия.
-  const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || "Мой пазл", roomId, consent: "1" });
+  const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || t("Мой пазл"), roomId, consent: "1" });
   const res = await auth.fetch(`/api/puzzles?${qs}`, {
     method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
   });
@@ -397,17 +693,17 @@ async function removeRoomMember(roomId, userId) {
 function mountUploadForm(container, roomId, onDone) {
   container.innerHTML = `
     <form class="upload-form" id="uploadForm">
-      <input class="text-input" id="uploadTitle" type="text" maxlength="80" placeholder="Название — необязательно">
+      <input class="text-input" id="uploadTitle" type="text" maxlength="80" placeholder="${t("Название — необязательно")}">
       <input type="file" id="uploadFile" accept="image/*" required>
       <div class="upload-consent">
-        <p class="upload-consent-title">Нельзя загружать фото, которые относятся к следующим категориям:</p>
-        <ul class="upload-consent-list">${PROHIBITED_TIER_A.map(c => `<li>${c}</li>`).join("")}</ul>
+        <p class="upload-consent-title">${t("Нельзя загружать фото, которые относятся к следующим категориям:")}</p>
+        <ul class="upload-consent-list">${PROHIBITED_TIER_A.map(c => `<li>${t(c)}</li>`).join("")}</ul>
         <label class="upload-consent-check">
           <input type="checkbox" id="uploadConsent" required>
-          Я подтверждаю, что несу ответственность за загруженное фото и что оно не относится к перечисленным категориям
+          ${t("Я подтверждаю, что несу ответственность за загруженное фото и что оно не относится к перечисленным категориям")}
         </label>
       </div>
-      <button class="btn filled" type="submit">Собрать из фото</button>
+      <button class="btn filled" type="submit">${t("Собрать из фото")}</button>
       <p class="state-note" id="uploadError" hidden></p>
     </form>`;
   const form = $(container, "#uploadForm");
@@ -416,7 +712,7 @@ function mountUploadForm(container, roomId, onDone) {
     e.preventDefault();
     errEl.hidden = true;
     const file = $(form, "#uploadFile").files[0];
-    if (!file) { errEl.textContent = "Выберите файл"; errEl.hidden = false; return; }
+    if (!file) { errEl.textContent = t("Выберите файл"); errEl.hidden = false; return; }
     const submitBtn = $(form, "button[type=submit]");
     submitBtn.disabled = true;
     try {
@@ -426,9 +722,9 @@ function mountUploadForm(container, roomId, onDone) {
       form.reset();
       submitBtn.disabled = false;
     } catch (err) {
-      errEl.textContent = err.message === "not an image" ? "Файл не похож на изображение (JPEG/PNG/WebP)."
-        : err.message === "too large" ? "Файл слишком большой даже после сжатия."
-        : "Не удалось загрузить — попробуйте ещё раз.";
+      errEl.textContent = err.message === "not an image" ? t("Файл не похож на изображение (JPEG/PNG/WebP).")
+        : err.message === "too large" ? t("Файл слишком большой даже после сжатия.")
+        : t("Не удалось загрузить — попробуйте ещё раз.");
       errEl.hidden = false;
       submitBtn.disabled = false;
     }
@@ -497,13 +793,13 @@ function buildInProgressCard(ip, signal, onDeleted) {
       <img alt="" loading="lazy">
       <span class="puzzle-card-badge"></span>
     </div>
-    <button class="icon-btn xs progress-card-delete" type="button" title="Удалить прогресс" aria-label="Удалить прогресс">
+    <button class="icon-btn xs progress-card-delete" type="button" title="${t("Удалить прогресс")}" aria-label="${t("Удалить прогресс")}">
       <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
     </button>
     <div class="puzzle-card-body">
       <div class="puzzle-card-title-row">
         <h3 class="puzzle-card-title"></h3>
-        <button class="btn filled sm" type="button">За стол</button>
+        <button class="btn filled sm" type="button">${t("За стол")}</button>
       </div>
       <p class="puzzle-card-meta"></p>
     </div>`;
@@ -512,12 +808,15 @@ function buildInProgressCard(ip, signal, onDeleted) {
   const badge = $(card, ".puzzle-card-badge");
   badge.textContent = `${Math.round((ip.piecesPlaced / ip.piecesTotal) * 100)}%`;
   badge.hidden = false;
-  $(card, ".puzzle-card-meta").textContent = `${ip.piecesPlaced}/${ip.piecesTotal} деталей собрано`;
+  $(card, ".puzzle-card-meta").textContent = getLang() === "en"
+    ? `${ip.piecesPlaced}/${ip.piecesTotal} pieces assembled`
+    : `${ip.piecesPlaced}/${ip.piecesTotal} деталей собрано`;
   $(card, ".btn.filled.sm").addEventListener("click", () => {
     navigate(`/table/${encodeURIComponent(ip.puzzleId)}`);
   }, { signal });
   $(card, ".progress-card-delete").addEventListener("click", async () => {
-    if (!confirm(`Удалить прогресс сборки «${ip.title}»?`)) return;
+    const confirmMsg = getLang() === "en" ? `Delete build progress for "${ip.title}"?` : `Удалить прогресс сборки «${ip.title}»?`;
+    if (!confirm(confirmMsg)) return;
     if (auth.isAuthenticated()) {
       try { await auth.fetch(`/api/puzzles/${encodeURIComponent(ip.puzzleId)}/progress`, { method: "DELETE" }); } catch { /* при следующей загрузке страницы просто снова покажется — не критично */ }
     } else {
@@ -536,7 +835,7 @@ function buildInProgressCard(ip, signal, onDeleted) {
  *  сборок больше одной страницы. Ничего не рисует, если список пуст. */
 function renderInProgressList(wrap, items, signal) {
   if (!items.length) return;
-  wrap.innerHTML = `<h3 class="room-section-title">Продолжить сборку</h3><div class="puzzle-grid" id="inProgressGrid"></div>${PAGER_HTML}`;
+  wrap.innerHTML = `<h3 class="room-section-title">${t("Продолжить сборку")}</h3><div class="puzzle-grid" id="inProgressGrid"></div>${PAGER_HTML()}`;
   const gridEl = $(wrap, "#inProgressGrid");
   const pagerEl = $(wrap, ".pager");
   const prevBtn = $(pagerEl, ".pager-prev");
@@ -561,7 +860,7 @@ function renderInProgressList(wrap, items, signal) {
     const showPager = items.length > IN_PROGRESS_PAGE_SIZE;
     pagerEl.hidden = !showPager;
     if (showPager) {
-      label.textContent = `Стр. ${page + 1} из ${pages}`;
+      label.textContent = pagerLabel(page + 1, pages);
       prevBtn.disabled = page <= 0;
       nextBtn.disabled = page >= pages - 1;
     }
@@ -581,14 +880,14 @@ function renderAuthArea() {
   document.getElementById("accountMenuWrap").hidden = !authed;
   if (authed) {
     const user = auth.getUser();
-    const label = (user && (user.name || user.username)) || "аккаунт";
-    document.getElementById("accountBtn").title = "Аккаунт — " + label;
+    const label = (user && (user.name || user.username)) || t("аккаунт");
+    document.getElementById("accountBtn").title = t("Аккаунт") + " — " + label;
   }
 }
 document.getElementById("headerLoginBtn").addEventListener("click", () => auth.login());
 document.getElementById("accountBtn").addEventListener("click", () => {
   const user = auth.getUser();
-  document.getElementById("accountModalName").textContent = (user && (user.name || user.username)) || "аккаунт";
+  document.getElementById("accountModalName").textContent = (user && (user.name || user.username)) || t("аккаунт");
   document.getElementById("accountModalMeta").textContent = (user && user.email) || "";
   openModal("accountModalBackdrop");
 });
@@ -635,7 +934,7 @@ function renderCardMenu(items) {
   // (.movie-tile-poster-wrap .menu-wrap).
   wrap.className = "menu-wrap";
   wrap.innerHTML = `
-    <button class="icon-btn xs" type="button" title="Действия" aria-label="Действия" aria-haspopup="true" aria-expanded="false">
+    <button class="icon-btn xs" type="button" title="${t("Действия")}" aria-label="${t("Действия")}" aria-haspopup="true" aria-expanded="false">
       <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="5" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.6" fill="currentColor" stroke="none"/></svg>
     </button>
     <div class="menu" hidden></div>`;
@@ -684,6 +983,10 @@ function buildCard(p, opts = {}) {
   // это ЗАМЕДЛИЛО бы LCP, а не ускорило страницу.
   if (!opts.eager) img.loading = "lazy";
   $(node, ".puzzle-card-title").textContent = p.title;
+  // Кнопка «За стол» — статичный текст в самом <template> (index.html),
+  // ей нужен t() тут: шаблон клонируется заново на каждую карточку, но
+  // сам текст внутри него не подхватывает язык сам по себе.
+  $(node, ".puzzle-card-play").textContent = t("За стол");
   const variants = p.variants || [p];
   // «N уровней сложности» убрано — у нас нет настройки доступных уровней,
   // их всегда PIECE_PRESETS.length (6) у любого пазла, показывать это на
@@ -704,7 +1007,7 @@ function buildCard(p, opts = {}) {
     const author = document.createElement("a");
     author.className = "puzzle-card-author";
     author.href = `/profile/${encodeURIComponent(p.uploaderUserId)}`;
-    author.textContent = `Добавил: ${p.uploaderUsername}`;
+    author.textContent = `${t("Добавил:")} ${p.uploaderUsername}`;
     body.insertBefore(author, metaEl.nextSibling);
   }
   const mine = p.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === p.ownerUserId;
@@ -720,9 +1023,9 @@ function buildCard(p, opts = {}) {
   if (mine && p.moderationStatus) {
     const status = document.createElement("p");
     status.className = "puzzle-card-moderation " + p.moderationStatus;
-    status.textContent = p.moderationStatus === "pending" ? "На модерации"
-      : p.moderationStatus === "approved" ? "Опубликовано"
-      : `Отклонено: ${p.moderationReason || "без причины"}`;
+    status.textContent = p.moderationStatus === "pending" ? t("На модерации")
+      : p.moderationStatus === "approved" ? t("Опубликовано")
+      : `${t("Отклонено:")} ${p.moderationReason || t("без причины")}`;
     // Просто appendChild — «За стол» теперь в .puzzle-card-title-row, не
     // прямой child body (см. index.html, tplPuzzleCard), insertBefore
     // относительно него больше не имеет смысла как ориентир позиции.
@@ -747,22 +1050,22 @@ function buildCard(p, opts = {}) {
   // подошёл, меню на карточке просто не появляется.
   const items = [];
   if (mine && opts.allowDelete !== false) {
-    items.push({ label: "Удалить", danger: true, onClick: async () => {
+    items.push({ label: t("Удалить"), danger: true, onClick: async () => {
       closeCardMenu();
-      if (!confirm(`Удалить пазл «${p.title}»?`)) return;
+      if (!confirm(`${t("Удалить пазл")} «${p.title}»?`)) return;
       try { await deletePuzzle(p.id); node.remove(); }
-      catch (err) { alert(err.message === "in use" ? "Этим пазлом уже играли в комнате — удалить нельзя." : "Не удалось удалить."); }
+      catch (err) { alert(err.message === "in use" ? t("Этим пазлом уже играли в комнате — удалить нельзя.") : t("Не удалось удалить.")); }
     } });
   } else if (canHideDefault && opts.allowDelete !== false) {
-    items.push({ label: "Скрыть из этой комнаты", onClick: async () => {
+    items.push({ label: t("Скрыть из этой комнаты"), onClick: async () => {
       closeCardMenu();
-      if (!confirm(`Скрыть пазл «${p.title}» из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.`)) return;
+      if (!confirm(`${t("Скрыть пазл")} «${p.title}» ${t("из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.")}`)) return;
       try { await hidePuzzleInRoom(opts.roomId, variants); node.remove(); }
-      catch { alert("Не удалось скрыть."); }
+      catch { alert(t("Не удалось скрыть.")); }
     } });
   }
   if (mine && (!p.moderationStatus || p.moderationStatus === "rejected")) {
-    items.push({ label: p.moderationStatus === "rejected" ? "Отправить снова" : "Опубликовать", onClick: () => {
+    items.push({ label: p.moderationStatus === "rejected" ? t("Отправить снова") : t("Опубликовать"), onClick: () => {
       closeCardMenu();
       openPublishModal(p.id, p.title, () => {
         p.moderationStatus = "pending"; p.moderationReason = null;
@@ -781,29 +1084,31 @@ function buildCard(p, opts = {}) {
         navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`);
       } catch (e) {
         alert(e.message === "room session limit reached"
-          ? `Достигнут лимит одновременных сборок в этой комнате${typeof e.limit === "number" ? ` (${e.limit})` : ""}.`
-          : "Не удалось начать сборку.");
+          ? (getLang() === "en"
+            ? `Reached the limit of simultaneous builds in this room${typeof e.limit === "number" ? ` (${e.limit})` : ""}.`
+            : `Достигнут лимит одновременных сборок в этой комнате${typeof e.limit === "number" ? ` (${e.limit})` : ""}.`)
+          : t("Не удалось начать сборку."));
       }
     }
     function pickVariantThenAdd(roomId) {
       if (variants.length > 1) openDifficultyModal(p.title, variants, (v, asymmetric) => addToRoom(roomId, v, asymmetric));
       else addToRoom(roomId, variants[0]);
     }
-    items.push({ label: "+ В комнату", onClick: async menuEl => {
+    items.push({ label: t("+ В комнату"), onClick: async menuEl => {
       // Подменяем содержимое меню списком комнат вместо того, чтобы сразу
       // закрыться (тот же приём, что renderAddToMenu в Movies) — второй
       // клик уже выбирает конкретную комнату.
-      menuEl.innerHTML = '<p class="state-note" style="padding:.5em .8em">Загрузка…</p>';
+      menuEl.innerHTML = `<p class="state-note" style="padding:.5em .8em">${t("Загрузка…")}</p>`;
       let rooms;
       try { rooms = await getRooms(); }
-      catch { menuEl.innerHTML = '<p class="state-note" style="padding:.5em .8em">Не удалось загрузить комнаты.</p>'; return; }
+      catch { menuEl.innerHTML = `<p class="state-note" style="padding:.5em .8em">${t("Не удалось загрузить комнаты.")}</p>`; return; }
       if (!openCardMenu || openCardMenu.menu !== menuEl) return; // закрыли, пока грузили
       if (!rooms.length) {
-        menuEl.innerHTML = '<p class="state-note" style="padding:.5em .8em">У вас пока нет комнат.</p>';
+        menuEl.innerHTML = `<p class="state-note" style="padding:.5em .8em">${t("У вас пока нет комнат.")}</p>`;
         const link = document.createElement("a");
         link.className = "menu-item";
         link.href = "/rooms";
-        link.textContent = "Перейти к комнатам";
+        link.textContent = t("Перейти к комнатам");
         menuEl.appendChild(link);
         return;
       }
@@ -829,7 +1134,7 @@ async function applyBadge(node, p) {
   const total = progress.piecesTotal || p.gridRows * p.gridCols;
   const placed = progress.piecesPlaced || 0;
   if (progress.completedAt) {
-    badge.textContent = "Готово"; badge.classList.add("done"); badge.hidden = false;
+    badge.textContent = t("Готово"); badge.classList.add("done"); badge.hidden = false;
     return;
   }
   if (placed > 0) {
@@ -841,12 +1146,18 @@ async function applyBadge(node, p) {
 }
 
 const PUZZLE_PAGE_SIZE = 48;
-const PAGER_HTML = `
+// Функция, не константа-строка: должна перечитывать t() при каждом вызове
+// (переключение языка перерисовывает текущий маршрут, см. setLang, но
+// заранее вычисленная строка застряла бы в языке момента первой загрузки
+// скрипта, а не подхватывала бы актуальный).
+function PAGER_HTML() {
+  return `
   <div class="pager" hidden>
-    <button class="btn outlined sm pager-prev" type="button">← Назад</button>
+    <button class="btn outlined sm pager-prev" type="button">← ${t("Назад")}</button>
     <span class="muted pager-label"></span>
-    <button class="btn outlined sm pager-next" type="button">Вперёд →</button>
+    <button class="btn outlined sm pager-next" type="button">${t("Вперёд")} →</button>
   </div>`;
+}
 
 /** Общая пагинация сеток пазлов (библиотека/категория/профиль, см. план
  *  «Пагинация») — тот же паттерн, что ROOMS_PAGE_SIZE у комнат (см.
@@ -875,7 +1186,7 @@ function mountPuzzleGridPager(gridEl, pagerEl, signal) {
     const showPager = items.length > PUZZLE_PAGE_SIZE;
     pagerEl.hidden = !showPager;
     if (showPager) {
-      label.textContent = `Стр. ${page + 1} из ${pages}`;
+      label.textContent = pagerLabel(page + 1, pages);
       prevBtn.disabled = page <= 0;
       nextBtn.disabled = page >= pages - 1;
     }
@@ -911,14 +1222,14 @@ function renderCategorySuggestBox(signal) {
     <div class="category-suggest-icon">
       <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2.3v.5a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-.5c0-1.1.4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>
     </div>
-    <h2>Не нашли нужные пазлы?</h2>
-    <p>Предложите категорию, которой не хватает — рассмотрим и добавим.</p>`;
+    <h2>${t("Не нашли нужные пазлы?")}</h2>
+    <p>${t("Предложите категорию, которой не хватает — рассмотрим и добавим.")}</p>`;
 
   if (!auth.isAuthenticated()) {
     const btn = document.createElement("button");
     btn.className = "btn tonal sm";
     btn.type = "button";
-    btn.textContent = "Войти, чтобы предложить категорию";
+    btn.textContent = t("Войти, чтобы предложить категорию");
     btn.addEventListener("click", () => auth.login(), { signal });
     section.appendChild(btn);
     return section;
@@ -927,8 +1238,8 @@ function renderCategorySuggestBox(signal) {
   const form = document.createElement("form");
   form.className = "category-suggest-form";
   form.innerHTML = `
-    <input class="text-input" type="text" maxlength="80" placeholder="Например: Космос" required>
-    <button class="btn filled sm" type="submit">Предложить</button>`;
+    <input class="text-input" type="text" maxlength="80" placeholder="${t("Например: Космос")}" required>
+    <button class="btn filled sm" type="submit">${t("Предложить")}</button>`;
   const note = document.createElement("p");
   note.className = "state-note";
   note.hidden = true;
@@ -948,9 +1259,9 @@ function renderCategorySuggestBox(signal) {
       });
       if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || "failed");
       input.value = "";
-      note.textContent = "Спасибо! Категория отправлена на рассмотрение.";
+      note.textContent = t("Спасибо! Категория отправлена на рассмотрение.");
     } catch {
-      note.textContent = "Не удалось отправить — попробуйте ещё раз.";
+      note.textContent = t("Не удалось отправить — попробуйте ещё раз.");
     }
     note.hidden = false;
     btn.disabled = false;
@@ -967,23 +1278,23 @@ async function renderLibrary(root, signal) {
   // участия JS, поэтому здесь больше не дублируется.
   root.innerHTML = `
     <div class="library-head">
-      <h1>Пазлы онлайн бесплатно — собрать пазл в браузере</h1>
-      <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
+      <h1>${t("Пазлы онлайн бесплатно — собрать пазл в браузере")}</h1>
+      <p>${t("Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.")}</p>
     </div>
     <div id="guestNoteWrap"></div>
     <div id="inProgressWrap"></div>
     <div id="categoryCarouselWrap"></div>
-    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>
-    ${PAGER_HTML}`;
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">${t("Загружаем…")}</p></div>
+    ${PAGER_HTML()}`;
 
   if (!auth.isAuthenticated()) {
     const note = document.createElement("div");
     note.className = "guest-note";
     const span = document.createElement("span");
-    span.textContent = "Играть можно без входа — прогресс тогда хранится только в этом браузере.";
+    span.textContent = t("Играть можно без входа — прогресс тогда хранится только в этом браузере.");
     const btn = document.createElement("button");
     btn.className = "btn tonal sm"; btn.type = "button";
-    btn.textContent = "Войти и сохранять прогресс";
+    btn.textContent = t("Войти и сохранять прогресс");
     btn.addEventListener("click", () => auth.login());
     note.append(span, btn);
     $(root, "#guestNoteWrap").appendChild(note);
@@ -993,7 +1304,7 @@ async function renderLibrary(root, signal) {
   try {
     [puzzles, categories] = await Promise.all([getPuzzles(), getCategories().catch(() => [])]);
   } catch {
-    if (!signal.aborted) $(root, "#puzzleGrid").innerHTML = '<p class="state-note">Не удалось загрузить пазлы — обновите страницу.</p>';
+    if (!signal.aborted) $(root, "#puzzleGrid").innerHTML = `<p class="state-note">${t("Не удалось загрузить пазлы — обновите страницу.")}</p>`;
     return;
   }
   if (signal.aborted) return;
@@ -1025,7 +1336,7 @@ async function renderLibrary(root, signal) {
   const nonEmptyCategories = categories.filter(c => (counts.get(c.id) || 0) > 0);
   if (nonEmptyCategories.length) {
     const carouselEl = $(root, "#categoryCarouselWrap");
-    const chips = [{ id: null, name: "Все", count: allGroups.length }, ...nonEmptyCategories.map(c => ({ id: c.id, name: c.name, count: counts.get(c.id) }))];
+    const chips = [{ id: null, name: t("Все"), count: allGroups.length }, ...nonEmptyCategories.map(c => ({ id: c.id, name: categoryDisplayName(c), count: counts.get(c.id) }))];
     const carousel = document.createElement("div");
     carousel.className = "category-carousel";
     for (const c of chips) {
@@ -1054,9 +1365,9 @@ async function renderLibrary(root, signal) {
  *  проще renderLibrary — нет карусели категорий, нет своих фото. */
 async function renderProfile(root, userId, signal) {
   root.innerHTML = `
-    <div class="library-head" id="profileHead"><h1>Загружаем…</h1></div>
-    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>
-    ${PAGER_HTML}`;
+    <div class="library-head" id="profileHead"><h1>${t("Загружаем…")}</h1></div>
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">${t("Загружаем…")}</p></div>
+    ${PAGER_HTML()}`;
 
   let data;
   try {
@@ -1064,18 +1375,18 @@ async function renderProfile(root, userId, signal) {
     if (!res.ok) throw new Error("profile fetch failed");
     data = await res.json();
   } catch {
-    if (!signal.aborted) root.innerHTML = '<p class="state-note">Не удалось загрузить профиль — обновите страницу.</p>';
+    if (!signal.aborted) root.innerHTML = `<p class="state-note">${t("Не удалось загрузить профиль — обновите страницу.")}</p>`;
     return;
   }
   if (signal.aborted) return;
 
   const headEl = $(root, "#profileHead");
   headEl.innerHTML = data.username
-    ? `<h1>Пазлы, опубликованные ${data.username}</h1>`
-    : `<h1>Профиль</h1><p>Пользователь ничего не опубликовал.</p>`;
+    ? `<h1>${t("Пазлы, опубликованные")} ${data.username}</h1>`
+    : `<h1>${t("Профиль")}</h1><p>${t("Пользователь ничего не опубликовал.")}</p>`;
 
   if (!data.puzzles.length) {
-    $(root, "#puzzleGrid").outerHTML = '<p class="state-note">Пока ничего не опубликовано.</p>';
+    $(root, "#puzzleGrid").outerHTML = `<p class="state-note">${t("Пока ничего не опубликовано.")}</p>`;
     $(root, ".pager").remove();
     return;
   }
@@ -1109,16 +1420,16 @@ const CATEGORIES_DESCRIPTION = "Все категории пазлов онла�
 async function renderCategories(root, signal) {
   root.innerHTML = `
     <div class="library-head">
-      <h1>Категории пазлов онлайн</h1>
-      <p>Выберите категорию — соберите пазл по теме, бесплатно и без регистрации.</p>
+      <h1>${t("Категории пазлов онлайн")}</h1>
+      <p>${t("Выберите категорию — соберите пазл по теме, бесплатно и без регистрации.")}</p>
     </div>
-    <div class="category-block-grid" id="categoryBlockGrid"><p class="state-note">Загружаем…</p></div>`;
+    <div class="category-block-grid" id="categoryBlockGrid"><p class="state-note">${t("Загружаем…")}</p></div>`;
 
   let categories, puzzles;
   try {
     [categories, puzzles] = await Promise.all([getCategories(), getPuzzles()]);
   } catch {
-    if (!signal.aborted) $(root, "#categoryBlockGrid").innerHTML = '<p class="state-note">Не удалось загрузить категории — обновите страницу.</p>';
+    if (!signal.aborted) $(root, "#categoryBlockGrid").innerHTML = `<p class="state-note">${t("Не удалось загрузить категории — обновите страницу.")}</p>`;
     return;
   }
   if (signal.aborted) return;
@@ -1135,7 +1446,7 @@ async function renderCategories(root, signal) {
 
   const gridEl = $(root, "#categoryBlockGrid");
   if (!nonEmptyCategories.length) {
-    gridEl.innerHTML = '<p class="state-note">Категорий пока нет.</p>';
+    gridEl.innerHTML = `<p class="state-note">${t("Категорий пока нет.")}</p>`;
     root.appendChild(renderCategorySuggestBox(signal));
     return;
   }
@@ -1162,10 +1473,10 @@ async function renderCategories(root, signal) {
     body.className = "category-block-body";
     const name = document.createElement("span");
     name.className = "category-block-name";
-    name.textContent = c.name;
+    name.textContent = categoryDisplayName(c);
     const countEl = document.createElement("span");
     countEl.className = "category-block-count";
-    countEl.textContent = `${count} ${plural(count, "пазл", "пазла", "пазлов")}`;
+    countEl.textContent = `${count} ${tn(count, ["пазл", "пазла", "пазлов"], ["puzzle", "puzzles"])}`;
     body.append(name, countEl);
     a.append(thumb, body);
     gridEl.appendChild(a);
@@ -1180,15 +1491,15 @@ async function renderCategories(root, signal) {
  *  через общий filterGroupsByCategory. */
 async function renderCategoryPage(root, slug, signal) {
   root.innerHTML = `
-    <div class="library-head" id="categoryHead"><h1>Загружаем…</h1></div>
-    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>
-    ${PAGER_HTML}`;
+    <div class="library-head" id="categoryHead"><h1>${t("Загружаем…")}</h1></div>
+    <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">${t("Загружаем…")}</p></div>
+    ${PAGER_HTML()}`;
 
   let categories, puzzles;
   try {
     [categories, puzzles] = await Promise.all([getCategories(), getPuzzles()]);
   } catch {
-    if (!signal.aborted) root.innerHTML = '<p class="state-note">Не удалось загрузить категорию — обновите страницу.</p>';
+    if (!signal.aborted) root.innerHTML = `<p class="state-note">${t("Не удалось загрузить категорию — обновите страницу.")}</p>`;
     return;
   }
   if (signal.aborted) return;
@@ -1200,12 +1511,12 @@ async function renderCategoryPage(root, slug, signal) {
     setPageMeta(DEFAULT_TITLE, DEFAULT_DESCRIPTION);
     headEl.innerHTML = "";
     const h1 = document.createElement("h1");
-    h1.textContent = "Категория не найдена";
+    h1.textContent = t("Категория не найдена");
     const p = document.createElement("p");
-    p.textContent = "Такой категории нет — возможно, её переименовали или удалили. ";
+    p.textContent = t("Такой категории нет — возможно, её переименовали или удалили. ");
     const link = document.createElement("a");
     link.href = "/categories";
-    link.textContent = "Все категории";
+    link.textContent = t("Все категории");
     p.appendChild(link);
     headEl.append(h1, p);
     $(root, "#puzzleGrid").remove();
@@ -1217,16 +1528,21 @@ async function renderCategoryPage(root, slug, signal) {
   const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
   const groups = filterGroupsByCategory(allGroups, category.id);
 
+  // SEO title/description — только русские, сайт русскоязычный (см. план
+  // «Английский язык в интерфейсе», не переключаются вместе с интерфейсом).
   setPageMeta(
     `Пазлы: ${category.name} — собрать онлайн бесплатно | Что собираем?`,
     `Пазлы онлайн в категории «${category.name}» — собирайте бесплатно, без регистрации и скачивания.`,
   );
 
+  const displayName = categoryDisplayName(category);
   headEl.innerHTML = "";
   const h1 = document.createElement("h1");
-  h1.textContent = `Пазлы: ${category.name}`;
+  h1.textContent = `${t("Пазлы:")} ${displayName}`;
   const intro = document.createElement("p");
-  intro.textContent = `${groups.length} ${plural(groups.length, "пазл", "пазла", "пазлов")} в категории «${category.name}» — собирайте онлайн бесплатно.`;
+  intro.textContent = getLang() === "en"
+    ? `${groups.length} ${groups.length === 1 ? "puzzle" : "puzzles"} in the "${displayName}" category — solve them online for free.`
+    : `${groups.length} ${plural(groups.length, "пазл", "пазла", "пазлов")} в категории «${displayName}» — собирайте онлайн бесплатно.`;
   headEl.append(h1, intro);
 
   if (!groups.length) {
@@ -1234,10 +1550,10 @@ async function renderCategoryPage(root, slug, signal) {
     grid.innerHTML = "";
     const note = document.createElement("p");
     note.className = "state-note";
-    note.textContent = "В этой категории пока нет пазлов. ";
+    note.textContent = t("В этой категории пока нет пазлов. ");
     const link = document.createElement("a");
     link.href = "/categories";
-    link.textContent = "Все категории";
+    link.textContent = t("Все категории");
     note.appendChild(link);
     grid.appendChild(note);
     $(root, ".pager").remove();
@@ -1478,7 +1794,7 @@ function applyPieceTransform(piece) {
  *  чистых экранных пикселях, без деления на zoom. */
 function bindPreviewThumb(stage, panel, img, handle, toggleBtn, imageUrl, title, signal) {
   img.src = imageUrl;
-  img.alt = `Как должно получиться: ${title}`;
+  img.alt = getLang() === "en" ? `What it should look like: ${title}` : `Как должно получиться: ${title}`;
   // Тот же баг и то же лекарство, что у деталей пазла (см. buildPieceEl,
   // wrap.addEventListener("dragstart", ...)) — <img> нативно перетаскиваемый
   // браузером элемент, без preventDefault на dragstart браузер перехватывает
@@ -1596,13 +1912,13 @@ async function renderTable(root, puzzleId, signal, queryString) {
         <div class="marquee-select" id="marqueeSelect" hidden></div>
         <div class="preview-panel" id="previewPanel" hidden>
           <img class="preview-thumb" id="previewThumb" alt="" draggable="false">
-          <div class="preview-resize-handle" id="previewResizeHandle" title="Изменить размер" aria-hidden="true"></div>
+          <div class="preview-resize-handle" id="previewResizeHandle" title="${t("Изменить размер")}" aria-hidden="true"></div>
         </div>
         <!-- «Назад» — была текстовой ссылкой «← Библиотека» в .table-toolbar,
              теперь иконка в левом верхнем углу доски (не в .board-tools внизу
              — выход со стола не инструмент сборки). -->
         <div class="board-back">
-          <a class="btn outlined icon" href="/" title="Библиотека" aria-label="Библиотека">
+          <a class="btn outlined icon" href="/" title="${t("Библиотека")}" aria-label="${t("Библиотека")}">
             <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
           </a>
         </div>
@@ -1610,43 +1926,43 @@ async function renderTable(root, puzzleId, signal, queryString) {
              см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
              углу, чтобы не пересекаться ни с ним, ни с .preview-thumb. -->
         <div class="board-tools">
-          <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
+          <button class="btn outlined icon" id="shuffleBtn" type="button" title="${t("Перемешать")}" aria-label="${t("Перемешать")}">
             <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
           </button>
-          <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
+          <button class="btn outlined icon" id="previewBtn" type="button" title="${t("Показать картинку")}" aria-label="${t("Показать картинку")}">
             <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
           </button>
-          <label class="btn outlined icon" id="boardBgBtn" title="Фон стола — выбрать цвет" aria-label="Фон стола — выбрать цвет">
+          <label class="btn outlined icon" id="boardBgBtn" title="${t("Фон стола — выбрать цвет")}" aria-label="${t("Фон стола — выбрать цвет")}">
             <svg class="icon" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
             <input type="color" id="boardBgInput" value="#f8f6ef">
           </label>
-          <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="Вернуть фон по умолчанию" aria-label="Вернуть фон по умолчанию" hidden>
+          <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="${t("Вернуть фон по умолчанию")}" aria-label="${t("Вернуть фон по умолчанию")}" hidden>
             <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
           <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
                (тянуть рамку по пустому месту вместо панорамы), пока включён,
                одним пальцем. На десктопе Shift+тяни работает и без него —
                кнопка просто альтернативный способ включить то же самое. -->
-          <button class="btn outlined icon" id="selectModeBtn" type="button" title="Режим выделения" aria-label="Режим выделения" aria-pressed="false">
+          <button class="btn outlined icon" id="selectModeBtn" type="button" title="${t("Режим выделения")}" aria-label="${t("Режим выделения")}" aria-pressed="false">
             <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
           </button>
         </div>
         <div class="zoom-controls">
-          <button class="btn outlined icon" id="zoomInBtn" type="button" title="Приблизить" aria-label="Приблизить">+</button>
-          <button class="btn outlined icon" id="zoomResetBtn" type="button" title="Показать всё" aria-label="Показать всё">⤢</button>
-          <button class="btn outlined icon" id="zoomOutBtn" type="button" title="Отдалить" aria-label="Отдалить">−</button>
+          <button class="btn outlined icon" id="zoomInBtn" type="button" title="${t("Приблизить")}" aria-label="${t("Приблизить")}">+</button>
+          <button class="btn outlined icon" id="zoomResetBtn" type="button" title="${t("Показать всё")}" aria-label="${t("Показать всё")}">⤢</button>
+          <button class="btn outlined icon" id="zoomOutBtn" type="button" title="${t("Отдалить")}" aria-label="${t("Отдалить")}">−</button>
         </div>
       </div>
     </div>`;
   const stage = $(root, "#stage");
 
   let puzzles;
-  try { puzzles = await getPuzzles(); } catch { stage.innerHTML = '<p class="state-note">Не удалось загрузить пазл — обновите страницу.</p>'; return; }
+  try { puzzles = await getPuzzles(); } catch { stage.innerHTML = `<p class="state-note">${t("Не удалось загрузить пазл — обновите страницу.")}</p>`; return; }
   if (signal.aborted) return;
   const puzzle = puzzles.find(p => p.id === puzzleId);
-  if (!puzzle) { stage.innerHTML = '<p class="state-note">Такого пазла нет.</p>'; return; }
+  if (!puzzle) { stage.innerHTML = `<p class="state-note">${t("Такого пазла нет.")}</p>`; return; }
   if (puzzle.ownerUserId) {
-    stage.innerHTML = '<p class="state-note">Пазлы из своих фото собираются только в комнатах. <a class="btn text sm" href="/rooms">К комнатам</a></p>';
+    stage.innerHTML = `<p class="state-note">${t("Пазлы из своих фото собираются только в комнатах.")} <a class="btn text sm" href="/rooms">${t("К комнатам")}</a></p>`;
     return;
   }
   $(root, "#tableTitle").textContent = puzzle.title;
@@ -2050,7 +2366,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     progressEl.innerHTML = "";
     const b = document.createElement("b");
     b.textContent = `${placed}/${total}`;
-    progressEl.append(b, document.createTextNode(" деталей собрано"));
+    progressEl.append(b, document.createTextNode(getLang() === "en" ? " pieces placed" : " деталей собрано"));
   }
   function scheduleSave() {
     clearTimeout(saveTimer);
@@ -2099,15 +2415,15 @@ async function renderTable(root, puzzleId, signal, queryString) {
     card.className = "win-card";
     const img = document.createElement("img");
     img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzle.title;
-    const h2 = document.createElement("h2"); h2.textContent = "Готово!";
-    const p = document.createElement("p"); p.textContent = `Пазл «${puzzle.title}» собран.`;
+    const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
+    const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${puzzle.title}" is complete.` : `Пазл «${puzzle.title}» собран.`;
     const actions = document.createElement("div");
     actions.className = "win-actions";
     const stayBtn = document.createElement("button");
-    stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = "Остаться";
+    stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = t("Остаться");
     stayBtn.addEventListener("click", () => overlay.remove());
     const homeBtn = document.createElement("button");
-    homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = "На главную";
+    homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("На главную");
     homeBtn.addEventListener("click", () => { navigate("/"); });
     actions.append(stayBtn, homeBtn);
     card.append(img, h2, p, actions);
@@ -2210,9 +2526,11 @@ function roomMemberLabels(members, idKey) {
   return members.map(m => {
     if (typeof m[idKey] === "string" && m[idKey].startsWith("anon:")) {
       guestN++;
-      return guestN === 1 ? "Гость" : `Гость ${guestN}`;
+      return getLang() === "en"
+        ? (guestN === 1 ? "Guest" : `Guest ${guestN}`)
+        : (guestN === 1 ? "Гость" : `Гость ${guestN}`);
     }
-    return m.name || m.username || "участник";
+    return m.name || m.username || t("участник");
   });
 }
 
@@ -2272,18 +2590,18 @@ document.getElementById("joinCodeInput").addEventListener("keydown", e => {
 async function renderRoomsList(root, signal) {
   root.innerHTML = `
     <div class="library-head">
-      <h1>Комнаты</h1>
-      <p>Соберите пазл вместе с друзьями — детали двигаются в реальном времени для всех, кто за столом.</p>
+      <h1>${t("Комнаты")}</h1>
+      <p>${t("Соберите пазл вместе с друзьями — детали двигаются в реальном времени для всех, кто за столом.")}</p>
     </div>
     <div class="room-actions-row" id="roomActionsRow">
-      <button class="btn filled" id="createRoomOpenBtn" type="button">Создать комнату</button>
-      <button class="btn outlined" id="joinRoomOpenBtn" type="button">Присоединиться к комнате</button>
+      <button class="btn filled" id="createRoomOpenBtn" type="button">${t("Создать комнату")}</button>
+      <button class="btn outlined" id="joinRoomOpenBtn" type="button">${t("Присоединиться к комнате")}</button>
     </div>
-    <div class="room-list" id="roomList"><p class="state-note">Загружаем…</p></div>
+    <div class="room-list" id="roomList"><p class="state-note">${t("Загружаем…")}</p></div>
     <div class="pager" id="roomsPager" hidden>
-      <button class="btn outlined sm" id="roomsPrevBtn" type="button">← Назад</button>
+      <button class="btn outlined sm" id="roomsPrevBtn" type="button">${getLang() === "en" ? "← Back" : "← Назад"}</button>
       <span class="muted" id="roomsPagerLabel"></span>
-      <button class="btn outlined sm" id="roomsNextBtn" type="button">Вперёд →</button>
+      <button class="btn outlined sm" id="roomsNextBtn" type="button">${getLang() === "en" ? "Next →" : "Вперёд →"}</button>
     </div>`;
 
   // Комнаты теперь доступны и без входа (см. server.js/
@@ -2296,10 +2614,10 @@ async function renderRoomsList(root, signal) {
     const note = document.createElement("div");
     note.className = "guest-note";
     const span = document.createElement("span");
-    span.textContent = "Войдите, чтобы комната была видна и с других устройств.";
+    span.textContent = t("Войдите, чтобы комната была видна и с других устройств.");
     const btn = document.createElement("button");
     btn.className = "btn tonal sm"; btn.type = "button";
-    btn.textContent = "Войти";
+    btn.textContent = t("Войти");
     btn.addEventListener("click", () => auth.login());
     note.append(span, btn);
     $(root, "#roomList").before(note);
@@ -2315,7 +2633,7 @@ async function renderRoomsList(root, signal) {
     const list = $(root, "#roomList");
     const pagerEl = $(root, "#roomsPager");
     if (!rooms.length) {
-      list.innerHTML = '<p class="state-note">Пока нет ни одной комнаты — создайте первую.</p>';
+      list.innerHTML = `<p class="state-note">${t("Пока нет ни одной комнаты — создайте первую.")}</p>`;
       pagerEl.hidden = true;
       return;
     }
@@ -2332,10 +2650,13 @@ async function renderRoomsList(root, signal) {
         <h3 class="room-card-title"></h3>
         <p class="room-card-meta"></p>`;
       $(card, ".room-card-title").textContent = r.title;
-      $(card, ".room-card-meta").textContent =
-        `${r.membersCount} ${plural(r.membersCount, "участник", "участника", "участников")}`
-        + (r.role === "owner" ? " · вы владелец" : "")
-        + ` · обновлено ${fmtDate(r.updatedAt)}`;
+      $(card, ".room-card-meta").textContent = getLang() === "en"
+        ? `${r.membersCount} ${r.membersCount === 1 ? "member" : "members"}`
+          + (r.role === "owner" ? " · you're the owner" : "")
+          + ` · updated ${fmtDate(r.updatedAt)}`
+        : `${r.membersCount} ${plural(r.membersCount, "участник", "участника", "участников")}`
+          + (r.role === "owner" ? " · вы владелец" : "")
+          + ` · обновлено ${fmtDate(r.updatedAt)}`;
       card.addEventListener("click", () => { navigate(`/room/${encodeURIComponent(r.id)}`); });
       list.appendChild(card);
     }
@@ -2343,7 +2664,7 @@ async function renderRoomsList(root, signal) {
     const showPager = rooms.length > ROOMS_PAGE_SIZE;
     pagerEl.hidden = !showPager;
     if (showPager) {
-      $(root, "#roomsPagerLabel").textContent = `Стр. ${roomsPage + 1} из ${pages}`;
+      $(root, "#roomsPagerLabel").textContent = pagerLabel(roomsPage + 1, pages);
       $(root, "#roomsPrevBtn").disabled = roomsPage <= 0;
       $(root, "#roomsNextBtn").disabled = roomsPage >= pages - 1;
     }
@@ -2356,7 +2677,7 @@ async function renderRoomsList(root, signal) {
       if (!res.ok) throw new Error("rooms fetch failed");
       rooms = await res.json();
     } catch {
-      if (!signal.aborted) list.innerHTML = '<p class="state-note">Не удалось загрузить комнаты — обновите страницу.</p>';
+      if (!signal.aborted) list.innerHTML = `<p class="state-note">${t("Не удалось загрузить комнаты — обновите страницу.")}</p>`;
       return;
     }
     if (signal.aborted) return;
@@ -2375,8 +2696,8 @@ async function renderRoomsList(root, signal) {
 
 async function renderRoom(root, roomId, signal) {
   root.innerHTML = `
-    <div class="library-head"><h1>Комната</h1></div>
-    <div id="roomBody"><p class="state-note">Загружаем…</p></div>`;
+    <div class="library-head"><h1>${t("Комната")}</h1></div>
+    <div id="roomBody"><p class="state-note">${t("Загружаем…")}</p></div>`;
   const body = $(root, "#roomBody");
 
   let room, sessions;
@@ -2385,12 +2706,12 @@ async function renderRoom(root, roomId, signal) {
       roomFetch(`/api/rooms/${encodeURIComponent(roomId)}`),
       roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`),
     ]);
-    if (roomRes.status === 403) { body.innerHTML = '<p class="state-note">Вы не участник этой комнаты.</p>'; return; }
+    if (roomRes.status === 403) { body.innerHTML = `<p class="state-note">${t("Вы не участник этой комнаты.")}</p>`; return; }
     if (!roomRes.ok) throw new Error("room fetch failed");
     room = await roomRes.json();
     sessions = sessionsRes.ok ? await sessionsRes.json() : [];
   } catch {
-    if (!signal.aborted) body.innerHTML = '<p class="state-note">Не удалось загрузить комнату — обновите страницу.</p>';
+    if (!signal.aborted) body.innerHTML = `<p class="state-note">${t("Не удалось загрузить комнату — обновите страницу.")}</p>`;
     return;
   }
   if (signal.aborted) return;
@@ -2406,13 +2727,13 @@ async function renderRoom(root, roomId, signal) {
          сам по себе, кнопка рядом — для полной ссылки. Без «Перевыпустить
          код» — этого эндпоинта у Puzzle нет. -->
     <div class="code-box">
-      <code id="roomCode" title="Скопировать код"></code>
-      <button class="btn tonal sm" id="copyInviteLinkBtn" type="button">Скопировать ссылку</button>
+      <code id="roomCode" title="${t("Скопировать код")}"></code>
+      <button class="btn tonal sm" id="copyInviteLinkBtn" type="button">${t("Скопировать ссылку")}</button>
       <span class="code-box-hint muted" id="roomCodeHint" aria-live="polite" hidden></span>
     </div>
     <div class="room-members" id="roomMembers"></div>
     <div class="room-active" id="roomActive"></div>
-    <h3 class="room-section-title">История сборок</h3>
+    <h3 class="room-section-title">${t("История сборок")}</h3>
     <div class="room-history" id="roomHistory"></div>`;
 
   $(root, ".room-head-title").textContent = room.title;
@@ -2422,7 +2743,7 @@ async function renderRoom(root, roomId, signal) {
   let hintTimer = null;
   function flashCopied() {
     clearTimeout(hintTimer);
-    roomCodeHint.textContent = "Скопировано";
+    roomCodeHint.textContent = t("Скопировано");
     roomCodeHint.hidden = false;
     hintTimer = setTimeout(() => { roomCodeHint.hidden = true; }, 1800);
   }
@@ -2450,18 +2771,18 @@ async function renderRoom(root, roomId, signal) {
       const removeBtn = document.createElement("button");
       removeBtn.type = "button";
       removeBtn.className = "member-chip-remove";
-      removeBtn.title = `Убрать «${memberLabels[i]}» из комнаты`;
+      removeBtn.title = getLang() === "en" ? `Remove "${memberLabels[i]}" from the room` : `Убрать «${memberLabels[i]}» из комнаты`;
       removeBtn.setAttribute("aria-label", removeBtn.title);
       removeBtn.innerHTML = '<svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
       removeBtn.addEventListener("click", async () => {
-        if (!confirm(`Убрать «${memberLabels[i]}» из комнаты?`)) return;
+        if (!confirm(getLang() === "en" ? `Remove "${memberLabels[i]}" from the room?` : `Убрать «${memberLabels[i]}» из комнаты?`)) return;
         removeBtn.disabled = true;
         try {
           await removeRoomMember(roomId, m.user_id);
           chip.remove();
         } catch {
           removeBtn.disabled = false;
-          alert("Не удалось убрать участника.");
+          alert(t("Не удалось убрать участника."));
         }
       }, { signal });
       chip.appendChild(removeBtn);
@@ -2478,16 +2799,16 @@ async function renderRoom(root, roomId, signal) {
   const activeSessions = room.activeSessions || [];
   activeEl.innerHTML = activeSessions.map(s => `
     <div class="room-active-card">
-      <p>Сейчас за столом собирают пазл «${s.puzzle.title}» — ${s.piecesPlaced}/${s.piecesTotal} деталей.</p>
-      <button class="btn filled join-table-btn" type="button" data-session="${s.id}">За стол</button>
-      <button class="icon-btn xs delete-session-btn" type="button" data-session="${s.id}" data-title="${s.puzzle.title}" title="Удалить" aria-label="Удалить">
+      <p>${getLang() === "en" ? `Right now the table has "${s.puzzle.title}" in progress — ${s.piecesPlaced}/${s.piecesTotal} pieces.` : `Сейчас за столом собирают пазл «${s.puzzle.title}» — ${s.piecesPlaced}/${s.piecesTotal} деталей.`}</p>
+      <button class="btn filled join-table-btn" type="button" data-session="${s.id}">${t("За стол")}</button>
+      <button class="icon-btn xs delete-session-btn" type="button" data-session="${s.id}" data-title="${s.puzzle.title}" title="${t("Удалить")}" aria-label="${t("Удалить")}">
         <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>`).join("")
-    + '<div class="room-section-head"><h3 class="room-section-title">Начать сборку</h3>'
-    + '<button class="icon-btn tonal" id="addPuzzleBtn" type="button" title="Добавить пазл" aria-label="Добавить пазл">'
+    + `<div class="room-section-head"><h3 class="room-section-title">${t("Начать сборку")}</h3>`
+    + `<button class="icon-btn tonal" id="addPuzzleBtn" type="button" title="${t("Добавить пазл")}" aria-label="${t("Добавить пазл")}">`
     + '<svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button></div>'
-    + '<div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">Загружаем пазлы…</p></div><p class="state-note" id="sessionLimitNote" hidden></p>';
+    + `<div class="puzzle-grid" id="roomPuzzleGrid"><p class="state-note">${t("Загружаем пазлы…")}</p></div><p class="state-note" id="sessionLimitNote" hidden></p>`;
   for (const btn of activeEl.querySelectorAll(".join-table-btn")) {
     btn.addEventListener("click", () => {
       navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(btn.dataset.session)}`);
@@ -2500,20 +2821,20 @@ async function renderRoom(root, roomId, signal) {
   for (const btn of activeEl.querySelectorAll(".delete-session-btn")) {
     btn.addEventListener("click", async () => {
       const { session: sid, title } = btn.dataset;
-      if (!confirm(`Удалить сеанс сборки «${title}»?`)) return;
+      if (!confirm(getLang() === "en" ? `Delete the "${title}" session?` : `Удалить сеанс сборки «${title}»?`)) return;
       btn.disabled = true;
       try {
         await deleteRoomSession(roomId, sid);
         btn.closest(".room-active-card").remove();
       } catch (e) {
         btn.disabled = false;
-        alert(e.message === "table not empty" ? "За этим столом сейчас кто-то сидит — сначала все должны выйти." : "Не удалось удалить.");
+        alert(e.message === "table not empty" ? t("За этим столом сейчас кто-то сидит — сначала все должны выйти.") : t("Не удалось удалить."));
       }
     }, { signal });
   }
 
   let puzzles;
-  try { puzzles = await getPuzzles(roomId); } catch { $(activeEl, "#roomPuzzleGrid").innerHTML = '<p class="state-note">Не удалось загрузить пазлы.</p>'; puzzles = []; }
+  try { puzzles = await getPuzzles(roomId); } catch { $(activeEl, "#roomPuzzleGrid").innerHTML = `<p class="state-note">${t("Не удалось загрузить пазлы.")}</p>`; puzzles = []; }
   if (signal.aborted) return;
   const grid = $(activeEl, "#roomPuzzleGrid");
   grid.innerHTML = "";
@@ -2527,7 +2848,9 @@ async function renderRoom(root, roomId, signal) {
         const note = $(activeEl, "#sessionLimitNote");
         note.hidden = false;
         const limit = typeof e.limit === "number" ? e.limit : MAX_ACTIVE_SESSIONS_PER_ROOM;
-        note.textContent = `Достигнут лимит одновременных сборок в комнате (${limit}) — заверши одну, чтобы начать новую.`;
+        note.textContent = getLang() === "en"
+          ? `Reached the limit of simultaneous sessions in this room (${limit}) — finish one to start a new one.`
+          : `Достигнут лимит одновременных сборок в комнате (${limit}) — заверши одну, чтобы начать новую.`;
       }
       /* иначе — ошибка сети, пользователь просто попробует кнопку ещё раз */
     }
@@ -2557,14 +2880,14 @@ async function renderRoom(root, roomId, signal) {
       closeModal("uploadPuzzleModalBackdrop");
     });
   } else {
-    uploadMount.innerHTML = '<p class="state-note">Войдите, чтобы добавить своё фото.</p><button class="btn tonal sm" id="uploadLoginBtn" type="button">Войти</button>';
+    uploadMount.innerHTML = `<p class="state-note">${t("Войдите, чтобы добавить своё фото.")}</p><button class="btn tonal sm" id="uploadLoginBtn" type="button">${t("Войти")}</button>`;
     $(uploadMount, "#uploadLoginBtn").addEventListener("click", () => auth.login(), { signal });
   }
 
   const historyEl = $(root, "#roomHistory");
   const past = sessions.filter(s => s.completedAt);
   if (!past.length) {
-    historyEl.innerHTML = '<p class="state-note">Ещё ничего не собрано.</p>';
+    historyEl.innerHTML = `<p class="state-note">${t("Ещё ничего не собрано.")}</p>`;
   } else {
     historyEl.innerHTML = "";
     for (const s of past) {
@@ -2576,13 +2899,15 @@ async function renderRoom(root, roomId, signal) {
           <span class="history-meta"></span>
         </div>
         <div class="history-actions">
-          <button class="btn outlined sm history-replay" type="button">Собрать ещё раз</button>
-          <button class="icon-btn xs history-delete" type="button" title="Удалить" aria-label="Удалить">
+          <button class="btn outlined sm history-replay" type="button">${t("Собрать ещё раз")}</button>
+          <button class="icon-btn xs history-delete" type="button" title="${t("Удалить")}" aria-label="${t("Удалить")}">
             <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
         </div>`;
       $(row, ".history-puzzle").textContent = s.puzzle.title;
-      $(row, ".history-meta").textContent = `${s.piecesTotal} деталей · собран ${fmtDate(s.completedAt)}`;
+      $(row, ".history-meta").textContent = getLang() === "en"
+        ? `${s.piecesTotal} pieces · completed ${fmtDate(s.completedAt)}`
+        : `${s.piecesTotal} деталей · собран ${fmtDate(s.completedAt)}`;
       // Доступна и когда сейчас уже идёт другой активный сеанс —
       // startRoomSession в этом случае просто перекинет на него (409-ветка).
       $(row, ".history-replay").addEventListener("click", async e => {
@@ -2596,7 +2921,7 @@ async function renderRoom(root, roomId, signal) {
       // 409 здесь в норме не встречается, но deleteRoomSession всё равно
       // корректно её обработает, если что-то поменялось между рендером и кликом.
       $(row, ".history-delete").addEventListener("click", async e => {
-        if (!confirm(`Удалить сеанс сборки «${s.puzzle.title}»?`)) return;
+        if (!confirm(getLang() === "en" ? `Delete the "${s.puzzle.title}" session?` : `Удалить сеанс сборки «${s.puzzle.title}»?`)) return;
         // currentTarget, не target: клик может попасть на вложенный <svg>/<path>
         // иконки крестика — у них нет свойства disabled, а нужно отключить
         // саму кнопку.
@@ -2604,7 +2929,7 @@ async function renderRoom(root, roomId, signal) {
         try { await deleteRoomSession(roomId, s.id); row.remove(); }
         catch (err) {
           e.currentTarget.disabled = false;
-          alert(err.message === "table not empty" ? "За этим столом сейчас кто-то сидит — сначала все должны выйти." : "Не удалось удалить.");
+          alert(err.message === "table not empty" ? t("За этим столом сейчас кто-то сидит — сначала все должны выйти.") : t("Не удалось удалить."));
         }
       }, { signal });
       historyEl.appendChild(row);
@@ -2615,7 +2940,7 @@ async function renderRoom(root, roomId, signal) {
 /* ───────────────────────── комнаты: вступление по ссылке ───────────────────────── */
 
 async function renderRoomJoin(root, code, signal) {
-  root.innerHTML = `<div id="joinBody"><p class="state-note">Секунду…</p></div>`;
+  root.innerHTML = `<div id="joinBody"><p class="state-note">${t("Секунду…")}</p></div>`;
   const body = $(root, "#joinBody");
 
   // Вступление по ссылке теперь работает и без входа (см. план
@@ -2628,7 +2953,7 @@ async function renderRoomJoin(root, code, signal) {
     if (signal.aborted) return;
     navigate(`/room/${encodeURIComponent(data.roomId)}`);
   } catch {
-    if (!signal.aborted) body.innerHTML = '<p class="state-note">Приглашение не найдено или больше не действует.</p>';
+    if (!signal.aborted) body.innerHTML = `<p class="state-note">${t("Приглашение не найдено или больше не действует.")}</p>`;
   }
 }
 
@@ -2652,13 +2977,13 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <div class="marquee-select" id="marqueeSelect" hidden></div>
         <div class="preview-panel" id="previewPanel" hidden>
           <img class="preview-thumb" id="previewThumb" alt="" draggable="false">
-          <div class="preview-resize-handle" id="previewResizeHandle" title="Изменить размер" aria-hidden="true"></div>
+          <div class="preview-resize-handle" id="previewResizeHandle" title="${t("Изменить размер")}" aria-hidden="true"></div>
         </div>
         <!-- «Назад» — была текстовой ссылкой «← Комната» в .table-toolbar,
              теперь иконка в левом верхнем углу доски (не в .board-tools внизу
              — выход со стола не инструмент сборки). -->
         <div class="board-back">
-          <a class="btn outlined icon" href="/room/${encodeURIComponent(roomId)}" title="Комната" aria-label="Комната">
+          <a class="btn outlined icon" href="/room/${encodeURIComponent(roomId)}" title="${t("Комната")}" aria-label="${t("Комната")}">
             <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
           </a>
         </div>
@@ -2667,24 +2992,24 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
              углу, чтобы не пересекаться ни с ним, ни с .preview-thumb, ни с
              кнопкой присутствия ниже. -->
         <div class="board-tools">
-          <button class="btn outlined icon" id="shuffleBtn" type="button" title="Перемешать" aria-label="Перемешать">
+          <button class="btn outlined icon" id="shuffleBtn" type="button" title="${t("Перемешать")}" aria-label="${t("Перемешать")}">
             <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
           </button>
-          <button class="btn outlined icon" id="previewBtn" type="button" title="Показать картинку" aria-label="Показать картинку">
+          <button class="btn outlined icon" id="previewBtn" type="button" title="${t("Показать картинку")}" aria-label="${t("Показать картинку")}">
             <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
           </button>
-          <label class="btn outlined icon" id="boardBgBtn" title="Фон стола — выбрать цвет" aria-label="Фон стола — выбрать цвет">
+          <label class="btn outlined icon" id="boardBgBtn" title="${t("Фон стола — выбрать цвет")}" aria-label="${t("Фон стола — выбрать цвет")}">
             <svg class="icon" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
             <input type="color" id="boardBgInput" value="#f8f6ef">
           </label>
-          <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="Вернуть фон по умолчанию" aria-label="Вернуть фон по умолчанию" hidden>
+          <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="${t("Вернуть фон по умолчанию")}" aria-label="${t("Вернуть фон по умолчанию")}" hidden>
             <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
           <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
                (тянуть рамку по пустому месту вместо панорамы), пока включён,
                одним пальцем. На десктопе Shift+тяни работает и без него —
                кнопка просто альтернативный способ включить то же самое. -->
-          <button class="btn outlined icon" id="selectModeBtn" type="button" title="Режим выделения" aria-label="Режим выделения" aria-pressed="false">
+          <button class="btn outlined icon" id="selectModeBtn" type="button" title="${t("Режим выделения")}" aria-label="${t("Режим выделения")}" aria-pressed="false">
             <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
           </button>
         </div>
@@ -2694,18 +3019,18 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
              полноэкранная модалка — это лёгкий быстрый список, не диалог. -->
         <div class="presence-widget">
           <button class="btn outlined icon presence-btn" id="presenceBtn" type="button"
-            title="Участники за столом" aria-label="Участники за столом" aria-haspopup="true" aria-expanded="false">
+            title="${t("Участники за столом")}" aria-label="${t("Участники за столом")}" aria-haspopup="true" aria-expanded="false">
             👥<span class="presence-count" id="presenceCount" hidden>0</span>
           </button>
           <div class="presence-popover hidden" id="presencePopover">
-            <p class="presence-popover-title">За столом</p>
+            <p class="presence-popover-title">${t("За столом")}</p>
             <div class="presence-popover-list" id="presenceList"></div>
           </div>
         </div>
         <div class="zoom-controls">
-          <button class="btn outlined icon" id="zoomInBtn" type="button" title="Приблизить" aria-label="Приблизить">+</button>
-          <button class="btn outlined icon" id="zoomResetBtn" type="button" title="Показать всё" aria-label="Показать всё">⤢</button>
-          <button class="btn outlined icon" id="zoomOutBtn" type="button" title="Отдалить" aria-label="Отдалить">−</button>
+          <button class="btn outlined icon" id="zoomInBtn" type="button" title="${t("Приблизить")}" aria-label="${t("Приблизить")}">+</button>
+          <button class="btn outlined icon" id="zoomResetBtn" type="button" title="${t("Показать всё")}" aria-label="${t("Показать всё")}">⤢</button>
+          <button class="btn outlined icon" id="zoomOutBtn" type="button" title="${t("Отдалить")}" aria-label="${t("Отдалить")}">−</button>
         </div>
       </div>
     </div>`;
@@ -2717,7 +3042,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     if (!sessionRes.ok) throw new Error("session fetch failed");
     session = await sessionRes.json();
   } catch {
-    if (!signal.aborted) stage.innerHTML = '<p class="state-note">Не удалось открыть стол — обновите страницу.</p>';
+    if (!signal.aborted) stage.innerHTML = `<p class="state-note">${t("Не удалось открыть стол — обновите страницу.")}</p>`;
     return;
   }
   if (signal.aborted) return;
@@ -2732,9 +3057,9 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // истории с тем же completedAt, его физически не трогаем).
     stage.innerHTML = `
       <div class="state-note">
-        <p>Этот пазл уже собран.</p>
-        <button class="btn filled sm" id="replayBtn" type="button">Собрать ещё раз</button>
-        <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a>
+        <p>${t("Этот пазл уже собран.")}</p>
+        <button class="btn filled sm" id="replayBtn" type="button">${t("Собрать ещё раз")}</button>
+        <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">${t("Вернуться в комнату")}</a>
       </div>`;
     $(stage, "#replayBtn").addEventListener("click", async e => {
       e.target.disabled = true;
@@ -3023,7 +3348,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     progressEl.innerHTML = "";
     const b = document.createElement("b");
     b.textContent = `${placed}/${total}`;
-    progressEl.append(b, document.createTextNode(" деталей собрано"));
+    progressEl.append(b, document.createTextNode(getLang() === "en" ? " pieces placed" : " деталей собрано"));
   }
   function updatePresence(members) {
     const list = members || [];
@@ -3045,15 +3370,15 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     card.className = "win-card";
     const img = document.createElement("img");
     img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzle.title;
-    const h2 = document.createElement("h2"); h2.textContent = "Готово!";
-    const p = document.createElement("p"); p.textContent = `Пазл «${puzzle.title}» собран вместе с друзьями.`;
+    const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
+    const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${puzzle.title}" is complete — solved together with friends.` : `Пазл «${puzzle.title}» собран вместе с друзьями.`;
     const actions = document.createElement("div");
     actions.className = "win-actions";
     const stayBtn = document.createElement("button");
-    stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = "Остаться";
+    stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = t("Остаться");
     stayBtn.addEventListener("click", () => overlay.remove());
     const homeBtn = document.createElement("button");
-    homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = "В комнату";
+    homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("В комнату");
     homeBtn.addEventListener("click", () => { navigate(`/room/${encodeURIComponent(roomId)}`); });
     actions.append(stayBtn, homeBtn);
     card.append(img, h2, p, actions);
@@ -3251,7 +3576,9 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     onClose: () => { progressEl.classList.add("offline"); },
     onGiveUp: () => {
       progressEl.classList.remove("offline");
-      stage.insertAdjacentHTML("beforeend", `<p class="state-note table-give-up">Не удаётся подключиться к столу. <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">Вернуться в комнату</a> или обновите страницу.</p>`);
+      stage.insertAdjacentHTML("beforeend", getLang() === "en"
+        ? `<p class="state-note table-give-up">Couldn't connect to the table. <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">${t("Вернуться в комнату")}</a> or refresh the page.</p>`
+        : `<p class="state-note table-give-up">Не удаётся подключиться к столу. <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">${t("Вернуться в комнату")}</a> или обновите страницу.</p>`);
     },
   });
 }
@@ -3332,7 +3659,7 @@ function route() {
   run.catch(e => {
     if (signal.aborted) return;
     console.error(e);
-    root.innerHTML = '<p class="state-note">Что-то пошло не так — обновите страницу.</p>';
+    root.innerHTML = `<p class="state-note">${t("Что-то пошло не так — обновите страницу.")}</p>`;
   });
 }
 
@@ -3366,5 +3693,5 @@ async function init() {
 }
 init().catch(e => {
   console.error(e);
-  document.getElementById("app").innerHTML = '<p class="state-note">Не удалось запуститься — обновите страницу.</p>';
+  document.getElementById("app").innerHTML = `<p class="state-note">${t("Не удалось запуститься — обновите страницу.")}</p>`;
 });
