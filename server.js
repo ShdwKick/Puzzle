@@ -346,6 +346,19 @@ const stmt = {
       pieces_total = excluded.pieces_total,
       updated_at = excluded.updated_at,
       completed_at = excluded.completed_at`),
+  deleteProgress: db.prepare("DELETE FROM puzzle_progress WHERE user_id = ? AND puzzle_id = ?"),
+  // Список незавершённых сборок для «Продолжить сборку» над библиотекой
+  // (см. план) — только публичные пазлы (owner_user_id IS NULL): свои фото,
+  // загруженные в комнату, вне контекста той комнаты не открываются вообще
+  // (renderTable отбивает их отдельно), в этом списке им делать нечего.
+  // idx_progress_user (см. схему) покрывает WHERE user_id = ?.
+  progressInFlight: db.prepare(`
+    SELECT pp.puzzle_id, pp.pieces_placed, pp.pieces_total, pp.updated_at,
+           p.title, p.image_file
+    FROM puzzle_progress pp
+    JOIN puzzles p ON p.id = pp.puzzle_id
+    WHERE pp.user_id = ? AND pp.completed_at IS NULL AND pp.pieces_placed > 0 AND p.owner_user_id IS NULL
+    ORDER BY pp.updated_at DESC`),
 
   puzzlesPublic:  db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL ORDER BY sort_order, created_at"),
   // Встроенные (кроме скрытых ИМЕННО в этой комнате — см. room_hidden_puzzles)
@@ -1772,7 +1785,31 @@ async function api(req, res, url, user) {
       );
       return json(res, 200, { ok: true, piecesPlaced: placed, piecesTotal: total, completedAt });
     }
+    if (m === "DELETE") {
+      // «Удалить» в списке «Продолжить сборку» над библиотекой (см. план) —
+      // тот же смысл, что и «Удалить» у истории сборок в комнате
+      // (deleteRoomSession): прогресс стирается насовсем, не просто
+      // прячется из списка.
+      stmt.deleteProgress.run(user.id, puzzle.id);
+      return json(res, 200, { ok: true });
+    }
     return json(res, 405, { error: "method not allowed" });
+  }
+
+  // Список незавершённых сборок для «Продолжить сборку» над библиотекой
+  // (см. план) — bulk-версия одиночного GET выше, БЕЗ поля pieces (тяжёлое,
+  // не нужно для списка — полная раскладка деталей читается только когда
+  // реально садятся за стол, см. renderTable).
+  if (seg[1] === "puzzles" && seg[2] === "progress" && seg.length === 3 && m === "GET") {
+    if (!user) return json(res, 401, { error: "unauthorized" });
+    return json(res, 200, stmt.progressInFlight.all(user.id).map(r => ({
+      puzzleId: r.puzzle_id,
+      title: r.title,
+      imageUrl: imageUrlFor(r.image_file),
+      piecesPlaced: r.pieces_placed,
+      piecesTotal: r.pieces_total,
+      updatedAt: r.updated_at,
+    })));
   }
 
   if (seg[1] === "rooms") {

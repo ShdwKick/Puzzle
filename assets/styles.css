@@ -483,6 +483,14 @@ a{color:inherit}
   background:var(--md-sys-color-surface-container-lowest);
   border:2px solid var(--md-sys-color-surface);box-shadow:var(--e2);
   cursor:grab;
+  /* draggable="false" на самом <img> (см. app.js) уже отбивает нативный
+     drag в Chrome/Firefox — тут дублируем на уровне CSS для Safari, где
+     -webkit-user-drag надёжнее атрибута: без обоих браузер запускал
+     нативный drag-n-drop картинки вместо pointermove-перетаскивания
+     панели (см. bindPreviewThumb) — курсор менялся на «нельзя», сама
+     панель не двигалась. user-select — чтобы быстрый драг не выделял
+     соседний текст на странице как побочный эффект. */
+  -webkit-user-drag:none;user-select:none;
 }
 .preview-thumb:active{cursor:grabbing}
 /* Кружок в правом нижнем углу панели — тянешь по диагонали, ширина панели
@@ -516,10 +524,17 @@ a{color:inherit}
 /* Фон стола — свободный выбор цвета (см. план «RGB-фон стола», bindBoardBackground
    в app.js) — не пресет светлый/тёмный, как раньше (см. историю, .light-board):
    деталь на фоне того же тона почти не видна по краям, пока не собрана,
-   поэтому даём выбрать ЛЮБОЙ цвет, а не два готовых. --table-bg — инлайновая
-   custom property (JS), .custom-bg просто переключает background на неё,
-   заменяя точечный узор сплошной заливкой. */
-.table-stage.custom-bg{background:var(--table-bg)}
+   поэтому даём выбрать ЛЮБОЙ цвет, а не два готовых. --table-bg/--table-bg-dot
+   — инлайновые custom properties (JS, dotColorFor выбирает светлые или
+   тёмные точки по яркости выбранного фона) — .custom-bg тот же двухслойный
+   background, что у стола по умолчанию (точки + заливка) чуть выше, просто
+   на выбранных цветах вместо токенов темы: без точек на сплошной заливке
+   пропадал ориентир на пустом столе (см. план «точки не видно»). */
+.table-stage.custom-bg{
+  background:
+    radial-gradient(circle at 1px 1px, var(--table-bg-dot) 1px, transparent 0) 0 0/22px 22px,
+    var(--table-bg);
+}
 /* Нативный <input type="color"> — визуально спрятан (не display:none, чтобы
    клик по <label>, который его оборачивает, надёжно открывал системный
    пикер во всех браузерах), сама кнопка — обычная .btn.outlined.icon

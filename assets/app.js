@@ -447,6 +447,79 @@ async function progressFor(p) {
   return localProgress(p.id);
 }
 
+/** Незавершённые сборки для «Продолжить сборку» над библиотекой (см. план)
+ *  — вошедшему один bulk-запрос (GET /api/puzzles/progress, см. server.js),
+ *  гостю — то же самое из localStorage, дополненное метаданными (title/
+ *  imageUrl) из уже загруженного списка пазлов allPuzzles (тем же id).
+ *  Публикации других пользователей (ownerUserId) исключены — свои фото,
+ *  загруженные в комнату, вне контекста этой комнаты не открываются вовсе
+ *  (см. renderTable), продолжить их отсюда всё равно нельзя. */
+async function inProgressPuzzles(allPuzzles) {
+  if (auth.isAuthenticated()) {
+    try {
+      const res = await auth.fetch("/api/puzzles/progress");
+      if (!res.ok) return [];
+      return await res.json();
+    } catch { return []; }
+  }
+  const out = [];
+  for (const p of allPuzzles) {
+    if (p.ownerUserId) continue;
+    const progress = localProgress(p.id);
+    if (progress && progress.piecesPlaced > 0 && !progress.completedAt) {
+      out.push({
+        puzzleId: p.id, title: p.title, imageUrl: p.imageUrl,
+        piecesPlaced: progress.piecesPlaced, piecesTotal: progress.piecesTotal,
+        updatedAt: progress.updatedAt || 0,
+      });
+    }
+  }
+  out.sort((a, b) => b.updatedAt - a.updatedAt);
+  return out;
+}
+
+/** Рисует список незавершённых сборок в контейнер wrap (см. план
+ *  «Продолжить сборку») — та же вёрстка, что у истории сборок в комнате
+ *  (.room-section-title/.room-history/.history-row, см. renderRoom), одна
+ *  реализация на оба места вызова (сейчас — только renderLibrary, «над
+ *  библиотекой», как просили). Ничего не рисует, если список пуст. */
+function renderInProgressList(wrap, items, signal) {
+  if (!items.length) return;
+  wrap.innerHTML = `<h3 class="room-section-title">Продолжить сборку</h3><div class="room-history" id="inProgressList"></div>`;
+  const listEl = $(wrap, "#inProgressList");
+  for (const ip of items) {
+    const row = document.createElement("div");
+    row.className = "history-row";
+    row.innerHTML = `
+      <div class="history-info">
+        <span class="history-puzzle"></span>
+        <span class="history-meta"></span>
+      </div>
+      <div class="history-actions">
+        <button class="btn filled sm" type="button">За стол</button>
+        <button class="icon-btn xs" type="button" title="Удалить" aria-label="Удалить">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>`;
+    $(row, ".history-puzzle").textContent = ip.title;
+    $(row, ".history-meta").textContent = `${ip.piecesPlaced}/${ip.piecesTotal} деталей собрано`;
+    $(row, ".btn.filled.sm").addEventListener("click", () => {
+      navigate(`/table/${encodeURIComponent(ip.puzzleId)}`);
+    }, { signal });
+    $(row, ".icon-btn.xs").addEventListener("click", async () => {
+      if (!confirm(`Удалить прогресс сборки «${ip.title}»?`)) return;
+      if (auth.isAuthenticated()) {
+        try { await auth.fetch(`/api/puzzles/${encodeURIComponent(ip.puzzleId)}/progress`, { method: "DELETE" }); } catch { /* лучше молча оставить строку, чем сломать список */ }
+      } else {
+        localStorage.removeItem(localKey(ip.puzzleId));
+      }
+      row.remove();
+      if (!listEl.children.length) wrap.innerHTML = "";
+    }, { signal });
+    listEl.appendChild(row);
+  }
+}
+
 /* ───────────────────────── шапка: аккаунт ─────────────────────────
  * Модалка #accountModalBackdrop вместо голого "имя + Выйти" — см. index.html
  * и openModal/closeModal/bindModal выше. Гость видит #headerLoginBtn вместо
@@ -837,6 +910,7 @@ async function renderLibrary(root, signal) {
       <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
     </div>
     <div id="guestNoteWrap"></div>
+    <div id="inProgressWrap"></div>
     <div id="categoryCarouselWrap"></div>
     <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">Загружаем…</p></div>
     ${PAGER_HTML}`;
@@ -862,6 +936,13 @@ async function renderLibrary(root, signal) {
     return;
   }
   if (signal.aborted) return;
+
+  // «Продолжить сборку» — над библиотекой (см. план), не блокирует
+  // остальной рендер: список загружается параллельно, появляется, когда
+  // готов, а не задерживает сетку/карусель.
+  inProgressPuzzles(puzzles).then(items => {
+    if (!signal.aborted) renderInProgressList($(root, "#inProgressWrap"), items, signal);
+  });
 
   // Свои фото — только в комнатах (см. README «Свои фото»), соло-библиотека
   // видит исключительно встроенные пазлы. groupPuzzles сводит все уровни
@@ -1337,6 +1418,15 @@ function applyPieceTransform(piece) {
 function bindPreviewThumb(stage, panel, img, handle, toggleBtn, imageUrl, title, signal) {
   img.src = imageUrl;
   img.alt = `Как должно получиться: ${title}`;
+  // Тот же баг и то же лекарство, что у деталей пазла (см. buildPieceEl,
+  // wrap.addEventListener("dragstart", ...)) — <img> нативно перетаскиваемый
+  // браузером элемент, без preventDefault на dragstart браузер перехватывает
+  // жест в СВОЙ HTML5 drag-and-drop вместо pointermove ниже: курсор "нельзя",
+  // панель не двигается. draggable="false" в разметке (index.html/app.js
+  // шаблон) и -webkit-user-drag в CSS уже помогают в Chrome/Firefox/Safari
+  // по отдельности, но не везде надёжно сами по себе — dragstart здесь тот
+  // же самый третий слой защиты, что и у deталей.
+  img.addEventListener("dragstart", e => e.preventDefault(), { signal });
 
   const MIN_W = 96;
   const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -1395,14 +1485,27 @@ const TABLE_BG_KEY = "puzzle_table_bg";
  *  остального чисто локального UI стола (bindPreviewThumb выше). Общая
  *  для соло и комнаты, вызывается из обоих renderTable/renderRoomTable. */
 function bindBoardBackground(stage, colorInput, resetBtn, signal) {
+  // Точки координатной сетки должны остаться видны на ЛЮБОМ выбранном
+  // цвете (см. план — на сплошной заливке без пересчёта их не было видно
+  // вовсе на части цветов). Яркость по восприятию (не полная формула
+  // относительной светимости sRGB — тут это решение "точки светлые или
+  // тёмные", а не точный цветовой расчёт, упрощённых весов достаточно).
+  function dotColorFor(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    const luma = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    return luma > 0.5 ? "rgba(0,0,0,.22)" : "rgba(255,255,255,.28)";
+  }
   function apply(hex) {
     if (hex) {
       stage.style.setProperty("--table-bg", hex);
+      stage.style.setProperty("--table-bg-dot", dotColorFor(hex));
       stage.classList.add("custom-bg");
       colorInput.value = hex;
       resetBtn.hidden = false;
     } else {
       stage.style.removeProperty("--table-bg");
+      stage.style.removeProperty("--table-bg-dot");
       stage.classList.remove("custom-bg");
       resetBtn.hidden = true;
     }
@@ -1431,7 +1534,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
         <div class="table-world" id="world"></div>
         <div class="marquee-select" id="marqueeSelect" hidden></div>
         <div class="preview-panel" id="previewPanel" hidden>
-          <img class="preview-thumb" id="previewThumb" alt="">
+          <img class="preview-thumb" id="previewThumb" alt="" draggable="false">
           <div class="preview-resize-handle" id="previewResizeHandle" title="Изменить размер" aria-hidden="true"></div>
         </div>
         <!-- «Назад» — была текстовой ссылкой «← Библиотека» в .table-toolbar,
@@ -1914,7 +2017,11 @@ async function renderTable(root, puzzleId, signal, queryString) {
     } else {
       const prev = localProgress(puzzle.id);
       const completedAt = isPuzzleSolved(pieces, CELL, SNAP_TOLERANCE, total) ? ((prev && prev.completedAt) || Date.now()) : null;
-      localStorage.setItem(localKey(puzzle.id), JSON.stringify({ ...payload, completedAt }));
+      // updatedAt — только у гостя (сервер уже хранит его в puzzle_progress.
+      // updated_at) — нужен, чтобы «Продолжить сборку» над библиотекой
+      // (см. план, inProgressPuzzles) могла сортировать по свежести и для
+      // гостя тоже, не только для вошедшего.
+      localStorage.setItem(localKey(puzzle.id), JSON.stringify({ ...payload, completedAt, updatedAt: Date.now() }));
       if (completedAt && !announced) { announced = true; showWin(); }
     }
   }
@@ -2483,7 +2590,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <div class="table-world" id="world"></div>
         <div class="marquee-select" id="marqueeSelect" hidden></div>
         <div class="preview-panel" id="previewPanel" hidden>
-          <img class="preview-thumb" id="previewThumb" alt="">
+          <img class="preview-thumb" id="previewThumb" alt="" draggable="false">
           <div class="preview-resize-handle" id="previewResizeHandle" title="Изменить размер" aria-hidden="true"></div>
         </div>
         <!-- «Назад» — была текстовой ссылкой «← Комната» в .table-toolbar,

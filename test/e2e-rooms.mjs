@@ -1028,5 +1028,50 @@ ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${mailRejectId}/
 ok("Admin отклонил публикацию (для проверки письма) — 200", ir.status === 200, String(ir.status));
 ok("письмо-отказ залогировано мейлером", await waitForLog("puzzle", `«Фото для письма-отказа» отклонено`), "тема письма-отказа не найдена в логе puzzle");
 
+// ───────── прогресс: bulk-список для «Продолжить сборку» над библиотекой
+// (см. план «Продолжить сборку») ─────────
+r = await asJson(tokenA, "/puzzles/progress");
+ok("bulk-прогресс пуст, пока danil ничего не собирал", r.status === 200 && Array.isArray(r.body) && r.body.length === 0, JSON.stringify(r.body));
+
+const progressNoAuth = await fetch(PUZZLE + "/api/puzzles/progress");
+ok("bulk-прогресс без входа — 401", progressNoAuth.status === 401, String(progressNoAuth.status));
+
+r = await asJson(tokenA, "/puzzles");
+const hillsPuzzle = r.body.find(p => p.id === "hills");
+const { gridRows: hillsRows, gridCols: hillsCols } = hillsPuzzle;
+
+// Полная раскладка деталей — все врозь (далеко друг от друга по x/y, без
+// случайных совпадений), КРОМЕ (0,0)-(0,1): расставлены вплотную по X
+// (разница ровно CELL=100, см. server.js) — та же механика стыковки, что
+// уже проверена в test/unit-clusters.mjs (stitchGroup), тут только чтобы
+// piecesPlaced получился не нулевым.
+function fullPiecesWithOnePair(rows, cols) {
+  const arr = [];
+  let n = 1;
+  for (let rr = 0; rr < rows; rr++) for (let cc = 0; cc < cols; cc++) { arr.push({ r: rr, c: cc, x: n * 10000, y: n * 10000 }); n++; }
+  const a = arr.find(p => p.r === 0 && p.c === 0), b = arr.find(p => p.r === 0 && p.c === 1);
+  a.x = 0; a.y = 0; b.x = 100; b.y = 0;
+  return arr;
+}
+
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/progress`, {
+  method: "PUT", body: { pieces: fullPiecesWithOnePair(hillsRows, hillsCols) },
+});
+ok("PUT прогресса hills — 2 состыкованные детали посчитаны", r.status === 200 && r.body.piecesPlaced === 2, JSON.stringify(r.body));
+
+r = await asJson(tokenA, "/puzzles/progress");
+ok("bulk-прогресс теперь содержит hills с 2/N деталей",
+  r.status === 200 && r.body.some(x => x.puzzleId === hillsPuzzle.id && x.piecesPlaced === 2 && x.piecesTotal === hillsRows * hillsCols),
+  JSON.stringify(r.body));
+
+r = await asJson(tokenB, "/puzzles/progress");
+ok("bulk-прогресс — только свой, у sputnik пусто (danil его не трогал)", r.status === 200 && r.body.length === 0, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/progress`, { method: "DELETE" });
+ok("DELETE прогресса hills — 200", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+
+r = await asJson(tokenA, "/puzzles/progress");
+ok("после DELETE hills пропал из bulk-списка", r.status === 200 && !r.body.some(x => x.puzzleId === hillsPuzzle.id), JSON.stringify(r.body));
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);
