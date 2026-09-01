@@ -849,9 +849,19 @@ function mountPuzzleGridPager(gridEl, pagerEl, signal) {
 function renderCategorySuggestBox(signal) {
   const section = document.createElement("section");
   section.className = "category-suggest";
+  // Иконка — лампочка (идея/предложение), тот же фирменный зелёный
+  // градиент, что у акцентной полоски карточки комнаты (см. CSS,
+  // .category-suggest-icon) — единственное яркое цветовое пятно на
+  // подсказке, весь остальной текст — нейтральный.
   section.innerHTML = `
-    <h2>Не нашли нужные пазлы?</h2>
-    <p>Предложите категорию, которой не хватает — рассмотрим и добавим.</p>`;
+    <div class="category-suggest-icon">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.2 1 2.3v.5a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-.5c0-1.1.4-1.8 1-2.3A7 7 0 0 0 12 2z"/></svg>
+    </div>
+    <div class="category-suggest-body">
+      <h2>Не нашли нужные пазлы?</h2>
+      <p>Предложите категорию, которой не хватает — рассмотрим и добавим.</p>
+    </div>`;
+  const body = $(section, ".category-suggest-body");
 
   if (!auth.isAuthenticated()) {
     const btn = document.createElement("button");
@@ -859,7 +869,7 @@ function renderCategorySuggestBox(signal) {
     btn.type = "button";
     btn.textContent = "Войти, чтобы предложить категорию";
     btn.addEventListener("click", () => auth.login(), { signal });
-    section.appendChild(btn);
+    body.appendChild(btn);
     return section;
   }
 
@@ -871,7 +881,7 @@ function renderCategorySuggestBox(signal) {
   const note = document.createElement("p");
   note.className = "state-note";
   note.hidden = true;
-  section.append(form, note);
+  body.append(form, note);
 
   form.addEventListener("submit", async e => {
     e.preventDefault();

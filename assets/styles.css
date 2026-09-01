@@ -583,14 +583,25 @@ select.text-input{
 .pager{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.8rem;margin-top:1rem}
 
 /* «Не нашли нужные пазлы?» — подвал библиотеки/категорий (см. план,
-   renderCategorySuggestBox в app.js) — всегда последний элемент страницы,
-   ниже пагинации, поэтому просто верхняя граница-разделитель, тем же
-   приёмом, что у .faq в футере (border-top + отступ), а не отдельная
-   плашка-карточка — это не призыв к действию первой важности, а тихая
-   подсказка тем, кто долистал и не нашёл своё. */
-.category-suggest{margin-top:2.4rem;padding-top:1.6rem;border-top:1px solid var(--md-sys-color-outline-variant)}
-.category-suggest h2{font-size:1.1rem;font-weight:650;margin-bottom:.3rem}
-.category-suggest p{color:var(--md-sys-color-on-surface-variant);margin-bottom:.8rem;max-width:34rem}
+   renderCategorySuggestBox в app.js) — карточка с иконкой-бейджем в
+   фирменном зелёном пламени (тот же градиент --flame-base→--flame-tip,
+   что у акцентной полоски .room-card::before), а не просто верхняя
+   граница-разделитель под пагинацией — так подсказка выглядит как
+   собственное приглашение, а не полузабытая приписка внизу страницы. */
+.category-suggest{
+  display:flex;gap:1.1rem;align-items:flex-start;margin-top:2.4rem;padding:1.3rem 1.5rem;
+  border-radius:var(--md-sys-shape-corner-xl);background:var(--md-sys-color-surface-container-low);
+  border:1px solid color-mix(in srgb, var(--flame-tip) 30%, var(--md-sys-color-outline-variant));
+  box-shadow:var(--e1);
+}
+.category-suggest-icon{
+  flex:none;width:2.6rem;height:2.6rem;border-radius:50%;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(135deg, var(--flame-base), var(--flame-tip));color:#fff;
+}
+.category-suggest-icon .icon{width:1.4rem;height:1.4rem;stroke-width:2.2}
+.category-suggest-body{flex:1;min-width:0}
+.category-suggest h2{font-size:1.15rem;font-weight:650;margin-bottom:.3rem}
+.category-suggest p{color:var(--md-sys-color-on-surface-variant);margin-bottom:.9rem;max-width:32rem}
 .category-suggest-form{display:flex;gap:.6rem;flex-wrap:wrap;max-width:26rem}
 .category-suggest-form .text-input{flex:1;min-width:12rem}
 .category-suggest .state-note{margin-top:.6rem}
