@@ -252,14 +252,12 @@ try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_email TEXT"); } catch {}
 // группу (см. forceDeletePuzzleGroup), держать отклонённую запись незачем.
 try { db.exec("ALTER TABLE puzzles ADD COLUMN room_review_status TEXT"); } catch {}
 
-// Встроенные пазлы (Холмы/Лес/Горы) видны во ВСЕХ комнатах сразу (owner_user_id
-// IS NULL — см. puzzlesForRoom) — не всем участникам конкретной комнаты они
-// нужны. Скрытие ЛОКАЛЬНО для комнаты (не удаление самого пазла: он остаётся
-// глобально доступным везде ещё) — новая таблица, не колонка на puzzles,
-// потому что это отношение many-to-many (один и тот же встроенный пазл можно
-// скрыть в одной комнате и оставить видимым в другой). ON DELETE CASCADE у
-// обоих внешних ключей — запись сама уберётся, если комнату или пазл когда-
-// нибудь удалят.
+// УСТАРЕЛО (см. план «Библиотека в комнате — по добавлению, не по
+// умолчанию»): раньше встроенные/библиотечные пазлы были видны во ВСЕХ
+// комнатах сразу, эта таблица держала список локально скрытых. Теперь
+// видимость наоборот — по явному добавлению (см. room_added_puzzles ниже),
+// таблицу физически не дропаем (конвенция репозитория), просто больше не
+// читаем и не пишем в неё нигде дальше.
 db.exec(`
   CREATE TABLE IF NOT EXISTS room_hidden_puzzles (
     room_id    TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
@@ -267,6 +265,26 @@ db.exec(`
     hidden_by  TEXT NOT NULL,
     hidden_at  INTEGER NOT NULL,
     PRIMARY KEY (room_id, puzzle_id)
+  );
+`);
+
+// Библиотечные пазлы (встроенные + добавленные через Admin + опубликованные
+// пользовательские) видны в комнате, только если участник явно добавил их
+// туда (см. план «Библиотека в комнате — по добавлению, не по умолчанию») —
+// раньше было наоборот (видно всем сразу, можно было только скрыть). Ключ —
+// image_file (ГРУППА загрузки, все уровни сложности разом), не puzzle_id —
+// тот же принцип, что у category_id/moderation_status/title. Свои фото
+// ИМЕННО ЭТОЙ комнаты (room_id на puzzles) сюда не попадают вовсе — они
+// видны в комнате сразу по факту загрузки, эта таблица их не касается (см.
+// puzzlesForRoom). ON DELETE CASCADE — запись сама уберётся при удалении
+// комнаты.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS room_added_puzzles (
+    room_id    TEXT NOT NULL REFERENCES rooms(id) ON DELETE CASCADE,
+    image_file TEXT NOT NULL,
+    added_by   TEXT NOT NULL,
+    added_at   INTEGER NOT NULL,
+    PRIMARY KEY (room_id, image_file)
   );
 `);
 
@@ -368,15 +386,17 @@ const stmt = {
     ORDER BY pp.updated_at DESC`),
 
   puzzlesPublic:  db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL ORDER BY sort_order, created_at"),
-  // Встроенные (кроме скрытых ИМЕННО в этой комнате — см. room_hidden_puzzles)
-  // + СВОИ ФОТО ИМЕННО ЭТОЙ КОМНАТЫ (room_id) — не все фото владельца по всем
-  // его комнатам (см. комментарий у ALTER TABLE room_id выше). Публикация
-  // «для всех» пока не реализована. roomId передаётся дважды — раз на свою
-  // область видимости (room_id = ?), раз на фильтр скрытых.
+  // СВОИ ФОТО ИМЕННО ЭТОЙ КОМНАТЫ (room_id, видны сразу по факту загрузки —
+  // не все фото владельца по всем его комнатам, см. комментарий у ALTER
+  // TABLE room_id выше) + библиотечные пазлы, ЯВНО добавленные в эту
+  // комнату (см. план «Библиотека в комнате — по добавлению, не по
+  // умолчанию», room_added_puzzles) — раньше все библиотечные были видны
+  // сразу, теперь наоборот, по умолчанию пусто. roomId передаётся дважды —
+  // раз на свои фото (room_id = ?), раз на список добавленного.
   puzzlesForRoom: db.prepare(`
     SELECT * FROM puzzles
-    WHERE (owner_user_id IS NULL OR room_id = ?)
-      AND id NOT IN (SELECT puzzle_id FROM room_hidden_puzzles WHERE room_id = ?)
+    WHERE room_id = ?
+       OR (owner_user_id IS NULL AND image_file IN (SELECT image_file FROM room_added_puzzles WHERE room_id = ?))
     ORDER BY sort_order, created_at`),
   insertCustomPuzzle: db.prepare(`INSERT INTO puzzles
       (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id,room_id,
@@ -463,16 +483,17 @@ const stmt = {
   // трёх стартовых картинок (BUILTIN_IMAGES, всегда .svg) расширением файла
   // в JS-коде — см. isAdminUploadedFile ниже, не тут.
   puzzlesByImagePublic: db.prepare("SELECT * FROM puzzles WHERE image_file = ? AND owner_user_id IS NULL"),
-  // Скрытие встроенного пазла в конкретной комнате (не удаление — см. схему
-  // room_hidden_puzzles) — доступно любому участнику комнаты, не только
-  // владельцу: это общая настройка «что показываем в ЭТОЙ комнате», не личная
-  // вещь одного участника. DO NOTHING — повторное скрытие уже скрытого не
+  // Добавление библиотечного пазла в комнату (см. план «Библиотека в
+  // комнате — по добавлению, не по умолчанию») — доступно любому участнику
+  // комнаты, не только владельцу: это общая настройка «что показываем в
+  // ЭТОЙ комнате», не личная вещь одного участника. Ключ — image_file
+  // (группа), не puzzle_id — один запрос добавляет разом все уровни
+  // сложности. DO NOTHING — повторное добавление уже добавленного не
   // должно падать ошибкой (идемпотентно).
-  hidePuzzleInRoom: db.prepare(`
-    INSERT INTO room_hidden_puzzles (room_id,puzzle_id,hidden_by,hidden_at) VALUES (?,?,?,?)
-    ON CONFLICT(room_id,puzzle_id) DO NOTHING`),
-  unhidePuzzleInRoom: db.prepare("DELETE FROM room_hidden_puzzles WHERE room_id = ? AND puzzle_id = ?"),
-  hiddenPuzzlesForRoom: db.prepare("SELECT puzzle_id FROM room_hidden_puzzles WHERE room_id = ?"),
+  addPuzzleToRoom: db.prepare(`
+    INSERT INTO room_added_puzzles (room_id,image_file,added_by,added_at) VALUES (?,?,?,?)
+    ON CONFLICT(room_id,image_file) DO NOTHING`),
+  removePuzzleFromRoom: db.prepare("DELETE FROM room_added_puzzles WHERE room_id = ? AND image_file = ?"),
 };
 
 Object.assign(stmt, {
@@ -1317,6 +1338,15 @@ const server = http.createServer(async (req, res) => {
       if (!puzzle) return json(res, 404, { error: "not found" });
       if (puzzle.moderation_status !== "pending") return json(res, 400, { error: "not pending" });
       stmt.setModerationApproved.run(puzzle.image_file);
+      // Публикация обнуляет room_id (см. setModerationApproved) — пазл
+      // становится обычной библиотечной записью, значит по новой модели
+      // (см. план «Библиотека в комнате — по добавлению, не по умолчанию»)
+      // сам по себе больше не виден даже в комнате, откуда его загрузили.
+      // Чтобы для загрузившего он не пропадал молча из-под ног — добавляем
+      // его туда явно, тем же приёмом, что и ручное добавление из
+      // библиотеки. room_id тут — значение ДО обнуления (puzzle снят до
+      // setModerationApproved), у комнатной загрузки оно всегда есть.
+      if (puzzle.room_id) stmt.addPuzzleToRoom.run(puzzle.room_id, puzzle.image_file, puzzle.uploader_user_id, now());
       adminLog.info("Admin одобрил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, ownerUserId: puzzle.owner_user_id });
       notifyPublishOutcome(puzzle, "approved");
       return json(res, 200, { ok: true });
@@ -1999,23 +2029,26 @@ async function api(req, res, url, user) {
         return json(res, 200, { ok: true });
       }
 
-      // Скрыть встроенный пазл ИМЕННО в этой комнате (не удалить сам пазл —
-      // он остаётся видимым во всех остальных комнатах и в соло-библиотеке,
-      // см. room_hidden_puzzles). Доступно любому участнику (member уже
-      // проверен выше) — это общая настройка комнаты, не личная. Своё фото
-      // сюда не годится — для него уже есть настоящее удаление (DELETE
-      // /api/puzzles/:id, только владельцем).
-      if (seg[3] === "hidden-puzzles" && seg.length === 4 && m === "POST") {
+      // Добавить библиотечный пазл (встроенный/через Admin/опубликованный
+      // пользователем — owner_user_id IS NULL у всех) ИМЕННО в эту комнату
+      // (см. план «Библиотека в комнате — по добавлению, не по умолчанию»,
+      // room_added_puzzles). Доступно любому участнику (member уже проверен
+      // выше) — это общая настройка комнаты, не личная. Своё фото сюда не
+      // годится — оно и так видно в комнате сразу по факту загрузки (см.
+      // puzzlesForRoom, room_id).
+      if (seg[3] === "added-puzzles" && seg.length === 4 && m === "POST") {
         const body = await readJson(req);
         const puzzle = stmt.puzzle.get(body.puzzleId);
         if (!puzzle) return json(res, 404, { error: "not found" });
-        if (puzzle.owner_user_id !== null) return json(res, 400, { error: "not a default puzzle" });
-        stmt.hidePuzzleInRoom.run(roomId, puzzle.id, identity.id, now());
+        if (puzzle.owner_user_id !== null) return json(res, 400, { error: "not a library puzzle" });
+        stmt.addPuzzleToRoom.run(roomId, puzzle.image_file, identity.id, now());
         return json(res, 200, { ok: true });
       }
 
-      if (seg[3] === "hidden-puzzles" && seg[4] && seg.length === 5 && m === "DELETE") {
-        stmt.unhidePuzzleInRoom.run(roomId, seg[4]);
+      if (seg[3] === "added-puzzles" && seg[4] && seg.length === 5 && m === "DELETE") {
+        const puzzle = stmt.puzzle.get(seg[4]);
+        if (!puzzle) return json(res, 404, { error: "not found" });
+        stmt.removePuzzleFromRoom.run(roomId, puzzle.image_file);
         return json(res, 200, { ok: true });
       }
 

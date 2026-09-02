@@ -372,32 +372,39 @@ r = await asJson(tokenA, `/rooms/${roomId2}/sessions/${asymSessionId}`, { method
 r = await asJson(tokenA, `/rooms/${roomId2}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
 ok("сеанс без флага — asymmetricShape===false", r.status === 200 && r.body.asymmetricShape === false, JSON.stringify(r.body));
 
-// ───────── скрытие встроенного пазла ИМЕННО в комнате (не удаление) ─────────
+// ───────── библиотека в комнате — по добавлению, не по умолчанию (см. план
+// «Библиотека в комнате — по добавлению, не по умолчанию») ─────────
 // roomId — тут состоят оба (tokenA и tokenB), значит подходит проверить, что
-// скрытое одним видно скрытым и другому (общая настройка комнаты, не личная).
-r = await asJson(tokenA, `/rooms/${roomId}/hidden-puzzles`, { method: "POST", body: { puzzleId: "hills" } });
-ok("скрытие встроенного пазла в комнате прошло", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+// добавленное одним видно и другому (общая настройка комнаты, не личная).
+r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
+ok("встроенный пазл по умолчанию НЕ виден в свежей комнате (библиотека — по добавлению)",
+  r.status === 200 && !r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+
+r = await asJson(tokenA, `/rooms/${roomId}/added-puzzles`, { method: "POST", body: { puzzleId: "hills" } });
+ok("добавление встроенного пазла в комнату прошло", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
 
 r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
-ok("скрытый пазл не виден владельцу скрытия в этой комнате", r.status === 200 && !r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+ok("добавленный пазл виден добавившему в этой комнате", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
 
 r = await asJson(tokenB, `/puzzles?roomId=${roomId}`);
-ok("скрытый пазл не виден и другому участнику той же комнаты", r.status === 200 && !r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+ok("добавленный пазл виден и другому участнику той же комнаты", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
 
 r = await asJson(tokenA, "/puzzles");
-ok("скрытие не задело соло-библиотеку — пазл там виден", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+ok("добавление в комнату не задевает соло-библиотеку — пазл виден и там (он и так всегда виден)",
+  r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
 
 r = await asJson(tokenA, `/puzzles?roomId=${roomId2}`);
-ok("скрытие не задело другую комнату — пазл там виден", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+ok("добавление в одну комнату не задевает другую — там пазл по-прежнему не виден",
+  r.status === 200 && !r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
 
-// Повторное скрытие уже скрытого — идемпотентно, не падает.
-r = await asJson(tokenA, `/rooms/${roomId}/hidden-puzzles`, { method: "POST", body: { puzzleId: "hills" } });
-ok("повторное скрытие того же пазла не падает", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+// Повторное добавление уже добавленного — идемпотентно, не падает.
+r = await asJson(tokenA, `/rooms/${roomId}/added-puzzles`, { method: "POST", body: { puzzleId: "hills" } });
+ok("повторное добавление того же пазла не падает", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
 
-r = await asJson(tokenA, `/rooms/${roomId}/hidden-puzzles/hills`, { method: "DELETE" });
-ok("восстановление скрытого пазла проходит", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+r = await asJson(tokenA, `/rooms/${roomId}/added-puzzles/hills`, { method: "DELETE" });
+ok("удаление добавленного пазла из комнаты проходит", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
 r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
-ok("после восстановления пазл снова виден в комнате", r.status === 200 && r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
+ok("после удаления пазл снова не виден в комнате", r.status === 200 && !r.body.some(p => p.id === "hills"), JSON.stringify(r.body.map(p => p.id)));
 
 // ───────── анонимные комнаты — совсем без входа (см. план) ─────────
 // node's fetch не хранит cookies сам — вытаскиваем Set-Cookie из ответа и
@@ -618,6 +625,14 @@ ok("одобренное фото видно в соло-библиотеке б
 r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
 const approvedRow = r.body.find(x => x.id === publishId);
 ok("статус на карточке — approved", approvedRow && approvedRow.moderationStatus === "approved", JSON.stringify(approvedRow));
+// approve публикации сам добавляет пазл в комнату, откуда его загрузили
+// (см. план «Библиотека в комнате — по добавлению, не по умолчанию», сервер
+// делает это автоматически при одобрении) — иначе он молча пропал бы из-под
+// ног у того, кто его туда изначально загрузил и с ним играл.
+ok("одобрение публикации САМО добавило пазл в комнату, откуда его загрузили", !!approvedRow, JSON.stringify(approvedRow));
+r = await asJson(tokenA, `/puzzles?roomId=${roomId2}`);
+ok("но НЕ добавило его в другую комнату того же владельца — автодобавление только в комнату-источник",
+  !r.body.some(x => x.id === publishId), JSON.stringify(r.body.map(p => p.id)));
 
 // Второе фото — на отклонение с причиной, потом переотправку.
 ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото на отклонение")}`, fakePng, "image/png");

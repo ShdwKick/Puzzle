@@ -99,6 +99,21 @@ a{color:inherit}
 }
 .modal-head{display:flex;justify-content:space-between;align-items:center;gap:.8rem}
 .modal-head h2{margin:0}
+/* Модалка «Добавить пазл» в комнате (renderRoom) — шире обычной, чтобы
+   сетка карточек библиотеки (см. .add-puzzle-grid ниже) не сжималась в
+   одну узкую колонку. */
+.modal.wide{max-width:46rem}
+.modal-tabs{display:flex;gap:.5rem;margin:.9rem 0}
+.modal-tabs .btn.active{background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);border-color:transparent}
+.add-puzzle-category-row{display:flex;align-items:center;gap:.6rem;margin-bottom:.9rem}
+.add-puzzle-grid{display:grid;gap:.8rem;grid-template-columns:repeat(auto-fill,minmax(11rem,1fr))}
+.add-puzzle-card{
+  display:flex;flex-direction:column;gap:.4rem;border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);padding:.6rem;background:var(--md-sys-color-surface);
+}
+.add-puzzle-card img{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:var(--md-sys-shape-corner-m)}
+.add-puzzle-card .title{font-size:.85rem;line-height:1.25}
+.add-puzzle-card .btn{align-self:stretch}
 .bar{display:flex;justify-content:space-between;align-items:center;gap:1rem;flex-wrap:wrap;margin-top:1rem}
 .bar .text-input{flex:1;width:auto;min-width:0}
 .checkbox-row{

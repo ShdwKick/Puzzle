@@ -345,19 +345,29 @@
 </div>
 
 <!-- ===================== МОДАЛКА: ДОБАВИТЬ ПАЗЛ =====================
-     Открывается кнопкой «+» рядом с заголовком «Начать сборку» в комнате
-     (renderRoom, assets/app.js) — форма загрузки своего фото раньше висела
-     под сеткой пазлов постоянно, теперь только по запросу. Форму монтирует
-     mountUploadForm() в #uploadPuzzleFormMount при каждом заходе в комнату. -->
+     Открывается кнопкой «+»/«Добавить пазл» в комнате (renderRoom,
+     assets/app.js) — библиотека в комнате теперь по добавлению, не видна
+     сразу вся (см. план «Библиотека в комнате — по добавлению, не по
+     умолчанию»), эта модалка — единственный способ туда что-то добавить.
+     Два раздела-вкладки: своя загрузка (форма монтирует mountUploadForm()
+     в #uploadPuzzleFormMount) и общая библиотека по категориям
+     (#addPuzzleLibraryMount, см. renderAddPuzzleLibrary в app.js) — оба
+     монтируются заново при каждом заходе в комнату, переключение между
+     ними — просто hidden/показ, оба уже готовы. -->
 <div class="modal-backdrop hidden" id="uploadPuzzleModalBackdrop">
-  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="uploadPuzzleModalTitle">
+  <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="uploadPuzzleModalTitle">
     <div class="modal-head">
       <h2 id="uploadPuzzleModalTitle">Добавить пазл</h2>
       <button class="icon-btn" id="uploadPuzzleModalClose" aria-label="Закрыть">
         <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
-    <div id="uploadPuzzleFormMount"></div>
+    <div class="modal-tabs" id="addPuzzleTabs">
+      <button class="btn outlined sm" type="button" id="addPuzzleTabLibrary">Из библиотеки</button>
+      <button class="btn outlined sm" type="button" id="addPuzzleTabUpload">Загрузить своё фото</button>
+    </div>
+    <div id="addPuzzleLibraryMount"></div>
+    <div id="uploadPuzzleFormMount" hidden></div>
   </div>
 </div>
 
@@ -414,7 +424,7 @@
       </label>
     </div>
     <div class="publish-categories">
-      <p class="state-note">Фото попадёт в «Пользовательские» автоматически. Можно добавить и другие категории:</p>
+      <p class="state-note">Категория необязательна — если не выбрать и не предложить свою, фото попадёт в «Пользовательские»:</p>
       <div id="publishLibraryCategories"></div>
       <input class="text-input" id="publishNewCategoryName" type="text" maxlength="80" placeholder="Предложить новую категорию (пойдёт на модерацию) — необязательно">
     </div>

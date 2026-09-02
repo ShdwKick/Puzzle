@@ -212,10 +212,10 @@ const EN = {
   "Удалить пазл": "Delete puzzle",
   "Этим пазлом уже играли в комнате — удалить нельзя.": "This puzzle has already been played in a room — it can't be deleted.",
   "Не удалось удалить.": "Couldn't delete.",
-  "Скрыть из этой комнаты": "Hide from this room",
-  "Скрыть пазл": "Hide puzzle",
-  "из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.": "from this room? It will stay available in all other rooms and in the solo library.",
-  "Не удалось скрыть.": "Couldn't hide.",
+  "Убрать из этой комнаты": "Remove from this room",
+  "Убрать пазл": "Remove puzzle",
+  "из этой комнаты? Он останется доступен во всех остальных комнатах и в общей библиотеке — можно будет добавить снова.": "from this room? It will stay available in all other rooms and in the shared library — you can add it again later.",
+  "Не удалось убрать.": "Couldn't remove.",
   "Отправить снова": "Resubmit",
   "+ В комнату": "+ Add to room",
   "Загрузка…": "Loading…",
@@ -272,6 +272,17 @@ const EN = {
   "Что-то пошло не так — обновите страницу.": "Something went wrong — please refresh the page.",
   "Не удалось запуститься — обновите страницу.": "Couldn't start — please refresh the page.",
   "участник": "member",
+  "Из библиотеки": "From the library",
+  "Загрузить своё фото": "Upload your own photo",
+  "В этой комнате пока нет пазлов — добавьте первый.": "No puzzles in this room yet — add the first one.",
+  "Категория": "Category",
+  "Пусто.": "Nothing here.",
+  "Не удалось загрузить библиотеку.": "Couldn't load the library.",
+  "В библиотеке пока нет ни одного пазла.": "The library doesn't have any puzzles yet.",
+  "Уже добавлен": "Already added",
+  "Добавить": "Add",
+  "Не удалось добавить.": "Couldn't add.",
+  "Без категории (по умолчанию — «Пользовательские»)": "No category (default — “User-submitted”)",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -317,6 +328,8 @@ function applyStaticTranslations() {
   byId("joinCodeInput", el => { el.placeholder = t("Код комнаты"); });
   byId("joinCodeBtn", el => { el.title = t("Найти"); el.setAttribute("aria-label", el.title); });
   byId("uploadPuzzleModalTitle", el => { el.textContent = t("Добавить пазл"); });
+  byId("addPuzzleTabLibrary", el => { el.textContent = t("Из библиотеки"); });
+  byId("addPuzzleTabUpload", el => { el.textContent = t("Загрузить своё фото"); });
   byId("difficultyModalTitle", el => { el.textContent = t("Выберите сложность"); });
   byId("difficultyPlayBtn", el => { el.textContent = t("Играть"); });
   byId("publishModalTitle", el => { el.textContent = t("Опубликовать в общую библиотеку"); });
@@ -703,16 +716,23 @@ async function publishPuzzle(id, { categoryId, newCategoryName } = {}) {
   return data;
 }
 
-/** Скрывает встроенный пазл (все уровни сложности сразу — variants) ИМЕННО
- *  в этой комнате — не удаляет его самого, он остаётся видимым во всех
- *  остальных комнатах и в соло-библиотеке (см. server.js, room_hidden_puzzles).
- *  Своих фото это не касается — для них есть настоящее удаление, deletePuzzle
- *  выше. */
-async function hidePuzzleInRoom(roomId, variants) {
-  await Promise.all(variants.map(v => roomFetch(
-    `/api/rooms/${encodeURIComponent(roomId)}/hidden-puzzles`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId: v.id }) },
-  )));
+/** Добавляет библиотечный пазл (все уровни сложности сразу — ключ на
+ *  сервере это image_file группы, один вариант id достаточен) в список
+ *  явно добавленного для этой комнаты (см. план «Библиотека в комнате —
+ *  по добавлению, не по умолчанию», server.js/room_added_puzzles). */
+async function addPuzzleToRoom(roomId, variants) {
+  await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/added-puzzles`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId: variants[0].id }),
+  });
+  invalidatePuzzlesCache();
+}
+
+/** Убирает библиотечный пазл (все уровни сложности сразу) из списка
+ *  добавленного для этой комнаты — сам пазл остаётся глобально доступным,
+ *  просто перестаёт быть виден в ЭТОЙ комнате. Своих фото это не касается —
+ *  для них есть настоящее удаление, deletePuzzle выше. */
+async function removePuzzleFromRoom(roomId, variants) {
+  await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/added-puzzles/${encodeURIComponent(variants[0].id)}`, { method: "DELETE" });
   invalidatePuzzlesCache();
 }
 
@@ -781,6 +801,89 @@ function mountUploadForm(container, roomId, onDone) {
       submitBtn.disabled = false;
     }
   });
+}
+
+/** Панель «Из библиотеки» внутри модалки «Добавить пазл» (см. index.html,
+ *  #addPuzzleLibraryMount) — вся общая библиотека (не только эта комната,
+ *  см. план «Библиотека в комнате — по добавлению, не по умолчанию»), с
+ *  фильтром по категории (выпадайка) и кнопкой «Добавить» на каждой
+ *  карточке. addedImageUrls — Set imageUrl уже видимых в этой комнате
+ *  пазлов (см. renderRoom) — уже добавленные помечаются disabled, а не
+ *  прячутся: так понятнее, что повторно жать незачем, чем если бы карточка
+ *  просто исчезала. onAdded(group) зовётся сразу после успешного добавления
+ *  — renderRoom сам решает, как дорисовать карточку в настоящую сетку
+ *  комнаты позади модалки. */
+async function renderAddPuzzleLibrary(container, roomId, addedImageUrls, signal, onAdded) {
+  container.innerHTML = `<p class="state-note">${t("Загрузка…")}</p>`;
+  let puzzles, categories;
+  try {
+    [puzzles, categories] = await Promise.all([getPuzzles(), getCategories().catch(() => []), ensureDisplayTitleCache()]);
+  } catch {
+    if (!signal.aborted) container.innerHTML = `<p class="state-note">${t("Не удалось загрузить библиотеку.")}</p>`;
+    return;
+  }
+  if (signal.aborted) return;
+
+  const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
+  const counts = new Map();
+  for (const g of allGroups) if (g.categoryId) counts.set(g.categoryId, (counts.get(g.categoryId) || 0) + 1);
+  const nonEmptyCategories = categories.filter(c => counts.get(c.id) > 0);
+
+  if (!allGroups.length) {
+    container.innerHTML = `<p class="state-note">${t("В библиотеке пока нет ни одного пазла.")}</p>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="add-puzzle-category-row">
+      <label for="addPuzzleCategorySelect">${t("Категория")}</label>
+      <select id="addPuzzleCategorySelect">
+        <option value="">${t("Все категории")}</option>
+        ${nonEmptyCategories.map(c => `<option value="${c.id}">${categoryDisplayName(c)} (${counts.get(c.id)})</option>`).join("")}
+      </select>
+    </div>
+    <div class="add-puzzle-grid" id="addPuzzleGrid"></div>`;
+  const select = $(container, "#addPuzzleCategorySelect");
+  const gridEl = $(container, "#addPuzzleGrid");
+
+  function paint() {
+    const catId = select.value;
+    const shown = catId ? allGroups.filter(g => g.categoryId === catId) : allGroups;
+    gridEl.innerHTML = "";
+    if (!shown.length) {
+      gridEl.innerHTML = `<p class="state-note">${t("Пусто.")}</p>`;
+      return;
+    }
+    for (const g of shown) {
+      const card = document.createElement("div");
+      card.className = "add-puzzle-card";
+      const img = document.createElement("img");
+      img.src = g.imageUrl; img.alt = puzzleDisplayTitle(g); img.loading = "lazy";
+      const title = document.createElement("div");
+      title.className = "title"; title.textContent = puzzleDisplayTitle(g);
+      const btn = document.createElement("button");
+      btn.className = "btn tonal sm"; btn.type = "button";
+      const already = addedImageUrls.has(g.imageUrl);
+      btn.textContent = already ? t("Уже добавлен") : t("Добавить");
+      btn.disabled = already;
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        try {
+          await addPuzzleToRoom(roomId, g.variants);
+          addedImageUrls.add(g.imageUrl);
+          btn.textContent = t("Уже добавлен");
+          onAdded(g);
+        } catch {
+          btn.disabled = false;
+          alert(t("Не удалось добавить."));
+        }
+      }, { signal });
+      card.append(img, title, btn);
+      gridEl.appendChild(card);
+    }
+  }
+  select.addEventListener("change", paint, { signal });
+  paint();
 }
 
 /** Прогресс по пазлу для карточки библиотеки: сервер для вошедшего, localStorage для гостя. */
@@ -1065,12 +1168,13 @@ function buildCard(p, opts = {}) {
     body.insertBefore(author, metaEl.nextSibling);
   }
   const mine = p.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === p.ownerUserId;
-  // Встроенный пазл (ownerUserId===null) внутри комнаты (opts.roomId задан
-  // только в renderRoom) — можно скрыть из ЭТОЙ комнаты, доступно любому
-  // участнику, не только владельцу комнаты (это общая настройка комнаты, не
-  // личная вещь). В соло-библиотеке (opts.roomId нет) встроенные пазлы
-  // по-прежнему не удаляются никак.
-  const canHideDefault = !p.ownerUserId && opts.roomId && auth.isAuthenticated();
+  // Библиотечный пазл (ownerUserId===null) внутри комнаты (opts.roomId
+  // задан только в renderRoom) — можно убрать из ЭТОЙ комнаты (снять
+  // добавление, см. removePuzzleFromRoom), доступно любому участнику, не
+  // только владельцу комнаты (это общая настройка комнаты, не личная вещь).
+  // В соло-библиотеке (opts.roomId нет) библиотечные пазлы по-прежнему не
+  // удаляются никак.
+  const canRemoveFromRoom = !p.ownerUserId && opts.roomId && auth.isAuthenticated();
 
   // Статус модерации — текстовая строка, не пункт меню (только на своих
   // фото, см. план «Модерация загруженных фото»).
@@ -1110,12 +1214,12 @@ function buildCard(p, opts = {}) {
       try { await deletePuzzle(p.id); node.remove(); }
       catch (err) { alert(err.message === "in use" ? t("Этим пазлом уже играли в комнате — удалить нельзя.") : t("Не удалось удалить.")); }
     } });
-  } else if (canHideDefault && opts.allowDelete !== false) {
-    items.push({ label: t("Скрыть из этой комнаты"), onClick: async () => {
+  } else if (canRemoveFromRoom && opts.allowDelete !== false) {
+    items.push({ label: t("Убрать из этой комнаты"), onClick: async () => {
       closeCardMenu();
-      if (!confirm(`${t("Скрыть пазл")} «${puzzleDisplayTitle(p)}» ${t("из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.")}`)) return;
-      try { await hidePuzzleInRoom(opts.roomId, variants); node.remove(); }
-      catch { alert(t("Не удалось скрыть.")); }
+      if (!confirm(`${t("Убрать пазл")} «${puzzleDisplayTitle(p)}» ${t("из этой комнаты? Он останется доступен во всех остальных комнатах и в общей библиотеке — можно будет добавить снова.")}`)) return;
+      try { await removePuzzleFromRoom(opts.roomId, variants); node.remove(); }
+      catch { alert(t("Не удалось убрать.")); }
     } });
   }
   if (mine && (!p.moderationStatus || p.moderationStatus === "rejected")) {
@@ -2893,7 +2997,6 @@ async function renderRoom(root, roomId, signal) {
   try { puzzles = await getPuzzles(roomId); } catch { $(activeEl, "#roomPuzzleGrid").innerHTML = `<p class="state-note">${t("Не удалось загрузить пазлы.")}</p>`; puzzles = []; }
   if (signal.aborted) return;
   const grid = $(activeEl, "#roomPuzzleGrid");
-  grid.innerHTML = "";
 
   async function playVariant(variant, asymmetric) {
     try {
@@ -2912,27 +3015,73 @@ async function renderRoom(root, roomId, signal) {
     }
   }
 
-  // allowDelete НЕ передан (по умолчанию разрешено) — buildCard сам решает,
-  // кому показать крестик: владельцу своего фото — «удалить», любому
-  // участнику комнаты (roomId передан) на встроенном пазле — «скрыть из
-  // этой комнаты» (см. canHideDefault в buildCard).
-  for (const group of groupPuzzles(puzzles)) {
+  // Библиотека в комнате теперь по добавлению, не по умолчанию (см. план
+  // «Библиотека в комнате — по добавлению, не по умолчанию») — puzzles тут
+  // уже только свои фото ЭТОЙ комнаты + явно добавленные библиотечные (см.
+  // server.js, room_added_puzzles), пусто в новой комнате — самое обычное
+  // состояние, не ошибка. currentGroups/addedImageUrls живут в замыкании —
+  // и сетка, и панель «Из библиотеки» в модалке (см. ниже) читают/пишут их
+  // сообща, чтобы не расходиться при добавлении на лету.
+  let currentGroups = groupPuzzles(puzzles);
+  const addedImageUrls = new Set(currentGroups.map(g => g.imageUrl));
+
+  function paintRoomGrid() {
+    grid.innerHTML = "";
+    if (!currentGroups.length) {
+      grid.innerHTML = `<p class="state-note">${t("В этой комнате пока нет пазлов — добавьте первый.")}</p>
+        <button class="btn filled sm" id="emptyAddPuzzleBtn" type="button">${t("Добавить пазл")}</button>`;
+      $(grid, "#emptyAddPuzzleBtn").addEventListener("click", () => openModal("uploadPuzzleModalBackdrop"), { signal });
+      return;
+    }
+    // allowDelete НЕ передан (по умолчанию разрешено) — buildCard сам
+    // решает, кому показать крестик: владельцу своего фото — «удалить»,
+    // любому участнику комнаты (roomId передан) на библиотечном пазле —
+    // «убрать из этой комнаты» (см. canRemoveFromRoom в buildCard).
+    for (const group of currentGroups) {
+      grid.appendChild(buildCard(group, { onPlay: playVariant, roomId }));
+    }
+  }
+  // Добавление карточки на лету (из панели «Из библиотеки» или сразу после
+  // своей загрузки) — не полный перерендер: переводит сетку из пустого
+  // состояния в обычное, если это первая карточка, иначе просто дописывает.
+  function addGroupToRoomGrid(group) {
+    currentGroups.push(group);
+    addedImageUrls.add(group.imageUrl);
+    if (currentGroups.length === 1) { paintRoomGrid(); return; }
     grid.appendChild(buildCard(group, { onPlay: playVariant, roomId }));
   }
+  paintRoomGrid();
 
   $(activeEl, "#addPuzzleBtn").addEventListener("click", () => openModal("uploadPuzzleModalBackdrop"), { signal });
-  // Форма — внутри статичной модалки (index.html, вне #app), не под сеткой:
-  // раньше висела постоянно открытой, теперь только по клику на «+» (см. кнопку
-  // выше). Монтируем один раз на каждый заход в комнату — mountUploadForm сам
-  // перезаписывает innerHTML контейнера, повторный вызов при новом рендере не
-  // накапливает старые формы/обработчики. Загрузка своего фото по-прежнему
-  // требует настоящего входа (POST /api/puzzles и так уже проверяет это на
-  // сервере, см. план «анонимные комнаты») — анониму вместо формы подсказка,
-  // чтобы не показывать то, что всё равно откажет.
+  // Модалка теперь с двумя вкладками (см. index.html) — «Из библиотеки»
+  // (renderAddPuzzleLibrary, весь общий каталог с фильтром по категории) и
+  // «Загрузить своё фото» (форма, как раньше). Обе монтируются заново на
+  // каждый заход в комнату — их innerHTML сам перезаписывается, повторный
+  // вызов не накапливает старые формы/обработчики.
+  const tabLibraryBtn = document.getElementById("addPuzzleTabLibrary");
+  const tabUploadBtn = document.getElementById("addPuzzleTabUpload");
+  const libraryMount = document.getElementById("addPuzzleLibraryMount");
   const uploadMount = document.getElementById("uploadPuzzleFormMount");
+  function selectAddPuzzleTab(tab) {
+    const isLibrary = tab === "library";
+    tabLibraryBtn.classList.toggle("active", isLibrary);
+    tabUploadBtn.classList.toggle("active", !isLibrary);
+    libraryMount.hidden = !isLibrary;
+    uploadMount.hidden = isLibrary;
+  }
+  tabLibraryBtn.addEventListener("click", () => selectAddPuzzleTab("library"), { signal });
+  tabUploadBtn.addEventListener("click", () => selectAddPuzzleTab("upload"), { signal });
+  selectAddPuzzleTab("library");
+
+  renderAddPuzzleLibrary(libraryMount, roomId, addedImageUrls, signal, addGroupToRoomGrid);
+
+  // Загрузка своего фото по-прежнему требует настоящего входа (POST
+  // /api/puzzles и так уже проверяет это на сервере, см. план «анонимные
+  // комнаты») — анониму вместо формы подсказка, чтобы не показывать то,
+  // что всё равно откажет.
   if (auth.isAuthenticated()) {
     mountUploadForm(uploadMount, roomId, result => {
-      grid.appendChild(buildCard({ ...result.variants[0], variants: result.variants }, { onPlay: playVariant, roomId }));
+      addGroupToRoomGrid({ ...result.variants[0], variants: result.variants });
       closeModal("uploadPuzzleModalBackdrop");
     });
   } else {
