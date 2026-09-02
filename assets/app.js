@@ -274,7 +274,8 @@ const EN = {
   "участник": "member",
   "Из библиотеки": "From the library",
   "Загрузить своё фото": "Upload your own photo",
-  "В этой комнате пока нет пазлов — добавьте первый.": "No puzzles in this room yet — add the first one.",
+  "В этой комнате пока нет пазлов": "No puzzles in this room yet",
+  "Добавьте первый — из общей библиотеки или загрузите своё фото.": "Add the first one — from the shared library, or upload your own photo.",
   "Категория": "Category",
   "Пусто.": "Nothing here.",
   "Не удалось загрузить библиотеку.": "Couldn't load the library.",
@@ -3027,12 +3028,32 @@ async function renderRoom(root, roomId, signal) {
 
   function paintRoomGrid() {
     grid.innerHTML = "";
+    // Прежний empty-state рисовался ВНУТРИ .puzzle-grid (display:grid,
+    // колонки minmax(15.5rem,1fr)) — <p>/<button> как отдельные grid-item
+    // растягивались каждый на свою колонку/строку, кнопка раздувалась в
+    // нечитаемый овал. Правильное место — рядом с сеткой, не внутри нее
+    // (тот же приём и класс .category-suggest, что у «Предложите
+    // категорию» под библиотекой, см. renderCategorySuggestBox) — сетку на
+    // время пустого состояния просто прячем.
+    const prevEmpty = $(activeEl, "#roomPuzzlesEmpty");
+    if (prevEmpty) prevEmpty.remove();
     if (!currentGroups.length) {
-      grid.innerHTML = `<p class="state-note">${t("В этой комнате пока нет пазлов — добавьте первый.")}</p>
-        <button class="btn filled sm" id="emptyAddPuzzleBtn" type="button">${t("Добавить пазл")}</button>`;
-      $(grid, "#emptyAddPuzzleBtn").addEventListener("click", () => openModal("uploadPuzzleModalBackdrop"), { signal });
+      grid.hidden = true;
+      const empty = document.createElement("div");
+      empty.className = "category-suggest";
+      empty.id = "roomPuzzlesEmpty";
+      empty.innerHTML = `
+        <div class="category-suggest-icon">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+        </div>
+        <h2>${t("В этой комнате пока нет пазлов")}</h2>
+        <p>${t("Добавьте первый — из общей библиотеки или загрузите своё фото.")}</p>
+        <button class="btn filled sm" type="button">${t("Добавить пазл")}</button>`;
+      grid.insertAdjacentElement("afterend", empty);
+      $(empty, "button").addEventListener("click", () => openModal("uploadPuzzleModalBackdrop"), { signal });
       return;
     }
+    grid.hidden = false;
     // allowDelete НЕ передан (по умолчанию разрешено) — buildCard сам
     // решает, кому показать крестик: владельцу своего фото — «удалить»,
     // любому участнику комнаты (roomId передан) на библиотечном пазле —
