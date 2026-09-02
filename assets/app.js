@@ -452,18 +452,21 @@ async function openPublishModal(id, title, onDone) {
   document.getElementById("publishConsent").checked = false;
   document.getElementById("publishNewCategoryName").value = "";
   document.getElementById("publishError").hidden = true;
-  // Категории — многозначный выбор чекбоксами (см. план «Категории
-  // many-to-many»), список — только approved (pending пока не выбрать,
-  // их ещё не видно в публичном GET /api/categories).
+  // Категория — одиночный выбор через <select> (см. план «Один пазл — одна
+  // категория»), список — только approved (pending пока не выбрать, их ещё
+  // не видно в публичном GET /api/categories). Пустая опция — категория по
+  // умолчанию, системная «Пользовательские» (см. server.js, POST
+  // .../publish): выбор существующей категории или своей через
+  // publishNewCategoryName ниже её заменяет, а не дополняет.
   const categoriesBox = document.getElementById("publishLibraryCategories");
   categoriesBox.innerHTML = `<p class="state-note">${t("Загрузка категорий…")}</p>`;
   try {
     const categories = await getCategories();
     categoriesBox.innerHTML = categories.length
-      ? categories.map(c => `
-          <label style="display:inline-flex;align-items:center;gap:.3em;margin:0 .8em .3em 0">
-            <input type="checkbox" name="publishCategory" value="${c.id}"> ${categoryDisplayName(c)}
-          </label>`).join("")
+      ? `<select id="publishCategorySelect">
+          <option value="">${t("Без категории (по умолчанию — «Пользовательские»)")}</option>
+          ${categories.map(c => `<option value="${c.id}">${categoryDisplayName(c)}</option>`).join("")}
+        </select>`
       : "";
   } catch { categoriesBox.innerHTML = ""; }
   pendingPublishId = { id, onDone };
@@ -480,12 +483,13 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
     return;
   }
   const { id, onDone } = pendingPublishId;
-  const categoryIds = [...document.querySelectorAll('input[name="publishCategory"]:checked')].map(cb => cb.value);
+  const categorySelect = document.getElementById("publishCategorySelect");
+  const categoryId = categorySelect ? categorySelect.value : "";
   const newCategoryName = document.getElementById("publishNewCategoryName").value.trim();
   const btn = document.getElementById("publishConfirmBtn");
   btn.disabled = true;
   try {
-    await publishPuzzle(id, { categoryIds, newCategoryName });
+    await publishPuzzle(id, { categoryId, newCategoryName });
     closeModal("publishModalBackdrop");
     pendingPublishId = null;
     onDone();
@@ -527,6 +531,54 @@ async function getCategories() {
   return res.json();
 }
 
+/** Ключ группировки — та же формула, что и в groupPuzzles ниже (общий
+ *  imageUrl, плюс владелец для ещё не опубликованных своих фото). */
+function puzzleGroupKey(p) {
+  return p.ownerUserId ? `${p.ownerUserId}:${p.imageUrl}` : p.imageUrl;
+}
+
+/** Кэш «ключ группы → готовая подпись» для вычисляемых названий
+ *  библиотечных пазлов вида «Категория #N» (см. план «Один пазл — одна
+ *  категория» — номер считается на лету по текущему порядку среди пазлов
+ *  той же категории, не хранится в БД). Пользовательские публикации
+ *  (uploaderUserId) в подсчёт не входят и своих номеров не получают —
+ *  у них остаётся собственное title (см. puzzleDisplayTitle). Прогревается
+ *  лениво, инвалидируется вместе с puzzlesCache (см. invalidatePuzzlesCache). */
+let displayTitleCache = null;
+function invalidatePuzzlesCache() {
+  puzzlesCache.clear();
+  displayTitleCache = null;
+}
+async function ensureDisplayTitleCache() {
+  if (displayTitleCache) return displayTitleCache;
+  const [puzzles, categories] = await Promise.all([getPuzzles(""), getCategories()]);
+  const catById = new Map(categories.map(c => [c.id, c]));
+  const counters = new Map();
+  const cache = new Map();
+  for (const group of groupPuzzles(puzzles.filter(p => !p.uploaderUserId))) {
+    if (!group.categoryId) continue;
+    const cat = catById.get(group.categoryId);
+    if (!cat) continue;
+    const n = (counters.get(group.categoryId) || 0) + 1;
+    counters.set(group.categoryId, n);
+    cache.set(puzzleGroupKey(group), { cat, n });
+  }
+  displayTitleCache = cache;
+  return cache;
+}
+/** Синхронная — рассчитана на уже прогретый кэш (см. вызовы
+ *  ensureDisplayTitleCache в renderLibrary/renderCategoryPage/renderTable/
+ *  renderRoom/renderRoomTable). Пользовательские публикации и пазлы без
+ *  категории просто возвращают собственное title (мягкий fallback, тот же
+ *  принцип, что у t() при отсутствии перевода). categoryDisplayName внутри
+ *  сама учитывает текущий язык — переключение языка не требует
+ *  перестройки этого кэша (см. setLang, который зовёт route()). */
+function puzzleDisplayTitle(p) {
+  if (p.uploaderUserId || !displayTitleCache) return p.title;
+  const info = displayTitleCache.get(puzzleGroupKey(p));
+  return info ? `${categoryDisplayName(info.cat)} #${info.n}` : p.title;
+}
+
 // По индексу, не по точному числу деталей: gridForPieceTarget округляет
 // rows/cols независимо, поэтому реальный total у пресета «108» иногда
 // получается 104 или 112 — сверка по значению иногда промахивалась бы
@@ -560,7 +612,7 @@ function groupPuzzles(list) {
  *  (renderLibrary), и страница отдельной категории (renderCategoryPage),
  *  см. план «Прямые ссылки + страница категорий». */
 function filterGroupsByCategory(groups, categoryId) {
-  return groups.filter(p => (p.categoryIds || []).includes(categoryId));
+  return groups.filter(p => p.categoryId === categoryId);
 }
 
 /** Верхний потолок стороны выше, чем у фото Trip (2000 против 1600) —
@@ -609,7 +661,7 @@ async function uploadPuzzlePhoto(file, title, roomId) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "upload failed");
-  puzzlesCache.clear(); // библиотека изменилась — старый кэш врёт
+  invalidatePuzzlesCache(); // библиотека изменилась — старый кэш врёт
   return data;
 }
 
@@ -634,20 +686,20 @@ async function deletePuzzle(id) {
   const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}`, { method: "DELETE" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || data.error || "delete failed");
-  puzzlesCache.clear();
+  invalidatePuzzlesCache();
 }
 
 /** Отправка своего фото на публикацию в общую библиотеку (см. план
  *  «Модерация загруженных фото») — отдельное, более строгое согласие, не то
  *  же самое, что consent=1 при обычной загрузке в комнату. */
-async function publishPuzzle(id, { categoryIds, newCategoryName } = {}) {
+async function publishPuzzle(id, { categoryId, newCategoryName } = {}) {
   const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}/publish`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ consent: true, categoryIds, newCategoryName: newCategoryName || undefined }),
+    body: JSON.stringify({ consent: true, categoryId: categoryId || undefined, newCategoryName: newCategoryName || undefined }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "publish failed");
-  puzzlesCache.clear();
+  invalidatePuzzlesCache();
   return data;
 }
 
@@ -661,7 +713,7 @@ async function hidePuzzleInRoom(roomId, variants) {
     `/api/rooms/${encodeURIComponent(roomId)}/hidden-puzzles`,
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId: v.id }) },
   )));
-  puzzlesCache.clear();
+  invalidatePuzzlesCache();
 }
 
 /** DELETE /api/rooms/:id/sessions/:sessionId — освобождает слот из лимита
@@ -765,6 +817,7 @@ async function inProgressPuzzles(allPuzzles) {
     if (progress && progress.piecesPlaced > 0 && !progress.completedAt) {
       out.push({
         puzzleId: p.id, title: p.title, imageUrl: p.imageUrl,
+        uploaderUserId: p.uploaderUserId, categoryId: p.categoryId,
         piecesPlaced: progress.piecesPlaced, piecesTotal: progress.piecesTotal,
         updatedAt: progress.updatedAt || 0,
       });
@@ -804,7 +857,7 @@ function buildInProgressCard(ip, signal, onDeleted) {
       <p class="puzzle-card-meta"></p>
     </div>`;
   $(card, "img").src = ip.imageUrl;
-  $(card, ".puzzle-card-title").textContent = ip.title;
+  $(card, ".puzzle-card-title").textContent = puzzleDisplayTitle(ip);
   const badge = $(card, ".puzzle-card-badge");
   badge.textContent = `${Math.round((ip.piecesPlaced / ip.piecesTotal) * 100)}%`;
   badge.hidden = false;
@@ -815,7 +868,8 @@ function buildInProgressCard(ip, signal, onDeleted) {
     navigate(`/table/${encodeURIComponent(ip.puzzleId)}`);
   }, { signal });
   $(card, ".progress-card-delete").addEventListener("click", async () => {
-    const confirmMsg = getLang() === "en" ? `Delete build progress for "${ip.title}"?` : `Удалить прогресс сборки «${ip.title}»?`;
+    const displayTitle = puzzleDisplayTitle(ip);
+    const confirmMsg = getLang() === "en" ? `Delete build progress for "${displayTitle}"?` : `Удалить прогресс сборки «${displayTitle}»?`;
     if (!confirm(confirmMsg)) return;
     if (auth.isAuthenticated()) {
       try { await auth.fetch(`/api/puzzles/${encodeURIComponent(ip.puzzleId)}/progress`, { method: "DELETE" }); } catch { /* при следующей загрузке страницы просто снова покажется — не критично */ }
@@ -974,7 +1028,7 @@ function buildCard(p, opts = {}) {
   const node = tpl.content.firstElementChild.cloneNode(true);
   const img = $(node, "img");
   img.src = p.imageUrl;
-  img.alt = p.title;
+  img.alt = puzzleDisplayTitle(p);
   img.decoding = "async";
   // Ленивая загрузка — везде, КРОМЕ первой карточки сетки (opts.eager, см.
   // вызовы buildCard в paintGrid/renderProfile): она обычно и есть LCP
@@ -982,7 +1036,7 @@ function buildCard(p, opts = {}) {
   // Vitals, и для позиций в поиске) — если бы она тоже грузилась лениво,
   // это ЗАМЕДЛИЛО бы LCP, а не ускорило страницу.
   if (!opts.eager) img.loading = "lazy";
-  $(node, ".puzzle-card-title").textContent = p.title;
+  $(node, ".puzzle-card-title").textContent = puzzleDisplayTitle(p);
   // Кнопка «За стол» — статичный текст в самом <template> (index.html),
   // ей нужен t() тут: шаблон клонируется заново на каждую карточку, но
   // сам текст внутри него не подхватывает язык сам по себе.
@@ -1040,7 +1094,7 @@ function buildCard(p, opts = {}) {
   // одного) происходит ПОСЛЕ клика, в общей модалке (см. openDifficultyModal
   // выше), не рядом мелких кнопок прямо на карточке.
   playBtn.addEventListener("click", () => {
-    if (variants.length > 1) openDifficultyModal(p.title, variants, onPlay);
+    if (variants.length > 1) openDifficultyModal(puzzleDisplayTitle(p), variants, onPlay);
     else onPlay(variants[0]);
   });
 
@@ -1059,7 +1113,7 @@ function buildCard(p, opts = {}) {
   } else if (canHideDefault && opts.allowDelete !== false) {
     items.push({ label: t("Скрыть из этой комнаты"), onClick: async () => {
       closeCardMenu();
-      if (!confirm(`${t("Скрыть пазл")} «${p.title}» ${t("из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.")}`)) return;
+      if (!confirm(`${t("Скрыть пазл")} «${puzzleDisplayTitle(p)}» ${t("из этой комнаты? Он останется доступен во всех остальных комнатах и в соло-библиотеке.")}`)) return;
       try { await hidePuzzleInRoom(opts.roomId, variants); node.remove(); }
       catch { alert(t("Не удалось скрыть.")); }
     } });
@@ -1091,7 +1145,7 @@ function buildCard(p, opts = {}) {
       }
     }
     function pickVariantThenAdd(roomId) {
-      if (variants.length > 1) openDifficultyModal(p.title, variants, (v, asymmetric) => addToRoom(roomId, v, asymmetric));
+      if (variants.length > 1) openDifficultyModal(puzzleDisplayTitle(p), variants, (v, asymmetric) => addToRoom(roomId, v, asymmetric));
       else addToRoom(roomId, variants[0]);
     }
     items.push({ label: t("+ В комнату"), onClick: async menuEl => {
@@ -1302,7 +1356,7 @@ async function renderLibrary(root, signal) {
 
   let puzzles, categories;
   try {
-    [puzzles, categories] = await Promise.all([getPuzzles(), getCategories().catch(() => [])]);
+    [puzzles, categories] = await Promise.all([getPuzzles(), getCategories().catch(() => []), ensureDisplayTitleCache()]);
   } catch {
     if (!signal.aborted) $(root, "#puzzleGrid").innerHTML = `<p class="state-note">${t("Не удалось загрузить пазлы — обновите страницу.")}</p>`;
     return;
@@ -1323,11 +1377,11 @@ async function renderLibrary(root, signal) {
   const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
   const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, ".pager"), signal);
 
-  // Категория стала many-to-many (см. план «Категории many-to-many») —
-  // один пазл считается в НЕСКОЛЬКИХ счётчиках сразу, поэтому счёт идёт
-  // по каждому id из categoryIds, не по одному значению на пазл.
+  // Одна категория на пазл (см. план «Один пазл — одна категория») —
+  // каждый пазл считается ровно в одном счётчике, некатегоризированные
+  // (categoryId нет) не считаются нигде.
   const counts = new Map();
-  for (const p of allGroups) for (const cid of p.categoryIds || []) counts.set(cid, (counts.get(cid) || 0) + 1);
+  for (const p of allGroups) if (p.categoryId) counts.set(p.categoryId, (counts.get(p.categoryId) || 0) + 1);
   // Пустые категории (0 пазлов) не показываем вовсе (см. план) — чип-фильтр
   // на пустое множество только сбивал бы с толку. Карусель рисуем, только
   // если после этого хоть одна категория осталась — иначе единственный чип
@@ -1438,7 +1492,7 @@ async function renderCategories(root, signal) {
 
   const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
   const counts = new Map();
-  for (const p of allGroups) for (const cid of p.categoryIds || []) counts.set(cid, (counts.get(cid) || 0) + 1);
+  for (const p of allGroups) if (p.categoryId) counts.set(p.categoryId, (counts.get(p.categoryId) || 0) + 1);
 
   // Пустые категории (0 пазлов) не показываем — вести на страницу без
   // единой карточки незачем (см. план).
@@ -1497,7 +1551,7 @@ async function renderCategoryPage(root, slug, signal) {
 
   let categories, puzzles;
   try {
-    [categories, puzzles] = await Promise.all([getCategories(), getPuzzles()]);
+    [categories, puzzles] = await Promise.all([getCategories(), getPuzzles(), ensureDisplayTitleCache()]);
   } catch {
     if (!signal.aborted) root.innerHTML = `<p class="state-note">${t("Не удалось загрузить категорию — обновите страницу.")}</p>`;
     return;
@@ -1957,7 +2011,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   const stage = $(root, "#stage");
 
   let puzzles;
-  try { puzzles = await getPuzzles(); } catch { stage.innerHTML = `<p class="state-note">${t("Не удалось загрузить пазл — обновите страницу.")}</p>`; return; }
+  try { [puzzles] = await Promise.all([getPuzzles(), ensureDisplayTitleCache()]); } catch { stage.innerHTML = `<p class="state-note">${t("Не удалось загрузить пазл — обновите страницу.")}</p>`; return; }
   if (signal.aborted) return;
   const puzzle = puzzles.find(p => p.id === puzzleId);
   if (!puzzle) { stage.innerHTML = `<p class="state-note">${t("Такого пазла нет.")}</p>`; return; }
@@ -1965,7 +2019,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     stage.innerHTML = `<p class="state-note">${t("Пазлы из своих фото собираются только в комнатах.")} <a class="btn text sm" href="/rooms">${t("К комнатам")}</a></p>`;
     return;
   }
-  $(root, "#tableTitle").textContent = puzzle.title;
+  $(root, "#tableTitle").textContent = puzzleDisplayTitle(puzzle);
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
   const pad = CELL * PAD_FACTOR;
@@ -2249,7 +2303,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
 
-  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzle.title, signal);
+  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzleDisplayTitle(puzzle), signal);
 
   bindBoardBackground(stage, $(root, "#boardBgInput"), $(root, "#boardBgResetBtn"), signal);
 
@@ -2414,9 +2468,10 @@ async function renderTable(root, puzzleId, signal, queryString) {
     const card = document.createElement("div");
     card.className = "win-card";
     const img = document.createElement("img");
-    img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzle.title;
+    img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzleDisplayTitle(puzzle);
     const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
-    const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${puzzle.title}" is complete.` : `Пазл «${puzzle.title}» собран.`;
+    const displayTitle = puzzleDisplayTitle(puzzle);
+    const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete.` : `Пазл «${displayTitle}» собран.`;
     const actions = document.createElement("div");
     actions.className = "win-actions";
     const stayBtn = document.createElement("button");
@@ -2705,6 +2760,7 @@ async function renderRoom(root, roomId, signal) {
     const [roomRes, sessionsRes] = await Promise.all([
       roomFetch(`/api/rooms/${encodeURIComponent(roomId)}`),
       roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`),
+      ensureDisplayTitleCache(),
     ]);
     if (roomRes.status === 403) { body.innerHTML = `<p class="state-note">${t("Вы не участник этой комнаты.")}</p>`; return; }
     if (!roomRes.ok) throw new Error("room fetch failed");
@@ -2799,9 +2855,9 @@ async function renderRoom(root, roomId, signal) {
   const activeSessions = room.activeSessions || [];
   activeEl.innerHTML = activeSessions.map(s => `
     <div class="room-active-card">
-      <p>${getLang() === "en" ? `Right now the table has "${s.puzzle.title}" in progress — ${s.piecesPlaced}/${s.piecesTotal} pieces.` : `Сейчас за столом собирают пазл «${s.puzzle.title}» — ${s.piecesPlaced}/${s.piecesTotal} деталей.`}</p>
+      <p>${getLang() === "en" ? `Right now the table has "${puzzleDisplayTitle(s.puzzle)}" in progress — ${s.piecesPlaced}/${s.piecesTotal} pieces.` : `Сейчас за столом собирают пазл «${puzzleDisplayTitle(s.puzzle)}» — ${s.piecesPlaced}/${s.piecesTotal} деталей.`}</p>
       <button class="btn filled join-table-btn" type="button" data-session="${s.id}">${t("За стол")}</button>
-      <button class="icon-btn xs delete-session-btn" type="button" data-session="${s.id}" data-title="${s.puzzle.title}" title="${t("Удалить")}" aria-label="${t("Удалить")}">
+      <button class="icon-btn xs delete-session-btn" type="button" data-session="${s.id}" data-title="${puzzleDisplayTitle(s.puzzle)}" title="${t("Удалить")}" aria-label="${t("Удалить")}">
         <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>`).join("")
@@ -2904,7 +2960,7 @@ async function renderRoom(root, roomId, signal) {
             <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
           </button>
         </div>`;
-      $(row, ".history-puzzle").textContent = s.puzzle.title;
+      $(row, ".history-puzzle").textContent = puzzleDisplayTitle(s.puzzle);
       $(row, ".history-meta").textContent = getLang() === "en"
         ? `${s.piecesTotal} pieces · completed ${fmtDate(s.completedAt)}`
         : `${s.piecesTotal} деталей · собран ${fmtDate(s.completedAt)}`;
@@ -2921,7 +2977,7 @@ async function renderRoom(root, roomId, signal) {
       // 409 здесь в норме не встречается, но deleteRoomSession всё равно
       // корректно её обработает, если что-то поменялось между рендером и кликом.
       $(row, ".history-delete").addEventListener("click", async e => {
-        if (!confirm(getLang() === "en" ? `Delete the "${s.puzzle.title}" session?` : `Удалить сеанс сборки «${s.puzzle.title}»?`)) return;
+        if (!confirm(getLang() === "en" ? `Delete the "${puzzleDisplayTitle(s.puzzle)}" session?` : `Удалить сеанс сборки «${puzzleDisplayTitle(s.puzzle)}»?`)) return;
         // currentTarget, не target: клик может попасть на вложенный <svg>/<path>
         // иконки крестика — у них нет свойства disabled, а нужно отключить
         // саму кнопку.
@@ -3038,7 +3094,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
 
   let session;
   try {
-    const sessionRes = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`);
+    const [sessionRes] = await Promise.all([
+      roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions/${encodeURIComponent(sessionId)}`),
+      ensureDisplayTitleCache(),
+    ]);
     if (!sessionRes.ok) throw new Error("session fetch failed");
     session = await sessionRes.json();
   } catch {
@@ -3071,7 +3130,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     return;
   }
   const puzzle = session.puzzle;
-  $(root, "#tableTitle").textContent = puzzle.title;
+  $(root, "#tableTitle").textContent = puzzleDisplayTitle(puzzle);
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
   const pad = CELL * PAD_FACTOR;
@@ -3311,7 +3370,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
 
-  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzle.title, signal);
+  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzleDisplayTitle(puzzle), signal);
 
   bindBoardBackground(stage, $(root, "#boardBgInput"), $(root, "#boardBgResetBtn"), signal);
 
@@ -3369,9 +3428,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     const card = document.createElement("div");
     card.className = "win-card";
     const img = document.createElement("img");
-    img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzle.title;
+    img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzleDisplayTitle(puzzle);
     const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
-    const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${puzzle.title}" is complete — solved together with friends.` : `Пазл «${puzzle.title}» собран вместе с друзьями.`;
+    const displayTitle = puzzleDisplayTitle(puzzle);
+    const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete — solved together with friends.` : `Пазл «${displayTitle}» собран вместе с друзьями.`;
     const actions = document.createElement("div");
     actions.className = "win-actions";
     const stayBtn = document.createElement("button");

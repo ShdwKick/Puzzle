@@ -361,7 +361,7 @@ const stmt = {
   // idx_progress_user (см. схему) покрывает WHERE user_id = ?.
   progressInFlight: db.prepare(`
     SELECT pp.puzzle_id, pp.pieces_placed, pp.pieces_total, pp.updated_at,
-           p.title, p.image_file
+           p.title, p.image_file, p.category_id, p.uploader_user_id
     FROM puzzle_progress pp
     JOIN puzzles p ON p.id = pp.puzzle_id
     WHERE pp.user_id = ? AND pp.completed_at IS NULL AND pp.pieces_placed > 0 AND p.owner_user_id IS NULL
@@ -418,20 +418,19 @@ const stmt = {
   categoryBySlug: db.prepare("SELECT * FROM categories WHERE slug = ?"),
   // Только ПУБЛИЧНО видимые группы (owner_user_id IS NULL — та же граница
   // видимости, что у puzzlesPublic) — категория может быть привязана к
-  // группе ещё до одобрения публикации (см. план «Категории many-to-many»,
-  // привязка идёт сразу при /publish), считать её тут преждевременно.
+  // группе ещё до одобрения публикации (см. план «Один пазл — одна
+  // категория», привязка идёт сразу при /publish), считать её тут
+  // преждевременно.
   categoryPublicPuzzleCount: db.prepare(`
-    SELECT COUNT(DISTINCT pc.image_file) AS n FROM puzzle_categories pc
-    JOIN puzzles p ON p.image_file = pc.image_file
-    WHERE pc.category_id = ? AND p.owner_user_id IS NULL`),
+    SELECT COUNT(DISTINCT p.image_file) AS n FROM puzzles p
+    WHERE p.category_id = ? AND p.owner_user_id IS NULL`),
   // Обложка категории (см. план «Обложка категории») — первый пазл в том же
   // порядке, что и сама библиотека (ORDER BY sort_order, created_at, см.
   // puzzlesPublic) — тем же порядком group[0] в клиентском groupPuzzles
   // (assets/app.js), просто без похода за всем списком целиком.
   categoryFirstImage: db.prepare(`
-    SELECT p.image_file FROM puzzle_categories pc
-    JOIN puzzles p ON p.image_file = pc.image_file
-    WHERE pc.category_id = ? AND p.owner_user_id IS NULL
+    SELECT p.image_file FROM puzzles p
+    WHERE p.category_id = ? AND p.owner_user_id IS NULL
     ORDER BY p.sort_order, p.created_at LIMIT 1`),
   insertCategory: db.prepare("INSERT INTO categories (id, name, slug, status, created_by, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   setCategorySlug: db.prepare("UPDATE categories SET slug = ? WHERE id = ?"),
@@ -449,12 +448,15 @@ const stmt = {
   deleteCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
   setCategoryApproved: db.prepare("UPDATE categories SET status = 'approved', moderation_reason = NULL WHERE id = ?"),
   setCategoryRejected: db.prepare("UPDATE categories SET status = 'rejected', moderation_reason = ? WHERE id = ?"),
-  // many-to-many: image_file (группа) <-> category_id. deleteCategoryLinks +
-  // insertCategoryLink вместе образуют "заменить весь набор" (setPuzzleCategories
-  // ниже) — та же логика и для назначения через Admin, и для публикации.
-  categoryIdsForImage: db.prepare("SELECT category_id FROM puzzle_categories WHERE image_file = ?"),
-  deleteCategoryLinks: db.prepare("DELETE FROM puzzle_categories WHERE image_file = ?"),
-  insertCategoryLink: db.prepare("INSERT OR IGNORE INTO puzzle_categories (image_file, category_id) VALUES (?, ?)"),
+  // Одна категория на группу загрузки (см. план «Один пазл — одна
+  // категория») — прямая колонка puzzles.category_id, не junction-таблица
+  // (см. комментарий у ALTER TABLE выше). Пишет во все строки-варианты
+  // группы разом, как и остальные групповые атрибуты (title и т.п.).
+  setPuzzleCategoryStmt: db.prepare("UPDATE puzzles SET category_id = ? WHERE image_file = ?"),
+  // Только для одноразового бэкфилла ниже (после сидирования USER_CATEGORY_ID)
+  // — WHERE category_id IS NULL делает миграцию идемпотентной, не трогает
+  // то, что уже проставлено через новый одиночный API.
+  backfillPuzzleCategory: db.prepare("UPDATE puzzles SET category_id = ? WHERE image_file = ? AND category_id IS NULL"),
   approvedByUploader: db.prepare("SELECT * FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'approved' ORDER BY created_at DESC"),
   // Группа встроенных пазлов, добавленных Admin (owner_user_id IS NULL —
   // "= ?" тут не сработал бы, NULL с ним никогда не совпадает). Отличаем от
@@ -519,16 +521,11 @@ const now = () => Date.now();
 // он тут не требовался, весь остальной вывод либо JSON, либо статичный.
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-/** Заменяет ПОЛНЫЙ набор категорий для группы загрузки (image_file) —
- *  используется и при назначении категорий через Admin, и при публикации
- *  (см. план «Категории many-to-many») — оба места хотят "вот итоговый
- *  список", не добавление к уже имеющемуся. */
-function setPuzzleCategories(imageFile, categoryIds) {
-  stmt.deleteCategoryLinks.run(imageFile);
-  for (const categoryId of categoryIds) stmt.insertCategoryLink.run(imageFile, categoryId);
-}
-function categoryIdsFor(imageFile) {
-  return stmt.categoryIdsForImage.all(imageFile).map(r => r.category_id);
+/** Ставит (или снимает, если categoryId falsy) единственную категорию
+ *  группы загрузки (image_file) — используется и при назначении категории
+ *  через Admin, и при публикации (см. план «Один пазл — одна категория»). */
+function setPuzzleCategory(imageFile, categoryId) {
+  stmt.setPuzzleCategoryStmt.run(categoryId || null, imageFile);
 }
 
 // Слаг для /category/:slug (см. план «Прямые ссылки вместо #/ + страница
@@ -560,11 +557,31 @@ if (!stmt.categoryById.get(USER_CATEGORY_ID)) {
 }
 
 // Одноразовая миграция старого одиночного puzzles.category_id в новую
-// many-to-many таблицу (см. план) — INSERT OR IGNORE делает её идемпотентной
-// на каждый рестарт, DISTINCT нужен, потому что category_id одинаков на всех
-// 6 строках-вариантах одной группы.
+// many-to-many таблицу (см. план «Категории many-to-many», уже отменённый
+// план «Один пазл — одна категория» ниже) — INSERT OR IGNORE делает её
+// идемпотентной на каждый рестарт, DISTINCT нужен, потому что category_id
+// одинаков на всех 6 строках-вариантах одной группы. Таблицу
+// puzzle_categories физически не дропаем (конвенция репозитория), поэтому
+// эта миграция остаётся рабочей и безвредной, хоть больше ничего и не
+// читает puzzle_categories за пределами неё самой.
 db.exec(`INSERT OR IGNORE INTO puzzle_categories (image_file, category_id)
   SELECT DISTINCT image_file, category_id FROM puzzles WHERE category_id IS NOT NULL`);
+
+// Обратная одноразовая миграция (см. план «Один пазл — одна категория») —
+// схлопывает уже накопленные many-to-many связи обратно в одиночный
+// puzzles.category_id: для каждой группы, где category_id ещё NULL, берём
+// САМУЮ ПЕРВУЮ по rowid (естественный порядок вставки — тот же принцип
+// «первая по порядку», что выбрал пользователь для номера #N в разведке)
+// связку из puzzle_categories и проставляем её на все строки-варианты
+// группы. WHERE category_id IS NULL делает миграцию идемпотентной — не
+// перезаписывает то, что уже проставлено через новый одиночный API.
+for (const row of db.prepare(`
+  SELECT pc.image_file AS image_file, pc.category_id AS category_id
+  FROM puzzle_categories pc
+  WHERE pc.rowid = (SELECT MIN(rowid) FROM puzzle_categories WHERE image_file = pc.image_file)
+`).all()) {
+  stmt.backfillPuzzleCategory.run(row.category_id, row.image_file);
+}
 
 // Бэкфилл слага для категорий, заведённых до этого захода (см. план,
 // часть 1) — идемпотентно, WHERE slug IS NULL пропускает уже сгенерированные.
@@ -714,7 +731,7 @@ function puzzlePayload(p) {
     // buildCard в app.js гейтит по mine), см. план «Модерация загруженных
     // фото». Не секрет: строка внутри уже видимой в этой комнате карточки.
     moderationStatus: p.moderation_status || null, moderationReason: p.moderation_reason || null,
-    categoryIds: categoryIdsFor(p.image_file),
+    categoryId: p.category_id || null,
     // Атрибуция (см. план «Категории many-to-many, автор карточки, профиль»)
     // — null у встроенных/добавленных через Admin, переживает модерацию
     // (в отличие от ownerUserId, который approve обнуляет).
@@ -1195,7 +1212,7 @@ const server = http.createServer(async (req, res) => {
         if (!groups.has(row.image_file)) {
           groups.set(row.image_file, {
             id: row.id, title: row.title, imageUrl: `/uploads/${row.image_file}`, variants: 0,
-            createdAt: row.created_at, categoryIds: categoryIdsFor(row.image_file),
+            createdAt: row.created_at, categoryId: row.category_id || null,
           });
         }
         groups.get(row.image_file).variants++;
@@ -1216,18 +1233,14 @@ const server = http.createServer(async (req, res) => {
       if (!mime) return json(res, 415, { error: "not an image" });
       const width = parseInt(body.width, 10) || 0;
       const height = parseInt(body.height, 10) || 0;
-      // categoryIds необязателен (см. план «Категории many-to-many») —
-      // пустой массив/отсутствие поля значит пазл просто некатегоризирован.
-      const categoryIds = [];
-      for (const cid of Array.isArray(body.categoryIds) ? body.categoryIds : []) {
-        if (!stmt.categoryById.get(cid)) return json(res, 400, { error: "bad category" });
-        categoryIds.push(cid);
-      }
+      // categoryId необязателен (см. план «Один пазл — одна категория») —
+      // отсутствие поля значит пазл просто некатегоризирован.
+      const categoryId = str(body.categoryId, 60);
+      if (categoryId && !stmt.categoryById.get(categoryId)) return json(res, 400, { error: "bad category" });
 
       const groupId = crypto.randomUUID();
       const file = groupId + PHOTO_MIME[mime];
       fs.writeFileSync(path.join(PUZZLE_PHOTO_DIR, file), buf);
-      setPuzzleCategories(file, categoryIds);
       const ts = now();
       const variants = PIECE_PRESETS.map(total => {
         const { rows, cols } = gridForPieceTarget(total, width, height);
@@ -1240,6 +1253,12 @@ const server = http.createServer(async (req, res) => {
         stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, null, null, "approved", null, ts, null, null, null, null, null, null, null);
         return puzzlePayload(stmt.puzzle.get(id));
       });
+      // Категория — после вставки всех строк-вариантов (см. план «Один
+      // пазл — одна категория»): setPuzzleCategory бьёт по image_file, а до
+      // этой строки для новой группы ещё нет ни одной строки в puzzles —
+      // UPDATE до insert тихо не находил бы что обновлять.
+      setPuzzleCategory(file, categoryId);
+      if (categoryId) for (const v of variants) v.categoryId = categoryId;
       adminLog.info("Admin добавил картинку в библиотеку", { title, variants: variants.length });
       return json(res, 200, { title, variants });
     }
@@ -1492,24 +1511,21 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, title });
     }
 
-    // Назначение категорий уже загруженной через Admin картинке — отдельно
+    // Назначение категории уже загруженной через Admin картинке — отдельно
     // от выбора при самой загрузке, иначе три стартовые картинки и всё,
     // что добавлено до этого захода, навсегда остались бы без категорий.
-    // Множественное число в пути — теперь принимает массив, заменяет весь
-    // набор (см. setPuzzleCategories).
-    const puzzleCategoryMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/categories$/);
+    // Единственное число в пути (см. план «Один пазл — одна категория») —
+    // принимает одну categoryId (или её отсутствие/null, чтобы снять).
+    const puzzleCategoryMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/category$/);
     if (puzzleCategoryMatch && req.method === "POST") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       const puzzle = stmt.puzzle.get(puzzleCategoryMatch[1]);
       if (!puzzle) return json(res, 404, { error: "not found" });
       const body = await readJson(req);
-      const categoryIds = [];
-      for (const cid of Array.isArray(body.categoryIds) ? body.categoryIds : []) {
-        if (!stmt.categoryById.get(cid)) return json(res, 400, { error: "bad category" });
-        categoryIds.push(cid);
-      }
-      setPuzzleCategories(puzzle.image_file, categoryIds);
-      adminLog.info("Admin изменил категории пазла", { puzzleId: puzzle.id, title: puzzle.title, categoryIds });
+      const categoryId = str(body.categoryId, 60);
+      if (categoryId && !stmt.categoryById.get(categoryId)) return json(res, 400, { error: "bad category" });
+      setPuzzleCategory(puzzle.image_file, categoryId);
+      adminLog.info("Admin изменил категорию пазла", { puzzleId: puzzle.id, title: puzzle.title, categoryId });
       return json(res, 200, { ok: true });
     }
 
@@ -1769,31 +1785,29 @@ async function api(req, res, url, user) {
       return json(res, 409, { error: "already " + puzzle.moderation_status });
     }
 
-    // Категории (см. план «Категории many-to-many») — любое опубликованное
-    // фото автоматически попадает в системную «Пользовательские»,
-    // независимо от выбора пользователя. Выбранные существующие категории
-    // должны быть approved (pending нельзя выбрать — их ещё не видно в
-    // публичном списке, см. GET /api/categories). Новая категория —
-    // необязательное текстовое поле, уходит на модерацию сразу же.
-    const categoryIds = new Set([USER_CATEGORY_ID]);
-    for (const cid of Array.isArray(body.categoryIds) ? body.categoryIds : []) {
-      const cat = stmt.categoryById.get(cid);
-      if (!cat || cat.status !== "approved") return json(res, 400, { error: "bad category" });
-      categoryIds.add(cid);
-    }
+    // Категория (см. план «Один пазл — одна категория») — ровно одна:
+    // непустой newCategoryName выигрывает у выбранной существующей (создаёт
+    // pending-категорию, уходит на модерацию сразу же); иначе — выбранная
+    // существующая категория (должна быть approved, pending нельзя выбрать —
+    // её ещё не видно в публичном списке, см. GET /api/categories); если не
+    // прислано ни то, ни другое — категория по умолчанию, системная
+    // «Пользовательские» (страховка для тех, кто ничего не выбрал).
     let newCategory = null;
-    if (body.newCategoryName) {
-      const name = str(body.newCategoryName, 80);
-      if (name) {
-        newCategory = { id: crypto.randomUUID(), name };
-        stmt.insertCategory.run(newCategory.id, name, makeUniqueSlug(name), "pending", user.id, 0, now());
-        categoryIds.add(newCategory.id);
-      }
+    let categoryId = USER_CATEGORY_ID;
+    const newCategoryName = str(body.newCategoryName, 80);
+    if (newCategoryName) {
+      newCategory = { id: crypto.randomUUID(), name: newCategoryName };
+      stmt.insertCategory.run(newCategory.id, newCategoryName, makeUniqueSlug(newCategoryName), "pending", user.id, 0, now());
+      categoryId = newCategory.id;
+    } else if (body.categoryId) {
+      const cat = stmt.categoryById.get(body.categoryId);
+      if (!cat || cat.status !== "approved") return json(res, 400, { error: "bad category" });
+      categoryId = cat.id;
     }
-    setPuzzleCategories(puzzle.image_file, [...categoryIds]);
+    setPuzzleCategory(puzzle.image_file, categoryId);
 
     stmt.setModerationPending.run(puzzle.image_file);
-    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, categoryIds: [...categoryIds], newCategory: newCategory?.name || null });
+    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, categoryId, newCategory: newCategory?.name || null });
     return json(res, 200, { ok: true, moderationStatus: "pending" });
   }
 
@@ -1854,6 +1868,8 @@ async function api(req, res, url, user) {
       puzzleId: r.puzzle_id,
       title: r.title,
       imageUrl: imageUrlFor(r.image_file),
+      categoryId: r.category_id || null,
+      uploaderUserId: r.uploader_user_id || null,
       piecesPlaced: r.pieces_placed,
       piecesTotal: r.pieces_total,
       updatedAt: r.updated_at,
