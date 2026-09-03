@@ -2172,6 +2172,12 @@ function attachRoomConnection(sessionId, user, wsConn) {
     type: "sync", pieces: state.pieces, piecesTotal: state.piecesTotal,
     piecesPlaced: state.pieces ? clusterProgress(state.pieces) : 0,
     members: presenceList(state),
+    // Личный (не broadcast) ответ на подключение — единственное место, где
+    // клиент может узнать свою же личность: у анонима id живёт в HttpOnly
+    // cookie (см. getOrCreateAnonIdentity), из JS не читается никак иначе.
+    // Нужно клиенту, чтобы отличать свои сообщения чата от чужих (см. план
+    // «Чат — свои/чужие сообщения по разные стороны»).
+    you: { id: user.id, name: user.name, username: user.username },
   }));
   broadcastPresence(state);
 

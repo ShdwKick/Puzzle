@@ -158,10 +158,16 @@ const wsA = new WebSocket(wsUrl(tokenA));
 await waitOpen(wsA);
 const firstSyncA = await waitMessage(wsA, m => m.type === "sync");
 ok("A получил sync с пустой раскладкой", firstSyncA.pieces === null);
+// "you" — личная (не broadcast) часть первого sync (см. server.js,
+// attachRoomConnection) — клиент только так узнаёт свою же личность, чтобы
+// отличать свои сообщения чата от чужих (см. ниже, «сообщение несёт...»).
+const jwtSubA = JSON.parse(Buffer.from(tokenA.split(".")[1], "base64url").toString()).sub;
+ok("первый sync несёт «you» — личность самого подключившегося", firstSyncA.you && firstSyncA.you.id === jwtSubA, JSON.stringify(firstSyncA.you));
 
 const wsB = new WebSocket(wsUrl(tokenB));
 await waitOpen(wsB);
-await waitMessage(wsB, m => m.type === "sync");
+const firstSyncB = await waitMessage(wsB, m => m.type === "sync");
+ok("у B своё «you», отличное от A", firstSyncB.you && firstSyncB.you.id !== jwtSubA, JSON.stringify(firstSyncB.you));
 
 // Механика «связей»: у детали нет фиксированного места, прогресс = размер
 // наибольшего связного кластера (см. assets/puzzle-clusters.js, CELL=100
@@ -227,12 +233,10 @@ ok("B получил сообщение чата от A", chatMsgB.text === "П�
 ok("текст обрезан от пробелов по краям (str())", chatMsgB.text === chatMsgB.text.trim());
 ok("A тоже получил своё сообщение (эхо, не оптимистичный рендер на клиенте)",
   chatMsgA.text === "Привет из теста!", JSON.stringify(chatMsgA));
-// userIdA (id владельца комнаты) заводится позже по файлу — decode прямо
-// из JWT тем же полем sub, что читает и сам сервер при апгрейде WS (см.
-// handleUpgrade, payload.sub).
-const chatSenderIdA = JSON.parse(Buffer.from(tokenA.split(".")[1], "base64url").toString()).sub;
 ok("сообщение несёт отправителя (id/name/username, см. presenceList-подобную форму)",
-  chatMsgB.from && chatMsgB.from.id === chatSenderIdA, JSON.stringify(chatMsgB.from));
+  chatMsgB.from && chatMsgB.from.id === jwtSubA, JSON.stringify(chatMsgB.from));
+ok("и это тот же id, что «you» у A из первого sync — так клиент узнаёт свои сообщения",
+  chatMsgA.from.id === firstSyncA.you.id, JSON.stringify({ from: chatMsgA.from, you: firstSyncA.you }));
 ok("сообщение несёт метку времени", typeof chatMsgB.at === "number" && chatMsgB.at > 0);
 
 wsA.send(JSON.stringify({ type: "chat", text: "   " }));

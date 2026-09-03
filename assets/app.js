@@ -3363,6 +3363,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   // ни на сервер (см. server.js, ветка msg.type==="chat" — просто транзит
   // через broadcast), ни сюда в постоянное хранилище — лента живёт только
   // в памяти этой вкладки, при перезаходе начинается с чистого листа.
+  const chatWidget = $(root, ".chat-widget");
   const chatBtn = $(root, "#chatBtn");
   const chatUnread = $(root, "#chatUnread");
   const chatPopover = $(root, "#chatPopover");
@@ -3370,6 +3371,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const chatForm = $(root, "#chatForm");
   const chatInput = $(root, "#chatInput");
   let unreadCount = 0;
+  // Личность самого клиента — приходит один раз в первом sync (см.
+  // server.js, attachRoomConnection) и ловится в handleSocketMessage ниже —
+  // нужна, чтобы отличать свои сообщения от чужих (см. appendChatMessage).
+  let myIdentity = null;
   // Ярлыки участников (Гость/Гость N для анонимов, имя/логин для вошедших)
   // должны совпадать с тем, что показывает поповер «За столом» — держим
   // карту id→ярлык, пересчитываемую при каждом presence-обновлении (см.
@@ -3379,33 +3384,51 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   function setChatPopoverOpen(open) {
     chatPopover.classList.toggle("hidden", !open);
     chatBtn.setAttribute("aria-expanded", String(open));
-    if (open) { unreadCount = 0; chatUnread.hidden = true; chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight; }
+    if (open) {
+      unreadCount = 0; chatUnread.hidden = true; chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+      // Открыли — значит только что смотрим на него, не притушенный.
+      chatWidget.classList.remove("chat-unfocused");
+    }
   }
   chatBtn.addEventListener("click", e => {
     e.stopPropagation();
     setChatPopoverOpen(chatPopover.classList.contains("hidden"));
   }, { signal });
+  // Клик снаружи, пока чат открыт, — НЕ закрывает панель (см. план «Чат —
+  // притушить, а не прятать»), просто притушивает: убрать её совсем можно
+  // только повторным нажатием на саму кнопку чата (см. обработчик выше).
+  // Клик/наведение внутри (или на саму кнопку) возвращают полную яркость —
+  // .chat-unfocused снимается тут же, при первом же клике внутри виджета.
   document.addEventListener("click", e => {
     if (chatPopover.classList.contains("hidden")) return;
-    if (e.target.closest(".chat-widget")) return;
-    setChatPopoverOpen(false);
+    chatWidget.classList.toggle("chat-unfocused", !e.target.closest(".chat-widget"));
   }, { signal });
   function appendChatMessage(msg) {
     const empty = chatMessagesEl.querySelector(".state-note");
     if (empty) empty.remove();
     const label = latestPresenceLabels.get(msg.from.id) || roomMemberLabels([msg.from], "id")[0];
-    const row = document.createElement("p");
-    row.className = "chat-message";
-    const sender = document.createElement("span");
-    sender.className = "sender";
-    sender.textContent = label;
+    const mine = myIdentity && msg.from.id === myIdentity.id;
+    const row = document.createElement("div");
+    row.className = "chat-message " + (mine ? "own" : "other");
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    // Своё сообщение и так узнаётся по стороне/цвету — имя над ним только
+    // шумело бы (тот же принцип, что в любом мессенджере: подпись отправителя
+    // нужна лишь у чужих сообщений).
+    if (!mine) {
+      const sender = document.createElement("span");
+      sender.className = "sender";
+      sender.textContent = label;
+      meta.appendChild(sender);
+    }
     const at = document.createElement("span");
     at.className = "at";
     at.textContent = new Date(msg.at).toLocaleTimeString(getLang() === "en" ? "en-US" : "ru-RU", { hour: "2-digit", minute: "2-digit" });
-    const text = document.createElement("span");
-    text.className = "text";
-    text.textContent = msg.text;
-    row.append(sender, at, text);
+    meta.appendChild(at);
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    bubble.textContent = msg.text;
+    row.append(meta, bubble);
     chatMessagesEl.appendChild(row);
     chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
     if (chatPopover.classList.contains("hidden")) {
@@ -3872,6 +3895,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   }
 
   function handleSocketMessage(msg) {
+    // Личная информация о себе — приходит только в самом первом sync (см.
+    // server.js, attachRoomConnection) — нужна чату, чтобы отличать свои
+    // сообщения от чужих (см. appendChatMessage ниже).
+    if (msg.you) myIdentity = msg.you;
     if (msg.type === "sync") {
       if (!pieces) return void buildBoard(msg.pieces);
       if (msg.pieces) for (const p of msg.pieces) reconcilePiece(p.r, p.c, p.x, p.y);

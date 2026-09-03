@@ -804,13 +804,38 @@ select.text-input{
 /* Чат за столом (см. план «Чат на доску») — эфемерный, ничего не хранится:
    поповер шире presence-popover (нужно место под текст сообщений), с
    прокручиваемой лентой сверху и формой ввода снизу, зафиксированной
-   (не уезжает при скролле ленты). */
-.chat-popover{width:19rem;max-width:calc(100vw - 2rem);display:flex;flex-direction:column}
-.chat-messages{display:flex;flex-direction:column;gap:.5rem;max-height:16rem;overflow:auto;margin-bottom:.6rem}
-.chat-message{font-size:.85rem;line-height:1.35}
-.chat-message .sender{font-weight:700;color:var(--md-sys-color-primary)}
-.chat-message .at{color:var(--md-sys-color-on-surface-variant);font-size:.72rem;margin-left:.35em}
-.chat-message .text{display:block;overflow-wrap:anywhere;color:var(--md-sys-color-on-surface)}
+   (не уезжает при скролле ленты). Высота ленты — фиксированная (height, не
+   max-height): панель не «прыгает» между пустым и заполненным состоянием,
+   размер один и тот же с первого сообщения и до переполнения. */
+.chat-popover{width:19rem;max-width:calc(100vw - 2rem);display:flex;flex-direction:column;transition:opacity .15s var(--ease-std)}
+.chat-messages{display:flex;flex-direction:column;gap:.5rem;height:16rem;overflow:auto;margin-bottom:.6rem}
+.chat-messages:has(> .state-note){justify-content:center}
+/* Клик мимо чата, пока он открыт, не закрывает панель — только притушивает
+   (см. renderRoomTable, обработчик клика вне .chat-widget) — насовсем
+   убрать можно лишь повторным нажатием на кнопку чата. Клик/наведение на
+   сам виджет — снова полная яркость. */
+.chat-widget.chat-unfocused .chat-popover{opacity:.4}
+.chat-widget.chat-unfocused .chat-popover:hover{opacity:1}
+/* Пузыри в духе обычных мессенджеров — свои справа акцентным цветом, чужие
+   слева нейтральным, подпись отправителя только у чужих (сторона и цвет
+   и так узнают своё). */
+.chat-message{display:flex;flex-direction:column;gap:.15rem;max-width:85%}
+.chat-message.own{align-self:flex-end;align-items:flex-end}
+.chat-message.other{align-self:flex-start;align-items:flex-start}
+.chat-message .meta{display:flex;gap:.35em;font-size:.72rem;color:var(--md-sys-color-on-surface-variant)}
+.chat-message .sender{font-weight:700}
+.chat-message .bubble{
+  padding:.4em .75em;border-radius:var(--md-sys-shape-corner-l);
+  font-size:.85rem;line-height:1.35;overflow-wrap:anywhere;
+}
+.chat-message.own .bubble{
+  background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);
+  border-bottom-right-radius:var(--md-sys-shape-corner-xs);
+}
+.chat-message.other .bubble{
+  background:var(--md-sys-color-surface-container-high);color:var(--md-sys-color-on-surface);
+  border-bottom-left-radius:var(--md-sys-shape-corner-xs);
+}
 .chat-form{display:flex;gap:.4rem}
 .chat-form .text-input{flex:1;min-width:0}
 .chat-form .btn{flex:none;width:2.2rem;height:2.2rem}
