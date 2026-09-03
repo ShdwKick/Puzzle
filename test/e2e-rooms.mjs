@@ -368,7 +368,7 @@ ok("загрузка без consent=1 отбита 400", ur.status === 400 && (a
 
 ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Тестовое фото")}`, fakePng, "image/png");
 const upload = { status: ur.status, body: await ur.json().catch(() => ({})) };
-ok("загрузка фото в комнату прошла", upload.status === 200 && Array.isArray(upload.body.variants) && upload.body.variants.length === 6, JSON.stringify(upload.body).slice(0, 200));
+ok("загрузка фото в комнату прошла", upload.status === 200 && Array.isArray(upload.body.variants) && upload.body.variants.length === 11, JSON.stringify(upload.body).slice(0, 200));
 const uploadedId = upload.body.variants[0].id;
 ok("moderationStatus пуст сразу после загрузки (никогда не публиковалось)", upload.body.variants[0].moderationStatus === null, JSON.stringify(upload.body.variants[0]));
 
@@ -639,7 +639,7 @@ ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
 });
 const adminUpload = await ir.json();
 ok("Admin добавил картинку — 200, все PIECE_PRESETS вариантов",
-  ir.status === 200 && Array.isArray(adminUpload.variants) && adminUpload.variants.length === 6, JSON.stringify(adminUpload).slice(0, 200));
+  ir.status === 200 && Array.isArray(adminUpload.variants) && adminUpload.variants.length === 11, JSON.stringify(adminUpload).slice(0, 200));
 const adminPuzzleId = adminUpload.variants[0].id;
 
 ir = await fetch(PUZZLE + "/api/puzzles"); // без roomId и без токена — соло-библиотека, гость
@@ -650,7 +650,7 @@ ok("добавленная через Admin картинка видна в со�
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles");
 const adminList = await ir.json();
 ok("GET /internal/puzzles видит добавленную группу",
-  ir.status === 200 && adminList.puzzles.some(g => g.id === adminPuzzleId && g.variants === 6), JSON.stringify(adminList));
+  ir.status === 200 && adminList.puzzles.some(g => g.id === adminPuzzleId && g.variants === 11), JSON.stringify(adminList));
 
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles/hills", { method: "DELETE" });
 ok("удалить одну из трёх стартовых картинок через /internal/puzzles нельзя — 400",
@@ -963,17 +963,18 @@ ok("sitemap.xml содержит /table/hills — по одному URL на г�
 ok("sitemap.xml НЕ содержит вариантов посложнее той же группы (hills-48 и т.п.)",
   !sitemapXml.includes("/table/hills-48<"), "");
 
-// ───────── обновлённые пресеты сложности (см. план «Обновить пресеты
-// сложности») — два самых сложных уровня стали больше (300→600, 480→1000) ─────────
+// ───────── обновлённые пресеты сложности (см. план «Больше шагов
+// сложности») — по «+»-уровню между каждой парой исходных шести ─────────
 ir = await fetch(PUZZLE + "/api/config");
 const config = await ir.json();
-ok("GET /api/config отдаёт обновлённые пресеты — 300/480 заменены на 600/1000",
-  JSON.stringify(config.piecePresets) === JSON.stringify([12, 48, 108, 216, 600, 1000]), JSON.stringify(config.piecePresets));
+ok("GET /api/config отдаёт пресеты с промежуточными уровнями",
+  JSON.stringify(config.piecePresets) === JSON.stringify([12, 24, 48, 72, 108, 150, 216, 360, 600, 800, 1000]), JSON.stringify(config.piecePresets));
 
 ir = await fetch(PUZZLE + "/api/puzzles");
 const libAfterPresetChange = await ir.json();
 const hills600 = libAfterPresetChange.find(p => p.id === "hills-600");
 const hills1000 = libAfterPresetChange.find(p => p.id === "hills-1000");
+const hills360 = libAfterPresetChange.find(p => p.id === "hills-360");
 // gridForPieceTarget округляет rows/cols НЕЗАВИСИМО (см. server.js) — точное
 // произведение не гарантировано, тот же эффект уже виден у старых пресетов
 // (216→221, 480→475 деталей по факту), поэтому сверяем близость, не равенство.
@@ -982,9 +983,12 @@ ok("новый уровень «hills-600» создан — около 600 де
   JSON.stringify(hills600 && { rows: hills600.gridRows, cols: hills600.gridCols, total: hills600.gridRows * hills600.gridCols }));
 ok("новый уровень «hills-1000» создан — около 1000 деталей", hills1000 && closeTo(hills1000.gridRows * hills1000.gridCols, 1000),
   JSON.stringify(hills1000 && { rows: hills1000.gridRows, cols: hills1000.gridCols, total: hills1000.gridRows * hills1000.gridCols }));
+ok("промежуточный уровень «hills-360» создан — около 360 деталей", hills360 && closeTo(hills360.gridRows * hills360.gridCols, 360),
+  JSON.stringify(hills360 && { rows: hills360.gridRows, cols: hills360.gridCols, total: hills360.gridRows * hills360.gridCols }));
 ok("старые «hills-300»/«hills-480» пропали (одноразовая уборка при старте, см. server.js)",
   !libAfterPresetChange.some(p => p.id === "hills-300" || p.id === "hills-480"), "");
-ok("группа «Холмы» содержит ровно 6 вариантов, не 8", libAfterPresetChange.filter(p => p.imageUrl === hills600.imageUrl).length === 6,
+ok("группа «Холмы» содержит ровно 11 вариантов (6 исходных + 5 промежуточных)",
+  libAfterPresetChange.filter(p => p.imageUrl === hills600.imageUrl).length === 11,
   String(libAfterPresetChange.filter(p => p.imageUrl === hills600.imageUrl).length));
 
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
@@ -992,14 +996,14 @@ ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
 });
 const categorizedUpload = await ir.json();
 ok("загрузка через Admin с categoryId — 200, все варианты несут категорию",
-  ir.status === 200 && categorizedUpload.variants.length === 6, JSON.stringify(categorizedUpload).slice(0, 200));
+  ir.status === 200 && categorizedUpload.variants.length === 11, JSON.stringify(categorizedUpload).slice(0, 200));
 const categorizedPuzzleId = categorizedUpload.variants[0].id;
 
 ir = await fetch(PUZZLE + "/api/puzzles");
 const libAfterCategoryUpload = await ir.json();
 const categorizedVariants = libAfterCategoryUpload.filter(p => p.imageUrl === categorizedUpload.variants[0].imageUrl);
-ok("все 6 вариантов несут одну и ту же категорию",
-  categorizedVariants.length === 6 && categorizedVariants.every(p => p.categoryId === categoryA.id),
+ok("все 11 вариантов несут одну и ту же категорию",
+  categorizedVariants.length === 11 && categorizedVariants.every(p => p.categoryId === categoryA.id),
   JSON.stringify(categorizedVariants.map(p => p.categoryId)));
 
 // Обложка категории (см. план «Обложка категории») — серверная заглушка

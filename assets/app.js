@@ -124,6 +124,8 @@ const EN = {
   "Пазлы онлайн бесплатно — часть семьи сервисов BurningHouse.": "Free online jigsaw puzzles — part of the BurningHouse family of services.",
   "Сервис": "Service",
   "Библиотека пазлов": "Puzzle library",
+  "Показать ещё категории": "Show more categories",
+  "Свернуть категории": "Show fewer categories",
   "Семья BurningHouse": "BurningHouse family",
   "Все сервисы": "All services",
   "© BurningHouse": "© BurningHouse",
@@ -153,10 +155,15 @@ const EN = {
   "Файл слишком большой даже после сжатия.": "The file is too large even after compression.",
   "Я подтверждаю, что несу ответственность за загруженное фото и что оно не относится к перечисленным категориям": "I confirm I'm responsible for the uploaded photo and that it doesn't fall into the listed categories",
   "Легко": "Easy",
+  "Легко+": "Easy+",
   "Средне": "Medium",
+  "Средне+": "Medium+",
   "Сложно": "Hard",
+  "Сложно+": "Hard+",
   "Эксперт": "Expert",
+  "Эксперт+": "Expert+",
   "Мастер": "Master",
+  "Мастер+": "Master+",
   "Легенда": "Legend",
   "материалы с сексуализацией несовершеннолетних": "material sexualizing minors",
   "порнография и откровенно сексуальный контент": "pornography and explicit sexual content",
@@ -759,7 +766,14 @@ function puzzleDisplayTitle(p) {
 // мимо ярлыка. variants всегда отсортирован по возрастанию и всегда
 // получен из PIECE_PRESETS в этом порядке, так что порядковый номер
 // надёжнее самого числа деталей.
-const DIFFICULTY_LABELS = ["Легко", "Средне", "Сложно", "Эксперт", "Мастер", "Легенда"];
+// «+»-уровни (см. план «Больше шагов сложности», PIECE_PRESETS в server.js) —
+// промежуточный шаг между соседними названными уровнями, не отдельное
+// название: 24 деталей ближе по духу к «Легко», чем к «Средне», просто
+// капельку сложнее.
+const DIFFICULTY_LABELS = [
+  "Легко", "Легко+", "Средне", "Средне+", "Сложно", "Сложно+",
+  "Эксперт", "Эксперт+", "Мастер", "Мастер+", "Легенда",
+];
 
 /** Сводит отдельные строки-варианты одной загрузки (общий imageUrl +
  *  владелец) в одну карточку с массивом .variants, отсортированным от
@@ -1710,6 +1724,31 @@ async function renderLibrary(root, signal) {
       carousel.appendChild(btn);
     }
     carouselEl.appendChild(carousel);
+    // На телефонах карусель сворачивается до 2 строк (см. план «Категории
+    // на телефонах») — max-height/overflow:hidden только внутри мобильного
+    // media-запроса в styles.css, тут просто решаем, нужна ли вообще кнопка
+    // «Показать ещё»: carousel.scrollHeight — ПОЛНАЯ высота содержимого,
+    // не зависит от того, обрезано оно сейчас overflow:hidden или уже
+    // развёрнуто (.expanded), поэтому порог сравниваем с ТЕМ ЖЕ числом,
+    // что задаёт CSS (6.4rem), а не с текущим clientHeight — тот врал бы
+    // после первого разворачивания.
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "category-carousel-toggle";
+    toggle.textContent = t("Показать ещё категории");
+    toggle.addEventListener("click", () => {
+      const expanded = carousel.classList.toggle("expanded");
+      toggle.textContent = expanded ? t("Свернуть категории") : t("Показать ещё категории");
+    });
+    carouselEl.appendChild(toggle);
+    const updateToggleVisibility = () => {
+      const twoRowsPx = 6.4 * parseFloat(getComputedStyle(document.documentElement).fontSize);
+      const overflowing = window.matchMedia("(max-width: 30rem)").matches && carousel.scrollHeight > twoRowsPx + 4;
+      toggle.classList.toggle("is-visible", overflowing);
+      if (!overflowing) { carousel.classList.remove("expanded"); toggle.textContent = t("Показать ещё категории"); }
+    };
+    updateToggleVisibility();
+    window.addEventListener("resize", updateToggleVisibility, { signal });
   }
 
   showPage(allGroups);

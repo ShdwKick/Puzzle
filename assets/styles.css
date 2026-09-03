@@ -71,6 +71,10 @@ a{color:inherit}
    интерфейсе», index.html) — тому же .icon-btn нужен свой размер/вес
    шрифта, у остальных кнопок этого ряда контент — <svg>, тут plain text. */
 #langBtn{font-size:.78rem;font-weight:700;letter-spacing:.02em}
+/* Знак вопроса обучения (#tableHelpBtn/#libraryHelpBtn) — тот же plain-text
+   приём, что у #langBtn выше, тому же .icon-btn нужен свой вес — голый "?"
+   в обычном тексте на кружке выглядел тонковато и терялся. */
+#tableHelpBtn, #libraryHelpBtn{font-size:1.15rem;font-weight:800}
 /* Компактный размер для инлайновых точечных действий (крестик "Удалить" в
    карточке пазла/строке истории/карточке активной сессии) — полноразмерный
    44px там слишком тяжёл рядом с мелким текстом строки. */
@@ -189,7 +193,10 @@ a{color:inherit}
 .bh-footer-copy{color:var(--md-sys-color-on-surface-variant);font-size:.82rem}
 
 /* ===================== ЗАГОЛОВОК БИБЛИОТЕКИ ===================== */
-.library-head{margin-bottom:1.4rem}
+/* .6rem, не больше — «Продолжить сборку» сразу под ней несёт СВОЙ
+   margin-top:1.2rem (.room-section-title), два отступа стакались в
+   заметно пустой промежуток между текстом и заголовком секции. */
+.library-head{margin-bottom:.6rem}
 .library-head h1{font-size:1.6rem;font-weight:650;letter-spacing:-.01em}
 .library-head p{color:var(--md-sys-color-on-surface-variant);margin-top:.3rem;max-width:40rem;
   text-align:justify;-webkit-hyphens:auto;hyphens:auto}
@@ -204,7 +211,7 @@ a{color:inherit}
 /* Карусель категорий над сеткой библиотеки (см. план «Категории пазлов») —
    тот же вид плашек, что у .member-chip, но крупнее и кликабельно: это
    переключатель фильтра, а не статус. */
-.category-carousel{display:flex;gap:.6rem;overflow-x:auto;padding-bottom:.3rem;margin-bottom:1.2rem}
+.category-carousel{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1.2rem}
 .category-chip{
   flex:none;display:inline-flex;align-items:center;
   background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
@@ -212,6 +219,20 @@ a{color:inherit}
   border:0;cursor:pointer;white-space:nowrap;transition:background .15s,color .15s;
 }
 .category-chip.is-active{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary)}
+/* На телефонах — не сразу все строки чипов, только 2, остальное за кнопкой
+   «Показать ещё» (см. план «Категории на телефонах», updateToggleVisibility
+   в app.js — та же цифра 6.4rem, что и тут, иначе JS считал бы порог не
+   от той высоты, что реально обрезает CSS). .expanded снимает потолок —
+   ставит сама кнопка по клику. */
+@media (max-width: 30rem){
+  .category-carousel:not(.expanded){max-height:6.4rem;overflow:hidden}
+}
+.category-carousel-toggle{
+  display:none;width:100%;justify-content:center;margin:-.6rem 0 1.2rem;
+  background:none;border:0;color:var(--md-sys-color-primary);font-size:.85rem;font-weight:650;
+  padding:.4rem;cursor:pointer;
+}
+.category-carousel-toggle.is-visible{display:flex}
 
 /* Блоки на отдельной странице /categories (см. план «Прямые ссылки +
    страница категорий») — крупнее и весомее .category-chip: там это был
