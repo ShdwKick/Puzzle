@@ -2231,6 +2231,20 @@ function attachRoomConnection(sessionId, user, wsConn) {
       return;
     }
 
+    // Чат за столом (см. план «Чат на доску») — намеренно эфемерный, нигде
+    // не сохраняется (ни в state, ни в БД): просто транзит через broadcast
+    // всем подключённым к этому сеансу, включая отправителя (тот же приём,
+    // что у sync выше — эхо своего сообщения самый простой способ увидеть
+    // его в своей же ленте, не заводя отдельный оптимистичный рендер на
+    // клиенте). Не требует state.pieces — можно писать в чат ещё до того,
+    // как раскладка вообще прислана.
+    if (msg.type === "chat") {
+      const text = str(msg.text, 500);
+      if (!text) return;
+      broadcast(state, { type: "chat", text, from: { id: user.id, name: user.name, username: user.username }, at: now() }, null);
+      return;
+    }
+
     if (!state.pieces) return;
     if (msg.type !== "move") return;
 

@@ -284,6 +284,10 @@ const EN = {
   "Добавить": "Add",
   "Не удалось добавить.": "Couldn't add.",
   "Без категории (по умолчанию — «Пользовательские»)": "No category (default — “User-submitted”)",
+  "Чат": "Chat",
+  "Пока никто ничего не написал.": "No one's written anything yet.",
+  "Сообщение…": "Message…",
+  "Отправить": "Send",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -477,7 +481,7 @@ async function openPublishModal(id, title, onDone) {
   try {
     const categories = await getCategories();
     categoriesBox.innerHTML = categories.length
-      ? `<select id="publishCategorySelect">
+      ? `<select class="text-input" id="publishCategorySelect">
           <option value="">${t("Без категории (по умолчанию — «Пользовательские»)")}</option>
           ${categories.map(c => `<option value="${c.id}">${categoryDisplayName(c)}</option>`).join("")}
         </select>`
@@ -838,7 +842,7 @@ async function renderAddPuzzleLibrary(container, roomId, addedImageUrls, signal,
   container.innerHTML = `
     <div class="add-puzzle-category-row">
       <label for="addPuzzleCategorySelect">${t("Категория")}</label>
-      <select id="addPuzzleCategorySelect">
+      <select class="text-input" id="addPuzzleCategorySelect">
         <option value="">${t("Все категории")}</option>
         ${nonEmptyCategories.map(c => `<option value="${c.id}">${categoryDisplayName(c)} (${counts.get(c.id)})</option>`).join("")}
       </select>
@@ -3239,18 +3243,41 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
             <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
           </button>
         </div>
-        <!-- Присутствующие за столом — раньше постоянно видимая строка чипов
-             в тулбаре (занимала место), теперь кнопка-иконка с бейджем-числом
-             и всплывающая панель со списком (см. updatePresence ниже), а не
-             полноэкранная модалка — это лёгкий быстрый список, не диалог. -->
-        <div class="presence-widget">
-          <button class="btn outlined icon presence-btn" id="presenceBtn" type="button"
-            title="${t("Участники за столом")}" aria-label="${t("Участники за столом")}" aria-haspopup="true" aria-expanded="false">
-            👥<span class="presence-count" id="presenceCount" hidden>0</span>
-          </button>
-          <div class="presence-popover hidden" id="presencePopover">
-            <p class="presence-popover-title">${t("За столом")}</p>
-            <div class="presence-popover-list" id="presenceList"></div>
+        <!-- Присутствующие за столом и чат — рядом друг с другом, один и тот
+             же паттерн «кнопка-иконка с бейджем-числом + всплывающая
+             панель» (см. updatePresence/handleChatMessage ниже), а не
+             постоянно видимые панели или полноэкранная модалка — это лёгкие
+             быстрые виджеты, не диалог. Чат — намеренно эфемерный (см. план
+             «Чат на доску») — ничего не хранится ни на сервере, ни тут,
+             история живёт только пока открыта эта вкладка. -->
+        <div class="table-widgets">
+          <div class="chat-widget">
+            <button class="btn outlined icon chat-btn" id="chatBtn" type="button"
+              title="${t("Чат")}" aria-label="${t("Чат")}" aria-haspopup="true" aria-expanded="false">
+              💬<span class="presence-count" id="chatUnread" hidden>0</span>
+            </button>
+            <div class="chat-popover hidden" id="chatPopover">
+              <p class="presence-popover-title">${t("Чат")}</p>
+              <div class="chat-messages" id="chatMessages">
+                <p class="state-note">${t("Пока никто ничего не написал.")}</p>
+              </div>
+              <form class="chat-form" id="chatForm">
+                <input class="text-input" id="chatInput" type="text" maxlength="500" placeholder="${t("Сообщение…")}" autocomplete="off">
+                <button class="btn filled icon sm" type="submit" title="${t("Отправить")}" aria-label="${t("Отправить")}">
+                  <svg class="icon" viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-2-7-8-1z"/></svg>
+                </button>
+              </form>
+            </div>
+          </div>
+          <div class="presence-widget">
+            <button class="btn outlined icon presence-btn" id="presenceBtn" type="button"
+              title="${t("Участники за столом")}" aria-label="${t("Участники за столом")}" aria-haspopup="true" aria-expanded="false">
+              👥<span class="presence-count" id="presenceCount" hidden>0</span>
+            </button>
+            <div class="presence-popover hidden" id="presencePopover">
+              <p class="presence-popover-title">${t("За столом")}</p>
+              <div class="presence-popover-list" id="presenceList"></div>
+            </div>
           </div>
         </div>
         <div class="zoom-controls">
@@ -3331,6 +3358,70 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     if (e.target.closest(".presence-widget")) return;
     setPresencePopoverOpen(false);
   }, { signal });
+
+  // Чат за столом (см. план «Чат на доску») — эфемерный: ничего не пишется
+  // ни на сервер (см. server.js, ветка msg.type==="chat" — просто транзит
+  // через broadcast), ни сюда в постоянное хранилище — лента живёт только
+  // в памяти этой вкладки, при перезаходе начинается с чистого листа.
+  const chatBtn = $(root, "#chatBtn");
+  const chatUnread = $(root, "#chatUnread");
+  const chatPopover = $(root, "#chatPopover");
+  const chatMessagesEl = $(root, "#chatMessages");
+  const chatForm = $(root, "#chatForm");
+  const chatInput = $(root, "#chatInput");
+  let unreadCount = 0;
+  // Ярлыки участников (Гость/Гость N для анонимов, имя/логин для вошедших)
+  // должны совпадать с тем, что показывает поповер «За столом» — держим
+  // карту id→ярлык, пересчитываемую при каждом presence-обновлении (см.
+  // updatePresence ниже), а не гадаем заново на каждое сообщение: иначе
+  // один и тот же гость мог бы получить разные номера в чате и в presence.
+  let latestPresenceLabels = new Map();
+  function setChatPopoverOpen(open) {
+    chatPopover.classList.toggle("hidden", !open);
+    chatBtn.setAttribute("aria-expanded", String(open));
+    if (open) { unreadCount = 0; chatUnread.hidden = true; chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight; }
+  }
+  chatBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    setChatPopoverOpen(chatPopover.classList.contains("hidden"));
+  }, { signal });
+  document.addEventListener("click", e => {
+    if (chatPopover.classList.contains("hidden")) return;
+    if (e.target.closest(".chat-widget")) return;
+    setChatPopoverOpen(false);
+  }, { signal });
+  function appendChatMessage(msg) {
+    const empty = chatMessagesEl.querySelector(".state-note");
+    if (empty) empty.remove();
+    const label = latestPresenceLabels.get(msg.from.id) || roomMemberLabels([msg.from], "id")[0];
+    const row = document.createElement("p");
+    row.className = "chat-message";
+    const sender = document.createElement("span");
+    sender.className = "sender";
+    sender.textContent = label;
+    const at = document.createElement("span");
+    at.className = "at";
+    at.textContent = new Date(msg.at).toLocaleTimeString(getLang() === "en" ? "en-US" : "ru-RU", { hour: "2-digit", minute: "2-digit" });
+    const text = document.createElement("span");
+    text.className = "text";
+    text.textContent = msg.text;
+    row.append(sender, at, text);
+    chatMessagesEl.appendChild(row);
+    chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
+    if (chatPopover.classList.contains("hidden")) {
+      unreadCount++;
+      chatUnread.textContent = String(unreadCount);
+      chatUnread.hidden = false;
+    }
+  }
+  chatForm.addEventListener("submit", e => {
+    e.preventDefault();
+    const text = chatInput.value.trim();
+    if (!text) return;
+    socket.send({ type: "chat", text });
+    chatInput.value = "";
+  }, { signal });
+
   const scatter = scatterLayout(rows, cols, CELL, pad);
   const BOARD_X = scatter.margin, BOARD_Y = scatter.margin;
 
@@ -3452,9 +3543,11 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // перехватывает указатель на #stage раньше, чем браузер успевает
     // синтезировать click на кнопке — колесо мыши работало (свой отдельный
     // wheel-хендлер), а кнопки +/−/⤢ (и, отдельно найденный тот же баг,
-    // кнопки в окне победы) не реагировали на клик вовсе.
+    // кнопки в окне победы) не реагировали на клик вовсе. .table-widgets —
+    // presence и чат разом (см. renderRoomTable) — иначе клик/скролл внутри
+    // поповера чата пытался запустить панораму доски под ним.
     if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
-      || e.target.closest(".board-back") || e.target.closest(".presence-widget") || e.target.closest(".preview-panel")
+      || e.target.closest(".board-back") || e.target.closest(".table-widgets") || e.target.closest(".preview-panel")
       || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -3585,6 +3678,9 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     presenceCount.hidden = list.length === 0;
     presenceListEl.innerHTML = "";
     const labels = roomMemberLabels(list, "id");
+    // Та же карта переиспользуется чатом (см. appendChatMessage выше) —
+    // ярлыки гостей должны совпадать в обеих панелях.
+    latestPresenceLabels = new Map(list.map((m, i) => [m.id, labels[i]]));
     list.forEach((m, i) => {
       const chip = document.createElement("span");
       chip.className = "presence-chip";
@@ -3796,6 +3892,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       return;
     }
     if (msg.type === "presence") return updatePresence(msg.members);
+    if (msg.type === "chat") return appendChatMessage(msg);
     if (msg.type === "move") return reconcilePiece(msg.r, msg.c, msg.x, msg.y);
   }
 

@@ -217,6 +217,39 @@ wsA.send(JSON.stringify({ type: "group", pieces: gridAlignedPieces() }));
 const fullSync = await fullSyncPromise;
 ok("второй group достраивает всю раскладку — piecesPlaced===piecesTotal", fullSync.piecesPlaced === piecesTotal, JSON.stringify({ piecesPlaced: fullSync.piecesPlaced, piecesTotal }));
 
+// ───────── чат за столом (см. план «Чат на доску») — эфемерный транзит
+// через broadcast, ничего не хранится ни в БД, ни в state сессии ─────────
+const chatOnB = waitMessage(wsB, m => m.type === "chat");
+const chatEchoOnA = waitMessage(wsA, m => m.type === "chat");
+wsA.send(JSON.stringify({ type: "chat", text: "  Привет из теста!  " }));
+const [chatMsgB, chatMsgA] = await Promise.all([chatOnB, chatEchoOnA]);
+ok("B получил сообщение чата от A", chatMsgB.text === "Привет из теста!", JSON.stringify(chatMsgB));
+ok("текст обрезан от пробелов по краям (str())", chatMsgB.text === chatMsgB.text.trim());
+ok("A тоже получил своё сообщение (эхо, не оптимистичный рендер на клиенте)",
+  chatMsgA.text === "Привет из теста!", JSON.stringify(chatMsgA));
+// userIdA (id владельца комнаты) заводится позже по файлу — decode прямо
+// из JWT тем же полем sub, что читает и сам сервер при апгрейде WS (см.
+// handleUpgrade, payload.sub).
+const chatSenderIdA = JSON.parse(Buffer.from(tokenA.split(".")[1], "base64url").toString()).sub;
+ok("сообщение несёт отправителя (id/name/username, см. presenceList-подобную форму)",
+  chatMsgB.from && chatMsgB.from.id === chatSenderIdA, JSON.stringify(chatMsgB.from));
+ok("сообщение несёт метку времени", typeof chatMsgB.at === "number" && chatMsgB.at > 0);
+
+wsA.send(JSON.stringify({ type: "chat", text: "   " }));
+wsA.send(JSON.stringify({ type: "chat", text: "второе" }));
+const chatMsg2 = await waitMessage(wsB, m => m.type === "chat" && m.text === "второе");
+ok("пустое/пробельное сообщение не рассылается — B сразу получил следующее непустое", !!chatMsg2);
+
+// str() (см. server.js) не обрезает длинные строки, а целиком отбивает —
+// тот же принцип, что и у остальных полей в этом файле (bad category и
+// т.п.), тут просто молча не долетает: следующее нормальное сообщение
+// приходит без него.
+const longText = "д".repeat(600);
+wsA.send(JSON.stringify({ type: "chat", text: longText }));
+wsA.send(JSON.stringify({ type: "chat", text: "третье" }));
+const chatMsg3 = await waitMessage(wsB, m => m.type === "chat" && m.text === "третье");
+ok("сообщение длиннее 500 символов молча отбито (str() не обрезает, а отклоняет целиком)", !!chatMsg3);
+
 await sleep(300);
 r = await asJson(tokenA, `/rooms/${roomId}/sessions/${sessionId}`);
 ok("сеанс сохранён завершённым в БД", r.status === 200 && !!r.body.completedAt, JSON.stringify(r.body));
