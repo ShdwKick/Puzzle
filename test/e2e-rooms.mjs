@@ -1235,18 +1235,29 @@ const uploadForMailApprove = await ur.json();
 const mailApproveId = uploadForMailApprove.variants[0].id;
 await asJson(tokenMail, `/puzzles/${mailApproveId}/publish`, { method: "POST", body: { consent: true } });
 ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${mailApproveId}/approve`, { method: "POST" });
+const approveBody = await ir.json();
 ok("Admin одобрил публикацию (для проверки письма) — 200", ir.status === 200, String(ir.status));
 ok("письмо-одобрение залогировано мейлером (нет RESEND_API_KEY в тестовом окружении — лог вместо отправки)",
   await waitForLog("puzzle", "опубликовано в библиотеке"), "тема письма-одобрения не найдена в логе puzzle");
 ok("письмо ушло именно на mailtest@example.com", await waitForLog("puzzle", "mailtest@example.com"), "");
+// ───────── пакет для системных уведомлений Auth (см. план «Системные
+// уведомления Auth → Puzzle») — approve/reject теперь отдают ещё
+// uploaderUserId/notify, которые Admin ретранслирует в Auth ─────────
+const jwtSubMail = JSON.parse(Buffer.from(tokenMail.split(".")[1], "base64url").toString()).sub;
+ok("approve отдаёт uploaderUserId — совпадает с автором загрузки", approveBody.uploaderUserId === jwtSubMail, JSON.stringify(approveBody));
+ok("approve отдаёт notify.type с префиксом сервиса", approveBody.notify && approveBody.notify.type === "puzzle.photo_approved", JSON.stringify(approveBody.notify));
+ok("approve отдаёт notify.url на профиль автора", approveBody.notify && approveBody.notify.url.includes(`/profile/${jwtSubMail}`), JSON.stringify(approveBody.notify));
 
 ur = await callRaw(tokenMail, `/puzzles?roomId=${mailRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото для письма-отказа")}`, fakePng, "image/png");
 const uploadForMailReject = await ur.json();
 const mailRejectId = uploadForMailReject.variants[0].id;
 await asJson(tokenMail, `/puzzles/${mailRejectId}/publish`, { method: "POST", body: { consent: true } });
 ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${mailRejectId}/reject`, { method: "POST", body: { reason: "тестовая причина отказа" } });
+const rejectBody = await ir.json();
 ok("Admin отклонил публикацию (для проверки письма) — 200", ir.status === 200, String(ir.status));
 ok("письмо-отказ залогировано мейлером", await waitForLog("puzzle", `«Фото для письма-отказа» отклонено`), "тема письма-отказа не найдена в логе puzzle");
+ok("reject отдаёт uploaderUserId — совпадает с автором загрузки", rejectBody.uploaderUserId === jwtSubMail, JSON.stringify(rejectBody));
+ok("reject отдаёт notify.type с префиксом сервиса и причину в body", rejectBody.notify && rejectBody.notify.type === "puzzle.photo_rejected" && rejectBody.notify.body === "тестовая причина отказа", JSON.stringify(rejectBody.notify));
 
 // ───────── прогресс: bulk-список для «Продолжить сборку» над библиотекой
 // (см. план «Продолжить сборку») ─────────

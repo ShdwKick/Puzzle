@@ -337,6 +337,9 @@ const EN = {
   "Свернуть/развернуть инструменты": "Collapse/expand tools",
   "Звук — выключить": "Sound — turn off",
   "Звук — включить": "Sound — turn on",
+  "Уведомления": "Notifications",
+  "Нет уведомлений": "No notifications",
+  "Не удалось загрузить уведомления.": "Couldn't load notifications.",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -375,6 +378,7 @@ function applyStaticTranslations() {
   // переводится там, где рендерится (openPublishModal и т.п. — см. ниже).
   byId("accountModalTitle", el => { el.textContent = t("Аккаунт"); });
   byId("accountModalManage", el => { el.textContent = t("Управление аккаунтом →"); });
+  byId("accountNotificationsHeading", el => { el.textContent = t("Уведомления"); });
   byId("accountModalLogout", el => { el.textContent = t("Выйти"); });
   byId("createRoomModalTitle", el => { el.textContent = t("Создать комнату"); });
   byId("newRoomTitle", el => { el.placeholder = t("Название комнаты"); });
@@ -1226,8 +1230,58 @@ document.getElementById("accountBtn").addEventListener("click", () => {
   document.getElementById("accountModalName").textContent = (user && (user.name || user.username)) || t("аккаунт");
   document.getElementById("accountModalMeta").textContent = (user && user.email) || "";
   openModal("accountModalBackdrop");
+  loadAccountNotifications(); // асинхронно, не блокирует открытие модалки
 });
 bindModal("accountModalBackdrop", null, "accountModalClose");
+
+/** Системные уведомления Auth (см. план «Системные уведомления Auth →
+ *  Puzzle») — только приём и отображение, без бейджа/поллинга/колокольчика:
+ *  тех тут пока сознательно нет (первый сервис семьи, который вообще
+ *  показывает этот канал). Показываем ТОЛЬКО свой префикс (type начинается
+ *  на "puzzle.") — уведомления других сервисов эта вкладка не трогает и не
+ *  помечает прочитанными, у каждого сервиса своя срезка одного общего
+ *  списка (см. Auth/INTEGRATION.md, соглашение о префиксах). */
+async function loadAccountNotifications() {
+  const list = document.getElementById("accountNotificationsList");
+  list.innerHTML = `<p class="state-note">${t("Загрузка…")}</p>`;
+  let all;
+  try {
+    const res = await auth.fetch(`${auth.authBase}/api/notifications`);
+    if (!res.ok) throw new Error("bad status");
+    all = (await res.json()).notifications || [];
+  } catch {
+    list.innerHTML = `<p class="state-note">${t("Не удалось загрузить уведомления.")}</p>`;
+    return;
+  }
+  const mine = all.filter(n => n.type.startsWith("puzzle."));
+  if (!mine.length) {
+    list.innerHTML = `<p class="state-note">${t("Нет уведомлений")}</p>`;
+    return;
+  }
+  list.innerHTML = "";
+  for (const n of mine) {
+    const unread = !n.readAt;
+    const item = document.createElement(n.url ? "a" : "div");
+    item.className = "notification-item" + (unread ? " unread" : "");
+    if (n.url) { item.href = n.url; item.target = "_blank"; item.rel = "noopener"; }
+    const title = document.createElement("p");
+    title.className = "notification-title";
+    title.textContent = n.title;
+    item.appendChild(title);
+    if (n.body) {
+      const body = document.createElement("p");
+      body.className = "notification-body";
+      body.textContent = n.body;
+      item.appendChild(body);
+    }
+    if (unread) {
+      item.addEventListener("click", () => {
+        auth.fetch(`${auth.authBase}/api/notifications/${encodeURIComponent(n.id)}/read`, { method: "POST" }).catch(() => {});
+      }, { once: true });
+    }
+    list.appendChild(item);
+  }
+}
 document.getElementById("accountModalManage").addEventListener("click", () => {
   closeModal("accountModalBackdrop");
   window.open(auth.accountUrl(), "_blank", "noopener");

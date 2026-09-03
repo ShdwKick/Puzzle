@@ -89,6 +89,23 @@ a{color:inherit}
 .menu-user b{font-weight:650}
 #accountModalBackdrop .menu-user{padding:0 0 .2rem;margin-bottom:0;border-bottom:0}
 #accountModalBackdrop .btn{margin-top:.5rem}
+/* Уведомления (см. план «Системные уведомления Auth → Puzzle») — простой
+   список внутри модалки аккаунта, без бейджа/поповера: первый показ этого
+   канала в семье сервисов, пока намеренно минимальный. */
+#accountNotifications{margin:.8rem 0}
+#accountNotifications .room-section-title{margin:0 0 .5rem}
+#accountNotificationsList{display:flex;flex-direction:column;gap:.4rem;max-height:14rem;overflow:auto}
+.notification-item{
+  display:block;text-decoration:none;color:inherit;padding:.5em .7em;
+  border-radius:var(--md-sys-shape-corner-m);background:var(--md-sys-color-surface-container-low);
+  transition:background .15s var(--ease-std);
+}
+a.notification-item{cursor:pointer}
+a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
+.notification-item.unread{background:var(--md-sys-color-tertiary-container)}
+.notification-title{font-size:.86rem;font-weight:600}
+.notification-item:not(.unread) .notification-title{font-weight:500}
+.notification-body{font-size:.8rem;color:var(--md-sys-color-on-surface-variant);margin-top:.15rem}
 
 /* ===================== МОДАЛКИ ===================== */
 .modal-backdrop{position:fixed;inset:0;z-index:30;background:rgba(0,0,0,.5);

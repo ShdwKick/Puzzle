@@ -1447,7 +1447,20 @@ const server = http.createServer(async (req, res) => {
       if (puzzle.room_id) stmt.addPuzzleToRoom.run(puzzle.room_id, puzzle.image_file, puzzle.uploader_user_id, now());
       adminLog.info("Admin одобрил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, ownerUserId: puzzle.owner_user_id });
       notifyPublishOutcome(puzzle, "approved");
-      return json(res, 200, { ok: true });
+      // uploaderUserId/notify — готовый пакет для системных уведомлений Auth
+      // (см. план «Системные уведомления Auth → Puzzle»): создаёт его Admin
+      // (у него есть X-Admin-Key на Auth, а токена автора фото — ни у него,
+      // ни у Puzzle тут нет и быть не может), Puzzle просто отдаёт текст/
+      // ссылку — Admin ничего специфичного про Puzzle не знает и не должен.
+      return json(res, 200, {
+        ok: true,
+        uploaderUserId: puzzle.uploader_user_id,
+        notify: {
+          type: "puzzle.photo_approved",
+          title: `Фото «${puzzle.title}» одобрено и опубликовано`,
+          url: `${PUBLIC_URL}/profile/${encodeURIComponent(puzzle.uploader_user_id)}`,
+        },
+      });
     }
     const modRejectMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)\/reject$/);
     if (modRejectMatch && req.method === "POST") {
@@ -1459,7 +1472,18 @@ const server = http.createServer(async (req, res) => {
       stmt.setModerationRejected.run(reason, puzzle.image_file);
       adminLog.info("Admin отклонил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, reason });
       notifyPublishOutcome(puzzle, "rejected", reason);
-      return json(res, 200, { ok: true });
+      // См. комментарий у approve выше — тот же пакет для уведомления, room_id
+      // тут ещё на месте (reject, в отличие от approve, его не обнуляет).
+      return json(res, 200, {
+        ok: true,
+        uploaderUserId: puzzle.uploader_user_id,
+        notify: {
+          type: "puzzle.photo_rejected",
+          title: `Фото «${puzzle.title}» отклонено`,
+          body: reason || null,
+          url: `${PUBLIC_URL}/room/${encodeURIComponent(puzzle.room_id)}`,
+        },
+      });
     }
     const modDeleteMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)$/);
     if (modDeleteMatch && req.method === "DELETE") {
