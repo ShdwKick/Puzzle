@@ -733,24 +733,50 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .difficulty-pill-count{font-size:.76rem;color:var(--md-sys-color-on-surface-variant)}
 #difficultyPlayBtn{width:100%;margin-top:1.1rem}
 /* ===================== СТРАНИЦА ПАЗЛА (/puzzle/:id) =====================
-   Тот же визуальный приём, что у превью-модалки выше (картинка на всю
-   ширину карточки + плавающая поверх нее шапка) — теперь как обычная
-   страница в потоке, не оверлей: карточка сама несёт фон/скругление/тень
-   модалки (.modal), но без .modal-backdrop вокруг и без границы 85vh —
-   .puzzle-preview-image/.puzzle-preview-caption переиспользуются как есть
-   (см. renderPuzzlePage в app.js), их формулы уже посчитаны под тот же
-   padding 1.1rem 1.3rem 1.3rem, что и у .modal — здесь тот же padding
-   специально продублирован, а не унаследован. */
-.puzzle-page{
-  background:var(--md-sys-color-surface-container-low);
-  border-radius:var(--md-sys-shape-corner-xl);
-  max-width:34rem;margin:0 auto;padding:1.1rem 1.3rem 1.3rem;
-  box-shadow:var(--e2);position:relative;
+   Настоящая страница в потоке контента (см. правку «Нормальная вёрстка
+   страницы пазла») — раньше это была буквально модалка превью, просто
+   вставленная в #app вместо оверлея (узкая карточка 34rem, плавающая шапка
+   поверх картинки, sr-only h1 — всё родом из .modal). Теперь — двухколоночный
+   приём: картинка слева, инфо-панель справа (крошки/h1/автор/рейтинг/
+   сложность), ниже — похожие пазлы той же категории. На узких экранах
+   колонки схлопываются в одну, картинка сверху. */
+.puzzle-page-crumbs{
+  display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:1rem;
+  font-size:.86rem;color:var(--md-sys-color-on-surface-variant);
 }
-.puzzle-page-head{position:absolute;top:.6rem;left:.6rem;right:.6rem;z-index:2;display:flex;justify-content:space-between;align-items:center}
-.puzzle-page-head .icon-btn{background:rgba(0,0,0,.45);color:#fff}
-.puzzle-page-difficulty{margin-top:1.1rem}
-#puzzlePagePlayBtn{width:100%;margin-top:1.1rem}
+.puzzle-page-crumbs a{color:inherit;text-decoration:underline}
+.puzzle-page-crumbs a:hover{color:var(--md-sys-color-primary)}
+.puzzle-page{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:2rem;align-items:start}
+@media (max-width:46rem){ .puzzle-page{grid-template-columns:1fr} }
+.puzzle-page-image{
+  width:100%;aspect-ratio:4/3;object-fit:cover;display:block;
+  border-radius:var(--md-sys-shape-corner-xl);box-shadow:var(--e1);
+  background:var(--md-sys-color-surface-container-high);
+}
+.puzzle-page-info{display:flex;flex-direction:column;gap:.9rem}
+.puzzle-page-title-row{display:flex;justify-content:space-between;align-items:flex-start;gap:.8rem}
+.puzzle-page-title-row h1{font-size:1.55rem;font-weight:650;letter-spacing:-.01em;text-wrap:balance}
+/* Тег категории — та же форма таблетки, что у .puzzle-preview-rating ниже
+   (rating), но secondary-container — чтобы визуально не путались: один
+   ведёт на /category/:slug, другой ничего не открывает. */
+.puzzle-page-tag{
+  align-self:flex-start;font-size:.78rem;font-weight:600;padding:.28em .7em;
+  border-radius:var(--md-sys-shape-corner-full);text-decoration:none;
+  background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
+}
+.puzzle-page-tag:hover{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary)}
+.puzzle-page-rating-summary{font-size:.9rem;color:var(--md-sys-color-on-surface-variant)}
+.puzzle-page-rating-summary b{color:var(--md-sys-color-on-surface);font-weight:650}
+/* buildRatingWidget (app.js) — тот же виджет, что на окне победы, звёзды
+   там center'ированы под узкий модальный оверлей; тут — обычная левая
+   колонка, по левому краю. */
+.puzzle-page-rate .win-rating{margin-bottom:0}
+.puzzle-page-rate .win-rating-stars{justify-content:flex-start}
+.puzzle-page-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:.2rem 0}
+.puzzle-page-subhead{font-size:1rem;font-weight:650;margin-bottom:-.3rem}
+#puzzlePagePlayBtn{margin-top:.3rem}
+.puzzle-page-related{margin-top:2.6rem}
+.puzzle-page-related h2{font-size:1.2rem;font-weight:650;margin-bottom:1rem}
 /* Оценка на окне победы (см. план «Оценка пазла на окне победы») —
    5 звёзд, контурные по умолчанию, заливаются акцентным цветом до выбранной
    (или наведённой) включительно. */

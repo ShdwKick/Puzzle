@@ -237,6 +237,8 @@ const EN = {
   "Готово": "Done",
   "Изменить размер": "Resize",
   "Библиотека": "Library",
+  "Хлебные крошки": "Breadcrumbs",
+  "Сложность": "Difficulty",
   "Перемешать": "Shuffle",
   "Показать картинку": "Show picture",
   "Фон стола — выбрать цвет": "Table background — pick a color",
@@ -649,15 +651,31 @@ bindModal("puzzlePreviewModalBackdrop", null, "puzzlePreviewModalClose");
  * — клик по карточке ведёт прямо сюда, НО только вне комнаты (см. buildCard:
  * внутри комнаты карточка по-прежнему открывает openPuzzlePreviewModal выше
  * — там речь о старте сеанса В ЭТОЙ комнате, а не о переходе на публичную
- * страницу). Визуально — тот же приём, что был у модалки (полноэкранная
- * картинка + плавающая шапка, см. .puzzle-page в styles.css), просто как
- * обычная страница, не оверлей — .puzzle-preview-image/.puzzle-preview-caption
- * и renderDifficultyGrid переиспользуются как есть. */
+ * страницу).
+ *
+ * Вёрстка — см. план «Нормальная вёрстка страницы пазла»: НЕ модалка
+ * превью, вставленная в поток (так было раньше — узкая карточка 34rem,
+ * sr-only h1, плавающая шапка), а обычная страница по образцу остальных
+ * (renderCategoryPage/renderProfile — .library-head-подобная шапка,
+ * .puzzle-grid ниже), просто с двумя колонками (картинка/инфо, см.
+ * .puzzle-page в styles.css). h1 — настоящий, видимый (был sr-only только
+ * пока это была модалка, где заголовок дублировала .puzzle-preview-caption
+ * рядом с рейтингом — тут он один и должен быть виден). Добавлены: крошки
+ * до категории, тег категории (ссылка), интерактивный рейтинг
+ * (buildRatingWidget — тот же виджет, что на окне победы, можно оценить
+ * пазл и не решив его, роут это уже поддерживал анонимно) и блок «Ещё в
+ * категории X» — реальные внутренние ссылки на похожие пазлы, не только
+ * ради красоты: без него страница пазла — тупик для краулера. */
 async function renderPuzzlePage(root, id, signal) {
   root.innerHTML = `<p class="state-note">${t("Загружаем…")}</p>`;
-  let data;
+  let data, categories, allPuzzles;
   try {
-    [data] = await Promise.all([getPuzzleWithVariants(id), ensureDisplayTitleCache()]);
+    [data, categories, allPuzzles] = await Promise.all([
+      getPuzzleWithVariants(id),
+      getCategories().catch(() => []),
+      getPuzzles("").catch(() => []),
+      ensureDisplayTitleCache(),
+    ]);
   } catch (e) {
     if (signal.aborted) return;
     root.innerHTML = `<p class="state-note">${e.message === "not found" ? t("Такого пазла нет.") : t("Не удалось загрузить пазл — обновите страницу.")}</p>`;
@@ -677,37 +695,60 @@ async function renderPuzzlePage(root, id, signal) {
     `Собери пазл «${p.title}» онлайн бесплатно, без регистрации и скачивания — ${pieces} ${plural(pieces, "деталь", "детали", "деталей")}, прямо в браузере.`,
   );
 
+  // Категория — только approved (categories — GET /api/categories, отдаёт
+  // только их) и только если сама категория ещё существует (Admin мог её
+  // удалить, а category_id у пазла — нет, см. server.js). Пользовательские
+  // публикации тоже могут быть с категорией (выбирается при публикации,
+  // см. openPublishModal) — то же поле, той же формулой.
+  const category = p.categoryId ? categories.find(c => c.id === p.categoryId) : null;
+
   root.innerHTML = `
+    <nav class="puzzle-page-crumbs" aria-label="${t("Хлебные крошки")}">
+      <a href="/">${t("Библиотека")}</a>
+      ${category ? `<span aria-hidden="true">/</span><a id="puzzlePageCrumbCat" href="#"></a>` : ""}
+    </nav>
     <div class="puzzle-page">
-      <div class="puzzle-page-head">
-        <a class="icon-btn" href="/" title="${t("Библиотека")}" aria-label="${t("Библиотека")}">
-          <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
-        </a>
-        <div class="modal-head-actions">
+      <img class="puzzle-page-image" id="puzzlePageImage" alt="">
+      <div class="puzzle-page-info">
+        <div class="puzzle-page-title-row">
+          <h1 id="puzzlePageTitle"></h1>
           <button class="icon-btn" id="puzzlePageShareBtn" type="button" title="${t("Скопировать ссылку на пазл")}" aria-label="${t("Скопировать ссылку на пазл")}">${SHARE_ICON}</button>
         </div>
+        ${category ? `<a class="puzzle-page-tag" id="puzzlePageTag" href="#"></a>` : ""}
+        <a class="puzzle-card-author" id="puzzlePageAuthor" href="#" hidden></a>
+        <p class="puzzle-page-rating-summary" id="puzzlePageRatingSummary" hidden></p>
+        <div class="puzzle-page-rate" id="puzzlePageRate"></div>
+        <div class="puzzle-page-sep"></div>
+        <h2 class="puzzle-page-subhead">${t("Сложность")}</h2>
+        <div class="difficulty-grid" id="puzzlePageDifficultyGrid"></div>
+        <label class="checkbox-row">
+          <input type="checkbox" id="puzzlePageAsymmetric">
+          <span>${t("Ассиметричная форма деталей — сложнее, детали неровные")}</span>
+        </label>
+        <label class="checkbox-row">
+          <input type="checkbox" id="puzzlePageRotate">
+          <span>${t("Повороты деталей — детали нужно ещё повернуть, не только сложить")}</span>
+        </label>
+        <button class="btn filled full" id="puzzlePagePlayBtn" type="button">${t("За стол")}</button>
       </div>
-      <img class="puzzle-preview-image" id="puzzlePageImage" alt="">
-      <div class="puzzle-preview-caption">
-        <span class="puzzle-preview-caption-title"></span>
-        <p class="puzzle-preview-rating" id="puzzlePageRating" hidden></p>
-      </div>
-      <a class="puzzle-card-author" id="puzzlePageAuthor" href="#" hidden></a>
-      <div class="difficulty-grid puzzle-page-difficulty" id="puzzlePageDifficultyGrid"></div>
-      <label class="checkbox-row">
-        <input type="checkbox" id="puzzlePageAsymmetric">
-        <span>${t("Ассиметричная форма деталей — сложнее, детали неровные")}</span>
-      </label>
-      <label class="checkbox-row">
-        <input type="checkbox" id="puzzlePageRotate">
-        <span>${t("Повороты деталей — детали нужно ещё повернуть, не только сложить")}</span>
-      </label>
-      <button class="btn filled" id="puzzlePagePlayBtn" type="button">${t("За стол")}</button>
-    </div>`;
+    </div>
+    <section class="puzzle-page-related" id="puzzlePageRelated" hidden>
+      <h2 id="puzzlePageRelatedHeading"></h2>
+      <div class="puzzle-grid" id="puzzlePageRelatedGrid"></div>
+    </section>`;
 
   const img = $(root, "#puzzlePageImage");
   img.src = p.imageUrl; img.alt = displayTitle;
-  $(root, ".puzzle-preview-caption-title").textContent = displayTitle;
+  $(root, "#puzzlePageTitle").textContent = displayTitle;
+
+  if (category) {
+    const name = categoryDisplayName(category);
+    const href = `/category/${encodeURIComponent(category.slug)}`;
+    for (const el of [$(root, "#puzzlePageCrumbCat"), $(root, "#puzzlePageTag")]) {
+      el.href = href;
+      el.textContent = name;
+    }
+  }
 
   // Автор — то же условие, что у buildCard/openPuzzlePreviewModal: только у
   // ОДОБРЕННЫХ публикаций.
@@ -740,19 +781,41 @@ async function renderPuzzlePage(root, id, signal) {
     navigate(`/table/${encodeURIComponent(variant.id)}?shape=${asymmetric ? "asym" : "normal"}&rotate=${rotate ? "1" : "0"}`);
   }, { signal });
 
-  // Рейтинг — любой вариант сложности резолвится сервером в ту же группу
-  // (см. server.js, ratingSummary по image_file), первого достаточно. Не
-  // блокирует отрисовку страницы — просто появляется, когда придёт.
-  const ratingEl = $(root, "#puzzlePageRating");
-  ratingEl.hidden = true;
+  // Рейтинг — сводка текстом (среднее+число оценок, любой вариант сложности
+  // резолвится сервером в ту же группу по image_file, первого достаточно) +
+  // сам виджет buildRatingWidget под ней — можно оценить пазл прямо здесь,
+  // тот же приём, что на окне победы (см. план «Оценка пазла на окне
+  // победы»), сюда — не блокирует остальную страницу, звёзды появляются
+  // сразу, сводка — когда придёт число.
+  const ratingSummaryEl = $(root, "#puzzlePageRatingSummary");
   roomFetch(`/api/puzzles/${encodeURIComponent(variants[0].id)}/rating`)
     .then(r => r.ok ? r.json() : null)
     .then(rating => {
       if (signal.aborted || !rating || !rating.count) return;
-      ratingEl.hidden = false;
-      ratingEl.textContent = `★ ${rating.average.toFixed(1)} (${rating.count} ${tn(rating.count, ["оценка", "оценки", "оценок"], ["rating", "ratings"])})`;
+      ratingSummaryEl.hidden = false;
+      ratingSummaryEl.innerHTML = `★ <b>${rating.average.toFixed(1)}</b> · ${rating.count} ${tn(rating.count, ["оценка", "оценки", "оценок"], ["rating", "ratings"])}`;
     })
     .catch(() => {});
+  $(root, "#puzzlePageRate").appendChild(buildRatingWidget(variants[0], signal));
+
+  // Похожие пазлы той же категории — реальные внутренние ссылки, страница
+  // не должна быть тупиком для посетителя/краулера. Своя группа исключена
+  // по imageUrl (тот же ключ, что и puzzleGroupKey/groupPuzzles), лимит 6 —
+  // это витрина, не полный список (за полным — сама ссылка на категорию,
+  // см. тег выше).
+  if (category) {
+    const groups = groupPuzzles(allPuzzles.filter(x => !x.uploaderUserId));
+    const related = filterGroupsByCategory(groups, category.id).filter(g => g.imageUrl !== p.imageUrl).slice(0, 6);
+    if (related.length) {
+      const section = $(root, "#puzzlePageRelated");
+      section.hidden = false;
+      $(root, "#puzzlePageRelatedHeading").textContent = getLang() === "en"
+        ? `More in "${categoryDisplayName(category)}"`
+        : `Ещё в категории «${categoryDisplayName(category)}»`;
+      const grid = $(root, "#puzzlePageRelatedGrid");
+      for (const g of related) grid.appendChild(buildCard(g));
+    }
+  }
 }
 
 /* ───────────────────────── публикация своего фото ─────────────────────────
