@@ -568,6 +568,10 @@ Object.assign(stmt, {
   updateSessionPieces: db.prepare(`
     UPDATE room_sessions SET pieces = ?, pieces_placed = ?, updated_at = ?, completed_at = ? WHERE id = ?`),
   deleteSession: db.prepare("DELETE FROM room_sessions WHERE id = ?"),
+  // ON DELETE CASCADE (room_members/room_sessions/room_added_puzzles всё
+  // ссылаются на rooms(id), PRAGMA foreign_keys=ON выше) — одного DELETE
+  // из rooms достаточно, чтобы вычистить все зависимые строки в БД.
+  deleteRoom: db.prepare("DELETE FROM rooms WHERE id = ?"),
 });
 
 // ───────────────────────── мелкие утилиты ─────────────────────────
@@ -1179,6 +1183,12 @@ function serveApp(res, pathname) {
     } else {
       const slugMatch = pathname.match(/^\/category\/([^/]+)$/);
       const tableMatch = pathname.match(/^\/table\/([\w-]+)$/);
+      // /puzzle/:id — страница пазла (см. план «Страница пазла вместо
+      // превью-модалки»), теперь основная публичная/шаринг-ссылка вместо
+      // /table/:id (та осталась рабочей — прямой стол, просто больше не
+      // единственная SSR-точка входа). Тот же puzzle-lookup и тот же текст,
+      // что и у tableMatch ниже — разница только в path для canonical/og:url.
+      const puzzleMatch = pathname.match(/^\/puzzle\/([\w-]+)$/);
       if (slugMatch) {
         const category = stmt.categoryBySlug.get(decodeURIComponent(slugMatch[1]));
         if (category && category.status === "approved") {
@@ -1203,7 +1213,7 @@ function serveApp(res, pathname) {
   </div>`,
           });
         }
-      } else if (tableMatch) {
+      } else if (tableMatch || puzzleMatch) {
         // Публичная ссылка на конкретный пазл (см. план «Публичная ссылка
         // на пазл») — только библиотечные (owner_user_id IS NULL): своя
         // приватная/ещё не одобренная загрузка сюда не должна течь чужому
@@ -1212,14 +1222,15 @@ function serveApp(res, pathname) {
         // «Категория #N» (см. puzzleDisplayTitle в app.js) — дублировать
         // ранжирование по категориям тут ради SEO-заголовка не стоит той
         // сложности, обычного узнаваемого названия достаточно для превью.
-        const puzzle = stmt.puzzle.get(tableMatch[1]);
+        const id = (tableMatch || puzzleMatch)[1];
+        const puzzle = stmt.puzzle.get(id);
         if (puzzle && puzzle.owner_user_id === null) {
           const title = escapeHtml(puzzle.title);
           const pieces = puzzle.grid_rows * puzzle.grid_cols;
           html = applySeoOverride(html, {
             title: `Пазл «${title}» онлайн — собрать бесплатно | Что собираем?`,
             description: `Собери пазл «${title}» онлайн бесплатно, без регистрации и скачивания — ${pieces} ${pluralPieces(pieces)}, прямо в браузере.`,
-            path: `/table/${encodeURIComponent(puzzle.id)}`,
+            path: tableMatch ? `/table/${encodeURIComponent(puzzle.id)}` : `/puzzle/${encodeURIComponent(puzzle.id)}`,
             headBlock: `  <div class="library-head">
     <h1>Пазл «${title}»</h1>
     <p>${pieces} ${pluralPieces(pieces)} — собирайте онлайн бесплатно, без регистрации и скачивания.</p>
@@ -1756,7 +1767,11 @@ const server = http.createServer(async (req, res) => {
         ...stmt.listApprovedCategories.all()
           .filter(c => stmt.categoryPublicPuzzleCount.get(c.id).n > 0)
           .map(c => ({ loc: `${PUBLIC_URL}/category/${encodeURIComponent(c.slug)}`, priority: "0.6" })),
-        ...[...puzzleUrlByImage.values()].map(p => ({ loc: `${PUBLIC_URL}/table/${encodeURIComponent(p.id)}`, priority: "0.5" })),
+        // /puzzle/:id (не /table/:id) — теперь основная публичная ссылка на
+        // пазл (см. план «Страница пазла вместо превью-модалки»), тот же
+        // SEO-override в serveApp есть у обоих путей, но каноничный отсюда
+        // и из шаринга — именно /puzzle/:id.
+        ...[...puzzleUrlByImage.values()].map(p => ({ loc: `${PUBLIC_URL}/puzzle/${encodeURIComponent(p.id)}`, priority: "0.5" })),
       ];
       const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`
         + urls.map(u => `  <url>\n    <loc>${escapeHtml(u.loc)}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`).join("\n")
@@ -2073,6 +2088,33 @@ async function api(req, res, url, user) {
     })));
   }
 
+  // Один пазл со всеми уровнями сложности той же группы (image_file) — для
+  // страницы пазла (см. план «Страница пазла вместо превью-модалки»):
+  // клиент открывает /puzzle/:id по прямой ссылке, без предварительно
+  // загруженного списка библиотеки (шеринг, поисковик), поэтому нужен
+  // отдельный by-id эндпоинт, не только общий список выше. Публичный
+  // (owner_user_id===null, включая уже одобренные публикации — approve
+  // обнуляет owner_user_id, см. setModerationApproved) виден всем; ещё не
+  // прошедшее модерацию/приватное чужое фото — не найдено, ЭТО не открытый
+  // сценарий из UI сейчас (карточка внутри комнаты по-прежнему открывает
+  // модалку, не эту страницу), но по прямому угаданному id всё равно не
+  // должно течь дальше своего автора. Стоит НАМЕРЕННО после всех более
+  // конкретных /api/puzzles/:id/* и /api/puzzles/progress выше — та же
+  // форма seg (length===3, GET), «progress» иначе поймала бы себя ЗДЕСЬ
+  // как puzzle-id и никогда не доходила бы до настоящего bulk-обработчика.
+  if (seg[1] === "puzzles" && seg[2] && seg.length === 3 && m === "GET") {
+    const puzzle = stmt.puzzle.get(seg[2]);
+    if (!puzzle) return json(res, 404, { error: "not found" });
+    let variants;
+    if (puzzle.owner_user_id === null) {
+      variants = stmt.puzzlesByImagePublic.all(puzzle.image_file);
+    } else {
+      if (!user || user.id !== puzzle.owner_user_id) return json(res, 404, { error: "not found" });
+      variants = stmt.puzzlesByImage.all(puzzle.image_file, puzzle.owner_user_id);
+    }
+    return json(res, 200, { puzzle: puzzlePayload(puzzle), variants: variants.map(puzzlePayload) });
+  }
+
   if (seg[1] === "rooms") {
     // Комнату можно создать/открыть и без входа — см. план «анонимные
     // комнаты». identity — настоящий user, если он есть, иначе анонимная
@@ -2142,6 +2184,19 @@ async function api(req, res, url, user) {
           members: stmt.roomMembers.all(roomId),
           activeSessions: stmt.activeSessions.all(roomId).map(sessionSummary),
         });
+      }
+
+      // Удаление комнаты целиком — доступно только владельцу (тот же
+      // критерий, что у удаления участника чуть ниже). Каскад в БД (см.
+      // stmt.deleteRoom) сам вычищает room_members/room_sessions/
+      // room_added_puzzles; закрыть живые WS-подключения за него каскад не
+      // может — это отдельный шаг (closeRoomLiveSessions), не часть SQL.
+      if (seg.length === 3 && m === "DELETE") {
+        if (member.role !== "owner") return json(res, 403, { error: "not the owner" });
+        closeRoomLiveSessions(roomId);
+        stmt.deleteRoom.run(roomId);
+        adminLog.info("Комната удалена владельцем", { roomId, byUserId: identity.id });
+        return json(res, 200, { ok: true });
       }
 
       if (seg[3] === "sessions" && seg.length === 4 && m === "GET") {
@@ -2322,6 +2377,21 @@ function kickFromRoom(roomId, userId) {
       try { conn.ws.close(); } catch {}
     }
     if (changed) broadcastPresence(state);
+  }
+}
+
+// Комната удаляется целиком (см. DELETE /api/rooms/:id) — в отличие от
+// kickFromRoom (один конкретный userId), тут рвём ВСЕХ подключённых во
+// ВСЕХ сеансах этой комнаты и убираем сами RoomState из карты: строки
+// room_sessions уже удалены каскадом из БД, оставлять их состояние в
+// памяти было бы нечего persist'ить (persistSession пишет по несуществующему id).
+function closeRoomLiveSessions(roomId) {
+  for (const [sessionId, state] of liveSessions) {
+    if (state.roomId !== roomId) continue;
+    for (const conn of state.conns) {
+      try { conn.ws.close(); } catch {}
+    }
+    liveSessions.delete(sessionId);
   }
 }
 

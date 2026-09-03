@@ -162,25 +162,19 @@
     <button class="icon-btn" id="installBtn" title="Установить как приложение" aria-label="Установить как приложение" hidden>
       <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 21h14"/></svg>
     </button>
-    <!-- Обучение библиотеки (см. assets/onboarding.js, TOURS.library) —
-         показывается только на самой главной ("/"), route() в app.js
-         переключает hidden. Отдельный тур от стола (#tableHelpBtn) — тот
-         уже есть и рассказывает про инструменты сборки, этот — про саму
-         библиотеку (категории, карточка, комнаты). -->
-    <button class="icon-btn" id="libraryHelpBtn" type="button" title="Обучение" aria-label="Обучение" hidden>?</button>
-    <button class="icon-btn" id="themeBtn" title="Тема" aria-label="Тема"></button>
     <a class="icon-btn" href="/categories" title="Категории" aria-label="Категории">
       <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
     </a>
     <a class="icon-btn" href="/rooms" title="Комнаты" aria-label="Комнаты">
       <svg class="icon" viewBox="0 0 24 24"><path d="M5 21V7l7-4 7 4v14"/><path d="M5 21h14"/><path d="M9 21v-6h6v6"/></svg>
     </a>
-    <!-- Гость видит «Войти», вошедший — иконку-человечка (#accountMenuWrap),
-         открывающую модалку #accountModalBackdrop ниже вместо голого
-         "имя + Выйти" — тот же паттерн, что в остальных сервисах BurningHouse
-         (см. Movies). Видимость переключает renderAuthArea() в app.js. -->
-    <button class="btn tonal sm" id="headerLoginBtn" hidden>Войти</button>
-    <div class="menu-wrap" id="accountMenuWrap" hidden>
+    <!-- Один и тот же значок для гостя и вошедшего (см. правку «Тема и
+         обучение — в окно "Аккаунт"») — раньше гость видел текстовую
+         «Войти» вместо иконки-человечка, теперь модалка сама показывает
+         либо «Войти», либо данные аккаунта (см. renderAuthArea в app.js),
+         кнопку темы/обучения из шапки убрали туда же — не нужно две точки
+         входа в настройки. -->
+    <div class="menu-wrap" id="accountMenuWrap">
       <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" aria-haspopup="dialog">
         <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>
       </button>
@@ -302,9 +296,11 @@
 
 <!-- ===================== МОДАЛКА: АККАУНТ =====================
      Центральное окно вместо дропдауна — образец: Movies/index.html
-     (accountModalBackdrop). У Puzzle нет концепций «публичный профиль»/
-     «друзья»/«обучение» — модалка тут только «Выйти» + «Управление
-     аккаунтом» + свежедобавленные уведомления. -->
+     (accountModalBackdrop). Единая точка входа и для гостя, и для
+     вошедшего (см. правку «Тема и обучение — в окно "Аккаунт"») —
+     accountModalGuest/accountModalUser переключает renderAuthArea() в
+     app.js, тема и обучение видны в ОБОИХ случаях, это не аккаунт-
+     специфичные настройки. -->
 <div class="modal-backdrop hidden" id="accountModalBackdrop">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="accountModalTitle">
     <div class="modal-head">
@@ -313,17 +309,35 @@
         <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
-    <div class="menu-user"><b id="accountModalName">—</b><span class="muted" id="accountModalMeta"></span></div>
-    <!-- Системные уведомления Auth (см. план «Системные уведомления Auth →
-         Puzzle») — только приём и отображение своего среза (type начинается
-         на "puzzle.", см. loadAccountNotifications в app.js), без бейджа/
-         поллинга — тех тут пока сознательно нет. -->
-    <div id="accountNotifications">
-      <h3 class="room-section-title" id="accountNotificationsHeading">Уведомления</h3>
-      <div id="accountNotificationsList"></div>
+    <!-- Гость — просто кнопка входа, без карточки аккаунта и уведомлений
+         (тем нечего показывать без входа). -->
+    <div id="accountModalGuest" hidden>
+      <p class="state-note" id="accountModalGuestNote">Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
+      <button class="btn filled full" id="accountModalLoginBtn">Войти</button>
     </div>
-    <button class="btn tonal full" id="accountModalManage">Управление аккаунтом →</button>
-    <button class="btn outlined danger full" id="accountModalLogout" style="margin-top:1.1rem">Выйти</button>
+    <!-- Вошедший — карточка аккаунта + уведомления + управление. -->
+    <div id="accountModalUser" hidden>
+      <div class="menu-user"><b id="accountModalName">—</b><span class="muted" id="accountModalMeta"></span></div>
+      <!-- Системные уведомления Auth (см. план «Системные уведомления Auth →
+           Puzzle») — только приём и отображение своего среза (type начинается
+           на "puzzle.", см. loadAccountNotifications в app.js), без бейджа/
+           поллинга — тех тут пока сознательно нет. -->
+      <div id="accountNotifications">
+        <h3 class="room-section-title" id="accountNotificationsHeading">Уведомления</h3>
+        <div id="accountNotificationsList"></div>
+      </div>
+      <button class="btn tonal full" id="accountModalManage">Управление аккаунтом →</button>
+      <button class="btn outlined danger full" id="accountModalLogout" style="margin-top:1.1rem">Выйти</button>
+    </div>
+    <!-- Тема/обучение — доступны всегда, гостю и вошедшему одинаково (см.
+         правку «Тема и обучение — в окно "Аккаунт"», раньше жили отдельными
+         иконками в шапке). Обучение — тур библиотеки (assets/onboarding.js,
+         TOURS.library); тур самого стола сборки (#tableHelpBtn) отдельный,
+         живёт в тулбаре стола — там же, где инструменты, про которые
+         рассказывает. -->
+    <div class="modal-sep" id="accountModalSettingsSep"></div>
+    <button class="btn outlined full" id="accountModalThemeBtn"></button>
+    <button class="btn outlined full" id="accountModalTourBtn">Обучение</button>
   </div>
 </div>
 

@@ -51,9 +51,11 @@ a{color:inherit}
 .auth-user{display:flex;align-items:center;gap:.5rem;font-size:.92rem}
 .auth-user-name{font-weight:600}
 
-/* Кнопка темы (#themeBtn) и модалка аккаунта — как в остальных сервисах
-   BurningHouse (Movies и т.д.), дословно оттуда же (иконка-кружок,
-   центральная модалка вместо дропдауна). */
+/* Модалка аккаунта — как в остальных сервисах BurningHouse (Movies и
+   т.д.), дословно оттуда же (иконка-кружок, центральная модалка вместо
+   дропдауна). Тема — теперь текстовой кнопкой внутри этой модалки, не
+   отдельным значком в шапке (см. правку «Тема и обучение — в окно
+   "Аккаунт"»), своего .icon-btn у неё больше нет. */
 .icon-btn{
   position:relative;width:44px;height:44px;flex:none;padding:0;border-radius:var(--md-sys-shape-corner-full);
   border:0;background:transparent;color:var(--md-sys-color-on-surface-variant);
@@ -71,10 +73,12 @@ a{color:inherit}
    интерфейсе», index.html) — тому же .icon-btn нужен свой размер/вес
    шрифта, у остальных кнопок этого ряда контент — <svg>, тут plain text. */
 #langBtn{font-size:.78rem;font-weight:700;letter-spacing:.02em}
-/* Знак вопроса обучения (#tableHelpBtn/#libraryHelpBtn) — тот же plain-text
-   приём, что у #langBtn выше, тому же .icon-btn нужен свой вес — голый "?"
-   в обычном тексте на кружке выглядел тонковато и терялся. */
-#tableHelpBtn, #libraryHelpBtn{font-size:1.15rem;font-weight:800}
+/* Знак вопроса обучения стола (#tableHelpBtn — единственный, что остался,
+   #libraryHelpBtn переехал в модалку «Аккаунт» текстовой кнопкой, см. выше)
+   — тот же plain-text приём, что у #langBtn выше, тому же .icon-btn нужен
+   свой вес — голый "?" в обычном тексте на кружке выглядел тонковато и
+   терялся. */
+#tableHelpBtn{font-size:1.15rem;font-weight:800}
 /* Компактный размер для инлайновых точечных действий (крестик "Удалить" в
    карточке пазла/строке истории/карточке активной сессии) — полноразмерный
    44px там слишком тяжёл рядом с мелким текстом строки. */
@@ -89,6 +93,10 @@ a{color:inherit}
 .menu-user b{font-weight:650}
 #accountModalBackdrop .menu-user{padding:0 0 .2rem;margin-bottom:0;border-bottom:0}
 #accountModalBackdrop .btn{margin-top:.5rem}
+/* Разделитель перед темой/обучением (см. правку «Тема и обучение — в окно
+   "Аккаунт"») — те доступны и гостю, и вошедшему, разделитель просто
+   отделяет их от аккаунт-специфичной части модалки выше. */
+.modal-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:1.1rem 0 .5rem}
 /* Уведомления (см. план «Системные уведомления Auth → Puzzle») — простой
    список внутри модалки аккаунта, без бейджа/поповера: первый показ этого
    канала в семье сервисов, пока намеренно минимальный. */
@@ -166,9 +174,10 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 /* .btn{display:inline-flex} у автора-стиля перебивает встроенное правило
    браузера [hidden]{display:none} (то же имя специфичности — выигрывает тот,
    кто загружен позже, а не UA-стиль) — без этого правила hidden="" на любой
-   .btn-кнопке визуально ничего не даёт (баг был у #headerLoginBtn: скрывалась
-   атрибутом, но .btn{display:inline-flex} всё равно её показывал). Тот же
-   приём уже точечно применён у .presence-count[hidden] ниже. */
+   .btn-кнопке визуально ничего не даёт (был баг именно на этом: гостевая
+   кнопка входа в шапке скрывалась атрибутом, но .btn{display:inline-flex}
+   всё равно её показывал). Тот же приём уже точечно применён у
+   .presence-count[hidden] ниже. */
 .btn[hidden]{display:none}
 .btn:active{transform:scale(.97)}
 .btn.filled{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);box-shadow:var(--e1)}
@@ -723,6 +732,25 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .difficulty-pill-level{font-weight:650;font-size:.92rem}
 .difficulty-pill-count{font-size:.76rem;color:var(--md-sys-color-on-surface-variant)}
 #difficultyPlayBtn{width:100%;margin-top:1.1rem}
+/* ===================== СТРАНИЦА ПАЗЛА (/puzzle/:id) =====================
+   Тот же визуальный приём, что у превью-модалки выше (картинка на всю
+   ширину карточки + плавающая поверх нее шапка) — теперь как обычная
+   страница в потоке, не оверлей: карточка сама несёт фон/скругление/тень
+   модалки (.modal), но без .modal-backdrop вокруг и без границы 85vh —
+   .puzzle-preview-image/.puzzle-preview-caption переиспользуются как есть
+   (см. renderPuzzlePage в app.js), их формулы уже посчитаны под тот же
+   padding 1.1rem 1.3rem 1.3rem, что и у .modal — здесь тот же padding
+   специально продублирован, а не унаследован. */
+.puzzle-page{
+  background:var(--md-sys-color-surface-container-low);
+  border-radius:var(--md-sys-shape-corner-xl);
+  max-width:34rem;margin:0 auto;padding:1.1rem 1.3rem 1.3rem;
+  box-shadow:var(--e2);position:relative;
+}
+.puzzle-page-head{position:absolute;top:.6rem;left:.6rem;right:.6rem;z-index:2;display:flex;justify-content:space-between;align-items:center}
+.puzzle-page-head .icon-btn{background:rgba(0,0,0,.45);color:#fff}
+.puzzle-page-difficulty{margin-top:1.1rem}
+#puzzlePagePlayBtn{width:100%;margin-top:1.1rem}
 /* Оценка на окне победы (см. план «Оценка пазла на окне победы») —
    5 звёзд, контурные по умолчанию, заливаются акцентным цветом до выбранной
    (или наведённой) включительно. */
@@ -848,7 +876,10 @@ select.text-input{
 .room-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant)}
 
 /* ===================== КОМНАТЫ: ЭКРАН КОМНАТЫ ===================== */
-.room-head{display:flex;flex-direction:column;gap:.7rem;margin-bottom:1.2rem}
+/* Строка, не колонка — рядом с заголовком у владельца кнопка удаления
+   комнаты целиком (см. #deleteRoomBtn); flex-wrap на случай узкого экрана,
+   где заголовок длинный и не помещается в одну строку с кнопкой. */
+.room-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.7rem;margin-bottom:1.2rem}
 .room-head-title{font-size:1.4rem;font-weight:650}
 
 /* Код приглашения — дословно паттерн Movies (.code-box/.code-box code, см.

@@ -43,18 +43,16 @@ const PROHIBITED_TIER_B = [
  * Финансы/Brain). НЕ путать с #boardBgBtn на столе ниже (см. план
  * «RGB-фон стола») — та кнопка красит ТОЛЬКО фон игрового стола
  * произвольным цветом, а не тему всего приложения; обе кнопки остаются,
- * это разные вещи. Puzzle's $ — по
- * селектору внутри корня (см. выше), для элементов шапки, которые вне
- * #app и живут в DOM всегда, используем document.getElementById напрямую. */
-const SUN = '<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
-const MOON = '<svg class="icon" viewBox="0 0 24 24"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
+ * это разные вещи. Кнопка переехала из шапки в модалку «Аккаунт» (см.
+ * правку «Тема и обучение — в окно "Аккаунт"», index.html
+ * #accountModalThemeBtn, сам клик привязан там же, ниже по файлу) — тут
+ * только applyTheme() и текст кнопки, отражающий ЦЕЛЕВУЮ тему (на какую
+ * переключит клик), тот же смысл, что раньше был у иконки. */
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("puzzle.theme", theme);
-  document.getElementById("themeBtn").innerHTML = theme === "dark" ? SUN : MOON;
+  document.getElementById("accountModalThemeBtn").textContent = theme === "dark" ? t("Светлая тема") : t("Тёмная тема");
 }
-document.getElementById("themeBtn").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
-applyTheme(localStorage.getItem("puzzle.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 
 /* ───────────────────────── язык интерфейса ─────────────────────────
  * Только интерфейс (кнопки/подписи/сообщения) — контент (названия пазлов,
@@ -85,6 +83,12 @@ function t(ru) {
 function tn(n, ru, en) {
   return getLang() === "en" ? (n === 1 ? en[0] : en[1]) : plural(n, ru[0], ru[1], ru[2]);
 }
+// Первый вызов applyTheme() — тут, а не сразу после её объявления выше:
+// applyTheme читает t()/getLang()/LANG_KEY (см. выше), а те объявлены
+// именно тут, чуть ниже по файлу — const в TDZ, вызов до этой строки падал
+// с "Cannot access 'LANG_KEY' before initialization" при самой первой
+// загрузке страницы (регресс, найден при живой проверке страницы пазла).
+applyTheme(localStorage.getItem("puzzle.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 /** Английское название категории, если задано И выбран английский
  *  интерфейс — иначе всегда name (см. план «Английский язык в
  *  интерфейсе», nameEn — необязательное поле, ставит только Admin). */
@@ -262,6 +266,8 @@ const EN = {
   "Скопировано": "Copied",
   "История сборок": "Build history",
   "Не удалось убрать участника.": "Couldn't remove the member.",
+  "Удалить комнату": "Delete room",
+  "Не удалось удалить комнату.": "Couldn't delete the room.",
   "Начать сборку": "Start a build",
   "Загружаем пазлы…": "Loading puzzles…",
   "За этим столом сейчас кто-то сидит — сначала все должны выйти.": "Someone is currently at this table — everyone needs to leave first.",
@@ -340,6 +346,10 @@ const EN = {
   "Уведомления": "Notifications",
   "Нет уведомлений": "No notifications",
   "Не удалось загрузить уведомления.": "Couldn't load notifications.",
+  "Светлая тема": "Light theme",
+  "Тёмная тема": "Dark theme",
+  "Вход нужен только для того, чтобы прогресс сохранялся между заходами.":
+    "You only need to log in so your progress is saved between visits.",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -366,10 +376,6 @@ const FAQ_ITEMS = [
 function applyStaticTranslations() {
   const byId = (id, fn) => { const el = document.getElementById(id); if (el) fn(el); };
   byId("installBtn", el => { el.title = t("Установить как приложение"); el.setAttribute("aria-label", el.title); });
-  byId("themeBtn", el => { el.title = t("Тема"); el.setAttribute("aria-label", el.title); });
-  byId("libraryHelpBtn", el => { el.title = t("Обучение"); el.setAttribute("aria-label", el.title); });
-  byId("headerLoginBtn", el => { el.textContent = t("Войти"); });
-  byId("accountBtn", el => { el.title = t("Аккаунт"); el.setAttribute("aria-label", el.title); });
   document.querySelectorAll('a.icon-btn[href="/categories"]').forEach(el => { el.title = t("Категории"); el.setAttribute("aria-label", el.title); });
   document.querySelectorAll('a.icon-btn[href="/rooms"]').forEach(el => { el.title = t("Комнаты"); el.setAttribute("aria-label", el.title); });
 
@@ -377,9 +383,12 @@ function applyStaticTranslations() {
   // (списки категорий, имя аккаунта и т.п.) остаётся динамическим и
   // переводится там, где рендерится (openPublishModal и т.п. — см. ниже).
   byId("accountModalTitle", el => { el.textContent = t("Аккаунт"); });
+  byId("accountModalGuestNote", el => { el.textContent = t("Вход нужен только для того, чтобы прогресс сохранялся между заходами."); });
+  byId("accountModalLoginBtn", el => { el.textContent = t("Войти"); });
   byId("accountModalManage", el => { el.textContent = t("Управление аккаунтом →"); });
   byId("accountNotificationsHeading", el => { el.textContent = t("Уведомления"); });
   byId("accountModalLogout", el => { el.textContent = t("Выйти"); });
+  byId("accountModalTourBtn", el => { el.textContent = t("Обучение"); });
   byId("createRoomModalTitle", el => { el.textContent = t("Создать комнату"); });
   byId("newRoomTitle", el => { el.placeholder = t("Название комнаты"); });
   byId("createRoomBtn", el => { el.textContent = t("Создать"); });
@@ -418,6 +427,12 @@ function setLang(lang) {
   document.documentElement.lang = lang;
   applyLangButton();
   applyStaticTranslations();
+  // accountBtn.title/theme-кнопка текстом зависят от языка, но выставляются
+  // не тут (renderAuthArea/applyTheme, а не applyStaticTranslations) — иначе
+  // при переключении языка застряли бы в прежнем, до следующей смены
+  // auth-состояния/темы.
+  renderAuthArea();
+  applyTheme(document.documentElement.dataset.theme);
   route();
 }
 document.getElementById("langBtn").onclick = () => setLang(getLang() === "en" ? "ru" : "en");
@@ -584,16 +599,18 @@ async function openPuzzlePreviewModal(p, { variants, onPlay }) {
   document.getElementById("puzzlePreviewRotate").checked = false;
 
   // Поделиться — только у ПУБЛИЧНОГО пазла (ownerUserId===null): своё
-  // ещё не опубликованное фото по /table/:id отдаст дефолтную страницу без
-  // превью (см. server.js, serveApp), ссылка была бы бесполезной. Ссылка
-  // читает ТЕКУЩИЙ выбор сложности в момент клика (getUrl — колбэк, не
-  // готовая строка), меняется вместе со select без пересборки обработчика.
+  // ещё не опубликованное фото по /puzzle/:id отдаст 404 не-автору (см.
+  // server.js, api() GET /api/puzzles/:id), ссылка была бы бесполезной.
+  // /puzzle/:id, не /table/:id (см. план «Страница пазла вместо
+  // превью-модалки») — ссылка читает ТЕКУЩИЙ выбор сложности в момент клика
+  // (getUrl — колбэк, не готовая строка), меняется вместе со select без
+  // пересборки обработчика.
   const shareBtn = document.getElementById("puzzlePreviewShareBtn");
   shareBtn.hidden = !!p.ownerUserId;
   if (!p.ownerUserId) {
     bindShareButton(shareBtn, () => {
       const variant = variants[Number(select.value)] || variants[0];
-      return `${location.origin}/table/${encodeURIComponent(variant.id)}`;
+      return `${location.origin}/puzzle/${encodeURIComponent(variant.id)}`;
     });
   }
 
@@ -622,6 +639,121 @@ async function openPuzzlePreviewModal(p, { variants, onPlay }) {
   openModal("puzzlePreviewModalBackdrop");
 }
 bindModal("puzzlePreviewModalBackdrop", null, "puzzlePreviewModalClose");
+
+/* ───────────────────────── страница пазла (/puzzle/:id) ─────────────────────────
+ * Полноценная страница вместо клика по карточке в библиотеке (см. план
+ * «Страница пазла вместо превью-модалки», зарегистрирована в route() ниже)
+ * — теперь открывается сама (URL меняется, страница индексируется/шарится
+ * отдельно от /table/:id, см. server.js applySeoOverride), а не модалка
+ * поверх библиотеки. Кнопка «За стол» с самой карточки (buildCard) убрана
+ * — клик по карточке ведёт прямо сюда, НО только вне комнаты (см. buildCard:
+ * внутри комнаты карточка по-прежнему открывает openPuzzlePreviewModal выше
+ * — там речь о старте сеанса В ЭТОЙ комнате, а не о переходе на публичную
+ * страницу). Визуально — тот же приём, что был у модалки (полноэкранная
+ * картинка + плавающая шапка, см. .puzzle-page в styles.css), просто как
+ * обычная страница, не оверлей — .puzzle-preview-image/.puzzle-preview-caption
+ * и renderDifficultyGrid переиспользуются как есть. */
+async function renderPuzzlePage(root, id, signal) {
+  root.innerHTML = `<p class="state-note">${t("Загружаем…")}</p>`;
+  let data;
+  try {
+    [data] = await Promise.all([getPuzzleWithVariants(id), ensureDisplayTitleCache()]);
+  } catch (e) {
+    if (signal.aborted) return;
+    root.innerHTML = `<p class="state-note">${e.message === "not found" ? t("Такого пазла нет.") : t("Не удалось загрузить пазл — обновите страницу.")}</p>`;
+    return;
+  }
+  if (signal.aborted) return;
+
+  const { puzzle: p, variants } = data;
+  const displayTitle = puzzleDisplayTitle(p);
+  const pieces = p.gridRows * p.gridCols;
+  // Дословно та же формула, что и SEO title/description для /puzzle/:id на
+  // сервере (см. server.js, serveApp/applySeoOverride) — после клиентского
+  // перехода (SPA, без полной перезагрузки) вкладка должна показать тот же
+  // текст, что и при свежей загрузке этого же URL напрямую.
+  setPageMeta(
+    `Пазл «${p.title}» онлайн — собрать бесплатно | Что собираем?`,
+    `Собери пазл «${p.title}» онлайн бесплатно, без регистрации и скачивания — ${pieces} ${plural(pieces, "деталь", "детали", "деталей")}, прямо в браузере.`,
+  );
+
+  root.innerHTML = `
+    <div class="puzzle-page">
+      <div class="puzzle-page-head">
+        <a class="icon-btn" href="/" title="${t("Библиотека")}" aria-label="${t("Библиотека")}">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+        </a>
+        <div class="modal-head-actions">
+          <button class="icon-btn" id="puzzlePageShareBtn" type="button" title="${t("Скопировать ссылку на пазл")}" aria-label="${t("Скопировать ссылку на пазл")}">${SHARE_ICON}</button>
+        </div>
+      </div>
+      <img class="puzzle-preview-image" id="puzzlePageImage" alt="">
+      <div class="puzzle-preview-caption">
+        <span class="puzzle-preview-caption-title"></span>
+        <p class="puzzle-preview-rating" id="puzzlePageRating" hidden></p>
+      </div>
+      <a class="puzzle-card-author" id="puzzlePageAuthor" href="#" hidden></a>
+      <div class="difficulty-grid puzzle-page-difficulty" id="puzzlePageDifficultyGrid"></div>
+      <label class="checkbox-row">
+        <input type="checkbox" id="puzzlePageAsymmetric">
+        <span>${t("Ассиметричная форма деталей — сложнее, детали неровные")}</span>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" id="puzzlePageRotate">
+        <span>${t("Повороты деталей — детали нужно ещё повернуть, не только сложить")}</span>
+      </label>
+      <button class="btn filled" id="puzzlePagePlayBtn" type="button">${t("За стол")}</button>
+    </div>`;
+
+  const img = $(root, "#puzzlePageImage");
+  img.src = p.imageUrl; img.alt = displayTitle;
+  $(root, ".puzzle-preview-caption-title").textContent = displayTitle;
+
+  // Автор — то же условие, что у buildCard/openPuzzlePreviewModal: только у
+  // ОДОБРЕННЫХ публикаций.
+  const authorEl = $(root, "#puzzlePageAuthor");
+  if (p.uploaderUsername && p.moderationStatus === "approved") {
+    authorEl.hidden = false;
+    authorEl.href = `/profile/${encodeURIComponent(p.uploaderUserId)}`;
+    authorEl.textContent = `${t("Добавил:")} ${p.uploaderUsername}`;
+  } else {
+    authorEl.hidden = true;
+  }
+
+  const choice = { idx: 0 };
+  renderDifficultyGrid($(root, "#puzzlePageDifficultyGrid"), variants, choice);
+
+  // Поделиться — только у ПУБЛИЧНОГО пазла (ownerUserId===null, см.
+  // openPuzzlePreviewModal): своё ещё не опубликованное фото сюда обычно и
+  // не попадает (API отдаёт 404 не-автору), но сам автор, глядя на
+  // собственную заявку, тоже не должен видеть бесполезную ссылку.
+  const shareBtn = $(root, "#puzzlePageShareBtn");
+  shareBtn.hidden = !!p.ownerUserId;
+  if (!p.ownerUserId) {
+    bindShareButton(shareBtn, () => `${location.origin}/puzzle/${encodeURIComponent(variants[0].id)}`);
+  }
+
+  $(root, "#puzzlePagePlayBtn").addEventListener("click", () => {
+    const variant = variants[choice.idx] || variants[0];
+    const asymmetric = $(root, "#puzzlePageAsymmetric").checked;
+    const rotate = $(root, "#puzzlePageRotate").checked;
+    navigate(`/table/${encodeURIComponent(variant.id)}?shape=${asymmetric ? "asym" : "normal"}&rotate=${rotate ? "1" : "0"}`);
+  }, { signal });
+
+  // Рейтинг — любой вариант сложности резолвится сервером в ту же группу
+  // (см. server.js, ratingSummary по image_file), первого достаточно. Не
+  // блокирует отрисовку страницы — просто появляется, когда придёт.
+  const ratingEl = $(root, "#puzzlePageRating");
+  ratingEl.hidden = true;
+  roomFetch(`/api/puzzles/${encodeURIComponent(variants[0].id)}/rating`)
+    .then(r => r.ok ? r.json() : null)
+    .then(rating => {
+      if (signal.aborted || !rating || !rating.count) return;
+      ratingEl.hidden = false;
+      ratingEl.textContent = `★ ${rating.average.toFixed(1)} (${rating.count} ${tn(rating.count, ["оценка", "оценки", "оценок"], ["rating", "ratings"])})`;
+    })
+    .catch(() => {});
+}
 
 /* ───────────────────────── публикация своего фото ─────────────────────────
  * См. план «Модерация загруженных фото» — отдельное, более строгое согласие,
@@ -704,6 +836,18 @@ async function getPuzzles(roomId) {
   const data = await res.json();
   puzzlesCache.set(key, data);
   return data;
+}
+
+/** Один пазл со всеми уровнями сложности своей группы — для страницы пазла
+ *  (см. renderPuzzlePage), без кэша: страница открывается по прямой ссылке
+ *  (шаринг/поисковик), не всегда после уже прогретого puzzlesCache, а сам
+ *  список из одной группы копить в общем кэше не стоит той сложности.
+ *  Бросает при 404/сети — вызывающий код (renderPuzzlePage) сам решает,
+ *  как показать «не найдено». */
+async function getPuzzleWithVariants(id) {
+  const res = await roomFetch(`/api/puzzles/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(res.status === 404 ? "not found" : "puzzle fetch failed");
+  return res.json();
 }
 
 /** Список категорий для карусели над библиотекой (см. план «Категории
@@ -933,6 +1077,15 @@ async function removeRoomMember(roomId, userId) {
   const res = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/members/${encodeURIComponent(userId)}`, { method: "DELETE" });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "remove member failed");
+}
+
+/** DELETE /api/rooms/:id — удаляет комнату целиком (только владелец, сервер
+ *  сам проверяет member.role). Каскад чистит БД, сервер же рвёт живые
+ *  WS-подключения — здесь просто пробрасываем ошибку и уходим на /rooms. */
+async function deleteRoom(roomId) {
+  const res = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "delete room failed");
 }
 
 /** Вставляет форму загрузки в контейнер, вызывает onDone({title, variants})
@@ -1207,30 +1360,44 @@ function renderInProgressList(wrap, items, signal) {
 }
 
 /* ───────────────────────── шапка: аккаунт ─────────────────────────
- * Модалка #accountModalBackdrop вместо голого "имя + Выйти" — см. index.html
- * и openModal/closeModal/bindModal выше. Гость видит #headerLoginBtn вместо
- * иконки-человечка (#accountMenuWrap) — видимость переключает эта функция. */
+ * Модалка #accountModalBackdrop — единая точка входа что для гостя, что
+ * для вошедшего (см. правку «Тема и обучение — в окно "Аккаунт"»): значок
+ * в шапке (#accountBtn) теперь всегда один и тот же, сама модалка
+ * переключает #accountModalGuest/#accountModalUser. Раньше гость видел
+ * отдельную текстовую «Войти» вместо значка — то же действие теперь внутри
+ * модалки, одной кнопкой меньше в шапке. */
 function renderAuthArea() {
   const authed = auth.isAuthenticated();
-  document.getElementById("headerLoginBtn").hidden = authed;
-  document.getElementById("accountMenuWrap").hidden = !authed;
+  const user = authed ? auth.getUser() : null;
+  const label = (user && (user.name || user.username)) || t("аккаунт");
+  const btn = document.getElementById("accountBtn");
+  btn.title = authed ? `${t("Аккаунт")} — ${label}` : t("Аккаунт");
+  btn.setAttribute("aria-label", btn.title);
+}
+document.getElementById("accountModalLoginBtn").addEventListener("click", () => {
+  closeModal("accountModalBackdrop");
+  auth.login();
+});
+// Тема/обучение — доступны и гостю, и вошедшему одинаково (см. index.html,
+// #accountModalThemeBtn/#accountModalTourBtn вне #accountModalGuest/#accountModalUser).
+document.getElementById("accountModalThemeBtn").addEventListener("click", () => {
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+});
+document.getElementById("accountModalTourBtn").addEventListener("click", () => {
+  closeModal("accountModalBackdrop");
+  openTour("library");
+});
+document.getElementById("accountBtn").addEventListener("click", () => {
+  const authed = auth.isAuthenticated();
+  document.getElementById("accountModalGuest").hidden = authed;
+  document.getElementById("accountModalUser").hidden = !authed;
   if (authed) {
     const user = auth.getUser();
-    const label = (user && (user.name || user.username)) || t("аккаунт");
-    document.getElementById("accountBtn").title = t("Аккаунт") + " — " + label;
+    document.getElementById("accountModalName").textContent = (user && (user.name || user.username)) || t("аккаунт");
+    document.getElementById("accountModalMeta").textContent = (user && user.email) || "";
+    loadAccountNotifications(); // асинхронно, не блокирует открытие модалки
   }
-}
-document.getElementById("headerLoginBtn").addEventListener("click", () => auth.login());
-// Обучение библиотеки — кнопка живёт в шапке постоянно (см. index.html),
-// видимость переключает route() (только на "/"), обработчик вешаем один раз
-// тут же, а не при каждом renderLibrary — сама шапка не перерисовывается.
-document.getElementById("libraryHelpBtn").addEventListener("click", () => openTour("library"));
-document.getElementById("accountBtn").addEventListener("click", () => {
-  const user = auth.getUser();
-  document.getElementById("accountModalName").textContent = (user && (user.name || user.username)) || t("аккаунт");
-  document.getElementById("accountModalMeta").textContent = (user && user.email) || "";
   openModal("accountModalBackdrop");
-  loadAccountNotifications(); // асинхронно, не блокирует открытие модалки
 });
 bindModal("accountModalBackdrop", null, "accountModalClose");
 
@@ -1427,37 +1594,48 @@ function buildCard(p, opts = {}) {
   const onPlay = opts.onPlay || ((v, asymmetric, rotate) => {
     navigate(`/table/${encodeURIComponent(v.id)}?shape=${asymmetric ? "asym" : "normal"}&rotate=${rotate ? "1" : "0"}`);
   });
-  // Всегда одна кнопка «За стол» — выбор сложности (если вариантов больше
-  // одного) происходит ПОСЛЕ клика, в общей модалке (см. openDifficultyModal
-  // выше), не рядом мелких кнопок прямо на карточке. Быстрый путь — сразу
-  // к выбору сложности, без превью.
-  playBtn.addEventListener("click", e => {
-    e.stopPropagation(); // не даём всплыть до клика по card ниже — то же самое действие делать дважды незачем
-    if (variants.length > 1) openDifficultyModal(puzzleDisplayTitle(p), variants, onPlay);
-    else onPlay(variants[0]);
-  });
-  // Клик по самой карточке (не по «За стол» — тот уже обработан и
-  // остановлен выше, не по меню «…» — см. проверку ниже) — более
-  // информативный путь: превью с картинкой покрупнее, автором, рейтингом
-  // и тем же выбором сложности (см. план «Поделиться из превью и окна
-  // победы», openPuzzlePreviewModal).
+  // Кнопка «За стол» прямо на карточке — теперь только ВНУТРИ комнаты
+  // (opts.roomId, стартует сеанс сразу в ЭТОЙ комнате, быстрый путь без
+  // страницы пазла тут по-прежнему нужен). Вне комнаты (библиотека/
+  // категория/профиль) кнопку убрали совсем (см. план «Страница пазла
+  // вместо превью-модалки») — «За стол» переехало на саму страницу пазла
+  // (renderPuzzlePage), клик по карточке теперь сразу ведёт туда.
+  if (opts.roomId) {
+    playBtn.addEventListener("click", e => {
+      e.stopPropagation(); // не даём всплыть до клика по card ниже — то же самое действие делать дважды незачем
+      if (variants.length > 1) openDifficultyModal(puzzleDisplayTitle(p), variants, onPlay);
+      else onPlay(variants[0]);
+    });
+  } else {
+    playBtn.remove();
+  }
+  // Клик по самой карточке (не по кнопке в углу — та уже обработана и
+  // остановлена выше внутри комнаты, не по меню «…» — см. проверку ниже).
+  // Внутри комнаты — превью-модалка (openPuzzlePreviewModal, картинка
+  // покрупнее, автор, рейтинг, тот же выбор сложности): там речь о старте
+  // сеанса В ЭТОЙ комнате, полноценная навигация была бы хуже. Вне комнаты
+  // — переход на публичную страницу пазла (/puzzle/:id, шарится/
+  // индексируется отдельно от /table/:id, см. план «Публичная ссылка на
+  // пазл» → «Страница пазла вместо превью-модалки»).
   // Клавиатура + role=button/tabIndex — тем же приёмом, что .movie-tile в
   // Movies (см. renderMovieTile): карточка не <button> (внутри уже есть
-  // свои button/a — «За стол», меню «…», автор), поэтому доступность через
-  // div[role=button][tabindex=0] + свой keydown на Enter/Space, а не через
-  // родной элемент. closest("button")/closest(".puzzle-card-author") — тот
-  // же фильтр, что и у click ниже: keydown с фокусed вложенной кнопки/ссылки
-  // тоже всплывает сюда, превью не должно открываться поверх их действия.
+  // свои button/a — меню «…», автор, в комнате ещё и «За стол»), поэтому
+  // доступность через div[role=button][tabindex=0] + свой keydown на
+  // Enter/Space, а не через родной элемент. closest("button")/
+  // closest(".puzzle-card-author") — тот же фильтр, что и у click ниже:
+  // keydown с фокусed вложенной кнопки/ссылки тоже всплывает сюда, открытие
+  // не должно случаться поверх их действия.
   const isCardPreviewTarget = e => !e.target.closest("button") && !e.target.closest(".puzzle-card-author");
+  const openCard = () => {
+    if (opts.roomId) openPuzzlePreviewModal(p, { variants, onPlay });
+    else navigate(`/puzzle/${encodeURIComponent(variants[0].id)}`);
+  };
   node.setAttribute("role", "button");
   node.tabIndex = 0;
-  node.addEventListener("click", e => {
-    if (!isCardPreviewTarget(e)) return;
-    openPuzzlePreviewModal(p, { variants, onPlay });
-  });
+  node.addEventListener("click", e => { if (isCardPreviewTarget(e)) openCard(); });
   node.addEventListener("keydown", e => {
     if (!isCardPreviewTarget(e)) return;
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPuzzlePreviewModal(p, { variants, onPlay }); }
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(); }
   });
 
   // Второстепенные действия — одно меню «…» (см. renderCardMenu выше,
@@ -1807,7 +1985,6 @@ async function renderLibrary(root, signal) {
 
   showPage(allGroups);
   root.appendChild(renderCategorySuggestBox(signal));
-  maybeStartTour("library");
 }
 
 /** Профиль пользователя (см. план «Категории many-to-many, автор карточки,
@@ -2989,7 +3166,9 @@ async function renderTable(root, puzzleId, signal, queryString) {
     shareBtn.className = "btn outlined icon"; shareBtn.type = "button";
     shareBtn.title = t("Скопировать ссылку на пазл"); shareBtn.setAttribute("aria-label", shareBtn.title);
     shareBtn.innerHTML = SHARE_ICON;
-    bindShareButton(shareBtn, () => `${location.origin}/table/${encodeURIComponent(puzzle.id)}`);
+    // /puzzle/:id, не /table/:id — ссылка ведёт на страницу пазла, не на
+    // прямой стол (см. план «Страница пазла вместо превью-модалки»).
+    bindShareButton(shareBtn, () => `${location.origin}/puzzle/${encodeURIComponent(puzzle.id)}`);
     const stayBtn = document.createElement("button");
     stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = t("Остаться");
     stayBtn.addEventListener("click", () => overlay.remove());
@@ -3009,7 +3188,6 @@ async function renderTable(root, puzzleId, signal, queryString) {
   signal.addEventListener("abort", () => { clearTimeout(saveTimer); saveProgress(); });
   window.addEventListener("visibilitychange", () => { if (document.hidden) { clearTimeout(saveTimer); saveProgress(); } }, { signal });
   window.addEventListener("pagehide", () => { clearTimeout(saveTimer); saveProgress(); }, { signal });
-  maybeStartTour("table");
 }
 
 /* ───────────────────────── комнаты: сокет-обвязка ───────────────────────── */
@@ -3535,6 +3713,7 @@ async function renderRoom(root, roomId, signal) {
   body.innerHTML = `
     <div class="room-head">
       <h2 class="room-head-title"></h2>
+      ${room.role === "owner" ? `<button class="btn text danger" id="deleteRoomBtn" type="button">${t("Удалить комнату")}</button>` : ""}
     </div>
     <!-- Крупный пунктирный блок с кодом комнаты — тот же паттерн, что в
          Movies (.code-box, renderCodeArea): код кликабелен и копируется
@@ -3567,6 +3746,25 @@ async function renderRoom(root, roomId, signal) {
   $(root, "#copyInviteLinkBtn").addEventListener("click", async () => {
     try { await navigator.clipboard.writeText(inviteUrl); flashCopied(); } catch { /* буфер недоступен — ссылка есть в приглашении */ }
   }, { signal });
+
+  // Удаление комнаты целиком — необратимо (все сборки и история пропадают
+  // у всех участников), поэтому двойное подтверждение текстом названия не
+  // делаем (это отдельный сервис, не банк), но обычный confirm() — тот же
+  // приём, что и у удаления сеанса/участника чуть ниже.
+  const deleteRoomBtn = $(root, "#deleteRoomBtn");
+  if (deleteRoomBtn) {
+    deleteRoomBtn.addEventListener("click", async () => {
+      if (!confirm(getLang() === "en" ? `Delete the room "${room.title}"? This removes it for everyone.` : `Удалить комнату «${room.title}»? Она пропадёт у всех участников.`)) return;
+      deleteRoomBtn.disabled = true;
+      try {
+        await deleteRoom(roomId);
+        navigate("/rooms");
+      } catch {
+        deleteRoomBtn.disabled = false;
+        alert(t("Не удалось удалить комнату."));
+      }
+    }, { signal });
+  }
 
   const membersEl = $(root, "#roomMembers");
   membersEl.innerHTML = "";
@@ -4422,15 +4620,17 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     const actions = document.createElement("div");
     actions.className = "win-actions";
     // В комнате пазл может оказаться и чужим/своим НЕопубликованным фото
-    // (ownerUserId не null) — публичной /table/:id ссылки у него ещё нет
-    // (см. server.js, serveApp отдаёт дефолт по такому id), кнопку в этом
-    // случае просто не показываем, а не ведём на страницу без превью.
+    // (ownerUserId не null) — публичной страницы пазла у него ещё нет
+    // (см. server.js, api() GET /api/puzzles/:id отдаёт 404 не-автору),
+    // кнопку в этом случае просто не показываем, а не ведём на 404.
     if (!puzzle.ownerUserId) {
       const shareBtn = document.createElement("button");
       shareBtn.className = "btn outlined icon"; shareBtn.type = "button";
       shareBtn.title = t("Скопировать ссылку на пазл"); shareBtn.setAttribute("aria-label", shareBtn.title);
       shareBtn.innerHTML = SHARE_ICON;
-      bindShareButton(shareBtn, () => `${location.origin}/table/${encodeURIComponent(puzzle.id)}`);
+      // /puzzle/:id, не /table/:id (см. план «Страница пазла вместо
+      // превью-модалки»).
+      bindShareButton(shareBtn, () => `${location.origin}/puzzle/${encodeURIComponent(puzzle.id)}`);
       actions.appendChild(shareBtn);
     }
     const stayBtn = document.createElement("button");
@@ -4666,7 +4866,6 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         : `<p class="state-note table-give-up">Не удаётся подключиться к столу. <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">${t("Вернуться в комнату")}</a> или обновите страницу.</p>`);
     },
   });
-  maybeStartTour("table");
 }
 
 /* ───────────────────────── Яндекс.Метрика: переходы внутри SPA ─────────────────────────
@@ -4720,6 +4919,7 @@ function route() {
   const roomMatch = pathname.match(/^\/room\/([^/]+)$/);
   const profileMatch = pathname.match(/^\/profile\/([^/]+)$/);
   const categoryMatch = pathname.match(/^\/category\/([^/]+)$/);
+  const puzzleMatch = pathname.match(/^\/puzzle\/([^/]+)$/);
   const root = document.getElementById("app");
 
   if (currentRouteAbort) currentRouteAbort.abort();
@@ -4731,10 +4931,6 @@ function route() {
   // на /room/... Сами renderCategories/renderCategoryPage переопределяют
   // это после загрузки своих данных (см. setPageMeta там).
   setPageMeta(DEFAULT_TITLE, DEFAULT_DESCRIPTION);
-  // Обучение библиотеки (#libraryHelpBtn) — только на самой главной, не на
-  // /categories, /profile/:id и т.п., где renderLibrary тоже мог бы
-  // сработать как fallback, но тур библиотеки там ни при чём.
-  document.getElementById("libraryHelpBtn").hidden = pathname !== "/";
 
   const run = roomTableMatch
     ? renderRoomTable(root, decodeURIComponent(roomTableMatch[1]), decodeURIComponent(roomTableMatch[2]), signal)
@@ -4745,6 +4941,7 @@ function route() {
     : profileMatch ? renderProfile(root, decodeURIComponent(profileMatch[1]), signal)
     : pathname === "/categories" ? renderCategories(root, signal)
     : categoryMatch ? renderCategoryPage(root, decodeURIComponent(categoryMatch[1]), signal)
+    : puzzleMatch ? renderPuzzlePage(root, decodeURIComponent(puzzleMatch[1]), signal)
     : renderLibrary(root, signal);
   run.catch(e => {
     if (signal.aborted) return;

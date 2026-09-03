@@ -624,6 +624,41 @@ ok("выгнанный B больше не член комнаты — 403", r.s
 r = await asJson(tokenA, `/rooms/${kickRoomId}/members/${userIdB}`, { method: "DELETE" });
 ok("повторный кик уже убранного участника — 404", r.status === 404 && r.body.error === "not a member", JSON.stringify(r.body));
 
+// ───────── владелец комнаты может удалить комнату целиком ─────────
+r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комната на удаление" } });
+const delRoomId = r.body.id;
+ok("комната на удаление создана", r.status === 200, JSON.stringify(r.body));
+
+r = await asJson(tokenB, "/rooms/join/" + r.body.joinCode, { method: "POST" });
+ok("B присоединился к комнате на удаление", r.status === 200 && r.body.joined === true, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${delRoomId}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
+const delSessionId = r.body.id;
+ok("сеанс в комнате на удаление стартовал", r.status === 200, JSON.stringify(r.body));
+
+const delWsUrl = token => `ws://localhost:${PUZZLE_PORT}/ws/rooms/${delRoomId}/sessions/${delSessionId}?token=${encodeURIComponent(token)}`;
+const wsDelB = new WebSocket(delWsUrl(tokenB));
+await waitOpen(wsDelB);
+await waitMessage(wsDelB, msg => msg.type === "sync");
+const delBClosed = new Promise(res => wsDelB.addEventListener("close", () => res(true)));
+
+r = await asJson(tokenB, `/rooms/${delRoomId}`, { method: "DELETE" });
+ok("не-владелец не может удалить комнату — 403", r.status === 403 && r.body.error === "not the owner", JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${delRoomId}`, { method: "DELETE" });
+ok("владелец удалил комнату — 200", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
+
+ok("живое WS-подключение в удалённой комнате разорвано сервером", await Promise.race([delBClosed, new Promise(res => setTimeout(() => res(false), 3000))]));
+
+r = await asJson(tokenA, `/rooms/${delRoomId}`);
+ok("удалённая комната больше не доступна — 404", r.status === 404 && r.body.error === "not found", JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${delRoomId}/sessions/${delSessionId}`);
+ok("сеанс удалённой комнаты тоже пропал (каскад) — 404", r.status === 404, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/rooms/${delRoomId}`, { method: "DELETE" });
+ok("повторное удаление уже удалённой комнаты — 404, не 403 (участника тоже больше нет)", r.status === 404 && r.body.error === "not found", JSON.stringify(r.body));
+
 // ───────── загрузка картинок в библиотеку через Admin (/internal/puzzles) ─────────
 const internalCall = (key, p, init = {}) => fetch(PUZZLE + p, {
   ...init,
@@ -948,6 +983,14 @@ ok("/table/hills — og:image указывает на картинку само�
 const missingTableHtml = await (await fetch(PUZZLE + "/table/нет-такого-пазла")).text();
 ok("несуществующий id пазла — дефолтная страница, без 404", titleOf(missingTableHtml) === titleOf(homeHtml), titleOf(missingTableHtml));
 
+// /puzzle/:id — та же SSR-подмена, что и у /table/:id (см. план «Страница
+// пазла вместо превью-модалки») — теперь основная публичная/шаринг-ссылка.
+const puzzlePageHtml = await (await fetch(PUZZLE + "/puzzle/hills")).text();
+ok("/puzzle/hills отдаёт свой <title> с названием пазла", (titleOf(puzzlePageHtml) || "").includes("Холмы"), titleOf(puzzlePageHtml));
+ok("/puzzle/hills — canonical указывает именно на эту страницу", canonicalOf(puzzlePageHtml) === "https://puzzle.burninghouse.ru/puzzle/hills", canonicalOf(puzzlePageHtml));
+ok("/puzzle/hills — og:image указывает на картинку самого пазла, не на общий баннер",
+  (ogImageOf(puzzlePageHtml) || "").includes("hills.svg"), ogImageOf(puzzlePageHtml));
+
 r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комната для проверки приватной ссылки" } });
 const linkTestRoomId = r.body.id;
 ur = await callRaw(tokenA, `/puzzles?roomId=${linkTestRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Приватное фото для проверки ссылки")}`, fakePng, "image/png");
@@ -958,10 +1001,32 @@ ok("приватная (ещё не опубликованная) загрузк
 
 ir = await fetch(PUZZLE + "/sitemap.xml");
 sitemapXml = await ir.text();
-ok("sitemap.xml содержит /table/hills — по одному URL на группу, самый лёгкий вариант",
-  sitemapXml.includes("<loc>https://puzzle.burninghouse.ru/table/hills</loc>"), "");
+ok("sitemap.xml содержит /puzzle/hills (не /table/hills) — теперь основная ссылка, по одному URL на группу, самый лёгкий вариант",
+  sitemapXml.includes("<loc>https://puzzle.burninghouse.ru/puzzle/hills</loc>"), "");
+ok("sitemap.xml НЕ содержит /table/hills",
+  !sitemapXml.includes("<loc>https://puzzle.burninghouse.ru/table/hills</loc>"), "");
 ok("sitemap.xml НЕ содержит вариантов посложнее той же группы (hills-48 и т.п.)",
-  !sitemapXml.includes("/table/hills-48<"), "");
+  !sitemapXml.includes("/puzzle/hills-48<"), "");
+
+// ───────── GET /api/puzzles/:id — один пазл со всеми уровнями сложности
+// своей группы, для страницы пазла (см. план «Страница пазла вместо
+// превью-модалки») ─────────
+let pr = await fetch(PUZZLE + "/api/puzzles/hills");
+let pb = await pr.json();
+ok("GET /api/puzzles/hills — 200, отдаёт puzzle + variants", pr.status === 200 && pb.puzzle.id === "hills" && pb.variants.length > 1, JSON.stringify(pb).slice(0, 200));
+ok("GET /api/puzzles/hills — variants все из той же группы (image_file)",
+  pb.variants.every(v => v.imageUrl === pb.puzzle.imageUrl), JSON.stringify(pb.variants.map(v => v.imageUrl)));
+
+pr = await fetch(PUZZLE + `/api/puzzles/${encodeURIComponent(privateUploadForLinkTest.variants[0].id)}`);
+pb = await pr.json();
+ok("GET /api/puzzles/:id на чужую приватную загрузку без входа — 404", pr.status === 404 && pb.error === "not found", JSON.stringify(pb));
+
+r = await asJson(tokenA, `/puzzles/${encodeURIComponent(privateUploadForLinkTest.variants[0].id)}`);
+ok("GET /api/puzzles/:id на СВОЮ приватную загрузку — 200, видна автору", r.status === 200 && r.body.puzzle.id === privateUploadForLinkTest.variants[0].id, JSON.stringify(r.body).slice(0, 200));
+
+pr = await fetch(PUZZLE + "/api/puzzles/нет-такого-пазла");
+pb = await pr.json();
+ok("GET /api/puzzles/:id на несуществующий id — 404", pr.status === 404 && pb.error === "not found", JSON.stringify(pb));
 
 // ───────── обновлённые пресеты сложности (см. план «Больше шагов
 // сложности») — по «+»-уровню между каждой парой исходных шести ─────────

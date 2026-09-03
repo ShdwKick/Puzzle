@@ -19,10 +19,11 @@
  * скрыта — например, комнатные шаги тура table просто не покажутся на
  * соло-столе, отдельный список шагов под это заводить не нужно.
  *
- * Каждый тур показывается один раз на устройство и запоминается отдельно
- * (localStorage — своей таблицы настроек тут нет, заводить её ради двух
- * флагов дороже, чем показать обучение второй раз на новом устройстве).
- * Повторно оба открываются своей кнопкой со знаком вопроса.
+ * Сам собой НЕ показывается никогда (см. правку «Обучение только по
+ * кнопке») — только по клику на свою кнопку со знаком вопроса
+ * (#libraryHelpBtn/#tableHelpBtn). Раньше запоминал показ в localStorage и
+ * сам открывался при первом заходе — от этого сознательно отказались,
+ * поэтому store/seenKey тут больше нет.
  *
  * t()/getLang() — из app.js (обычные global-функции, не модуль, тот же
  * приём, что и у остального обучения тут же в файле): подсказки идут через
@@ -32,7 +33,6 @@
 
 const TOURS = {
   library: {
-    seenKey: "puzzle.tour.library",
     steps: [
       {
         title: "Библиотека пазлов",
@@ -67,7 +67,6 @@ const TOURS = {
     ],
   },
   table: {
-    seenKey: "puzzle.tour.table",
     steps: [
       {
         title: "Стол сборки",
@@ -130,22 +129,6 @@ const byId = id => document.getElementById(id);
 /** Элемент есть в разметке, но может быть скрыт — тогда подсвечивать нечего. */
 const shown = el => !!el && !!el.offsetParent && el.getBoundingClientRect().width > 0;
 
-const tourSeen = key => {
-  try { return !!localStorage.getItem(key); } catch { return true; }   // нет доступа — не навязываемся
-};
-const markSeen = key => {
-  try { localStorage.setItem(key, "1"); } catch { /* приватный режим — переживём */ }
-};
-
-/** Показать тур, если его ещё не видели. Вызывается после отрисовки стола. */
-function maybeStartTour(name) {
-  const tour = TOURS[name];
-  if (!tour || tourActive || tourSeen(tour.seenKey)) return;
-  // Поверх открытого диалога подсветка выглядит поломкой — подождём.
-  if (document.querySelector(".modal-backdrop:not(.hidden)")) return;
-  startTour(name);
-}
-
 function startTour(name) {
   if (!TOURS[name]) return;
   tourName = name;
@@ -163,7 +146,6 @@ function endTour() {
   byId("onbScrim").classList.remove("show");
   removeEventListener("resize", repositionTour);
   removeEventListener("keydown", tourKeys);
-  markSeen(TOURS[tourName].seenKey);
 }
 
 function tourKeys(e) {
