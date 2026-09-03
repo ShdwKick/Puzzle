@@ -32,6 +32,13 @@ function buildClusters(piecesIterable, cell, tol) {
       const nKey = `${p.r + dr},${p.c + dc}`;
       const n = byKey.get(nKey);
       if (!n) continue;
+      // Повороты (см. план «Повороты деталей») — деталь несёт необязательное
+      // поле rot (0/90/180/270°, см. app.js applyPieceTransform). Два соседа
+      // стыкуются, только если ОБА уже стоят вертикально (0°) — физически
+      // повёрнутая деталь не может состыковаться, даже если позиция точная.
+      // rot отсутствует у старых сохранённых данных (до этой фичи) — ||0
+      // трактует это как уже вертикальную, ничего не ломая задним числом.
+      if (((p.rot || 0) % 360) !== 0 || ((n.rot || 0) % 360) !== 0) continue;
       const dx = n.x - p.x, dy = n.y - p.y;
       if (Math.hypot(dx - dc * cell, dy - dr * cell) <= tol) {
         union(key, nKey);

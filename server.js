@@ -215,6 +215,10 @@ db.exec("CREATE INDEX IF NOT EXISTS idx_puzzles_room ON puzzles(room_id)");
 // puzzle_id можно переиграть и с обычной, и с ассиметричной формой, поэтому
 // флаг живёт на сеансе, а не в puzzles.
 try { db.exec("ALTER TABLE room_sessions ADD COLUMN asymmetric_shape INTEGER NOT NULL DEFAULT 0"); } catch {}
+// Повороты (см. план «Повороты деталей + звук + подсказка») — тем же
+// приёмом, что asymmetric_shape выше: выбор ПОПЫТКИ, общий для всех
+// участников сеанса, не свойство самого пазла.
+try { db.exec("ALTER TABLE room_sessions ADD COLUMN rotation_enabled INTEGER NOT NULL DEFAULT 0"); } catch {}
 
 // Модерация загруженных фото (см. план «Модерация загруженных фото»).
 // moderation_status: NULL — никогда не отправлялось на публикацию (свежая
@@ -555,8 +559,8 @@ Object.assign(stmt, {
   session:       db.prepare("SELECT * FROM room_sessions WHERE id = ?"),
   roomSessions:  db.prepare("SELECT * FROM room_sessions WHERE room_id = ? ORDER BY started_at DESC"),
   insertSession: db.prepare(`
-    INSERT INTO room_sessions (id,room_id,puzzle_id,pieces,pieces_placed,pieces_total,started_by,started_at,updated_at,completed_at,asymmetric_shape)
-    VALUES (?,?,?,NULL,0,?,?,?,?,NULL,?)`),
+    INSERT INTO room_sessions (id,room_id,puzzle_id,pieces,pieces_placed,pieces_total,started_by,started_at,updated_at,completed_at,asymmetric_shape,rotation_enabled)
+    VALUES (?,?,?,NULL,0,?,?,?,?,NULL,?,?)`),
   updateSessionPieces: db.prepare(`
     UPDATE room_sessions SET pieces = ?, pieces_placed = ?, updated_at = ?, completed_at = ? WHERE id = ?`),
   deleteSession: db.prepare("DELETE FROM room_sessions WHERE id = ?"),
@@ -837,12 +841,18 @@ function forceDeletePuzzleGroup(puzzle) {
 // Пришедшие с фронта детали — доверенный документ хранится как есть, но
 // форма проверяется: чужой сервис/битый клиент не должен положить в базу
 // произвольный JSON. rows/cols не пришли явно в body — берём из самого пазла.
+const VALID_ROT = new Set([0, 90, 180, 270]);
 function sanitizePieceItem(it, rows, cols) {
   if (!it || typeof it !== "object") return null;
   const r = Number(it.r), c = Number(it.c), x = Number(it.x), y = Number(it.y);
   if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r >= rows || c < 0 || c >= cols) return null;
   if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
-  return { r, c, x, y, placed: !!it.placed };
+  // rot — повороты (см. план «Повороты деталей + звук + подсказка»): только
+  // 0/90/180/270, иначе (в т.ч. отсутствует у старых клиентов/сохранений до
+  // этой фичи) — 0, безопасный дефолт «уже вертикально» (см. buildClusters
+  // в assets/puzzle-clusters.js — общая точка, где rot реально участвует).
+  const rot = VALID_ROT.has(Number(it.rot)) ? Number(it.rot) : 0;
+  return { r, c, x, y, rot, placed: !!it.placed };
 }
 function sanitizePieces(raw, rows, cols) {
   if (!Array.isArray(raw)) return null;
@@ -982,7 +992,7 @@ function sessionSummary(s) {
   return { id: s.id, roomId: s.room_id, puzzleId: s.puzzle_id, startedBy: s.started_by,
     piecesPlaced: s.pieces_placed, piecesTotal: s.pieces_total,
     startedAt: s.started_at, updatedAt: s.updated_at, completedAt: s.completed_at,
-    asymmetricShape: !!s.asymmetric_shape,
+    asymmetricShape: !!s.asymmetric_shape, rotationEnabled: !!s.rotation_enabled,
     puzzle: puzzlePayload(stmt.puzzle.get(s.puzzle_id)) };
 }
 function str(v, max) {
@@ -2127,7 +2137,7 @@ async function api(req, res, url, user) {
         const puzzle = stmt.puzzle.get(body.puzzleId);
         if (!puzzle) return json(res, 400, { error: "bad puzzle" });
         const id = crypto.randomUUID(), ts = now();
-        stmt.insertSession.run(id, roomId, puzzle.id, puzzle.grid_rows * puzzle.grid_cols, identity.id, ts, ts, body.asymmetric ? 1 : 0);
+        stmt.insertSession.run(id, roomId, puzzle.id, puzzle.grid_rows * puzzle.grid_cols, identity.id, ts, ts, body.asymmetric ? 1 : 0, body.rotate ? 1 : 0);
         return json(res, 200, sessionSummary(stmt.session.get(id)));
       }
 

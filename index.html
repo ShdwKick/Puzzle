@@ -162,11 +162,12 @@
     <button class="icon-btn" id="installBtn" title="Установить как приложение" aria-label="Установить как приложение" hidden>
       <svg class="icon" viewBox="0 0 24 24"><path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M5 21h14"/></svg>
     </button>
-    <!-- Переключатель языка интерфейса (см. план «Английский язык в
-         интерфейсе») — RU/EN текстом, не флагом: у RU/EN нет однозначного
-         флага-соответствия (English — не только UK/US), а текст в кружке —
-         тот же приём, что уже намечен на Home (см. #langBtn там). -->
-    <button class="icon-btn" id="langBtn" type="button"></button>
+    <!-- Обучение библиотеки (см. assets/onboarding.js, TOURS.library) —
+         показывается только на самой главной ("/"), route() в app.js
+         переключает hidden. Отдельный тур от стола (#tableHelpBtn) — тот
+         уже есть и рассказывает про инструменты сборки, этот — про саму
+         библиотеку (категории, карточка, комнаты). -->
+    <button class="icon-btn" id="libraryHelpBtn" type="button" title="Обучение" aria-label="Обучение" hidden>?</button>
     <button class="icon-btn" id="themeBtn" title="Тема" aria-label="Тема"></button>
     <a class="icon-btn" href="/categories" title="Категории" aria-label="Категории">
       <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
@@ -269,7 +270,16 @@
       </details>
     </section>
 
-    <p class="bh-footer-copy" id="footerCopy">© BurningHouse</p>
+    <div class="bh-footer-bottom">
+      <p class="bh-footer-copy" id="footerCopy">© BurningHouse</p>
+      <!-- Переключатель языка интерфейса (см. план «Английский язык в
+           интерфейсе») — RU/EN текстом, не флагом: у RU/EN нет однозначного
+           флага-соответствия (English — не только UK/US). Перенесён сюда из
+           шапки (см. план «Выдвигающиеся кнопки») — не первоочередная
+           настройка, в футере ей самое место. app.js обращается по тому же
+           id, где бы кнопка ни лежала в разметке. -->
+      <button class="icon-btn" id="langBtn" type="button"></button>
+    </div>
   </div>
 </footer>
 
@@ -413,6 +423,10 @@
       <input type="checkbox" id="puzzlePreviewAsymmetric">
       <span>Ассиметричная форма деталей — сложнее, детали неровные</span>
     </label>
+    <label class="checkbox-row">
+      <input type="checkbox" id="puzzlePreviewRotate">
+      <span>Повороты деталей — детали нужно ещё повернуть, не только сложить</span>
+    </label>
   </div>
 </div>
 
@@ -442,6 +456,14 @@
     <label class="checkbox-row">
       <input type="checkbox" id="difficultyAsymmetric">
       <span>Ассиметричная форма деталей — сложнее, детали неровные</span>
+    </label>
+    <!-- Повороты (см. план «Повороты деталей + звук + подсказка») —
+         независимая от формы выше галочка: детали ещё и повёрнуты
+         вперемешку, повернуть на своё место нужно двойным кликом/тапом
+         (см. bindPieceDrag/bindRoomPieceDrag в assets/app.js). -->
+    <label class="checkbox-row">
+      <input type="checkbox" id="difficultyRotate">
+      <span>Повороты деталей — детали нужно ещё повернуть, не только сложить</span>
     </label>
   </div>
 </div>

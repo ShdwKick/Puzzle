@@ -409,6 +409,48 @@ r = await asJson(tokenA, `/rooms/${roomId2}/sessions/${asymSessionId}`, { method
 r = await asJson(tokenA, `/rooms/${roomId2}/sessions`, { method: "POST", body: { puzzleId: "hills" } });
 ok("сеанс без флага — asymmetricShape===false", r.status === 200 && r.body.asymmetricShape === false, JSON.stringify(r.body));
 
+// ───────── повороты — флаг сеанса (тем же приёмом, что ассиметричная форма
+// выше) + сама механика стыковки: buildClusters требует rot===0 у ОБЕИХ
+// деталей (см. assets/puzzle-clusters.js), sanitizePieceItem на сервере
+// молча подставляет 0 для отсутствующего/невалидного rot ─────────
+r = await asJson(tokenA, `/rooms/${roomId2}/sessions`, { method: "POST", body: { puzzleId: "hills", rotate: true } });
+ok("сеанс с поворотами стартовал", r.status === 200 && r.body.rotationEnabled === true, JSON.stringify(r.body));
+const rotSessionId = r.body.id;
+r = await asJson(tokenA, `/rooms/${roomId2}/sessions/${rotSessionId}`);
+ok("флаг поворотов виден через GET сеанса (как увидят остальные участники)", r.status === 200 && r.body.rotationEnabled === true, JSON.stringify(r.body));
+
+const rotWsUrl = token => `ws://localhost:${PUZZLE_PORT}/ws/rooms/${roomId2}/sessions/${rotSessionId}?token=${encodeURIComponent(token)}`;
+const wsRot = new WebSocket(rotWsUrl(tokenA));
+await waitOpen(wsRot);
+await waitMessage(wsRot, m => m.type === "sync");
+
+// (0,0)-(0,1) на идеальной позиции, но (0,0) повёрнута на 90° — не должны
+// состыковаться, пока обе не станут вертикально.
+const rotPieces = scatteredPieces();
+Object.assign(rotPieces.find(p => p.r === 0 && p.c === 0), { x: 0, y: 0, rot: 90 });
+Object.assign(rotPieces.find(p => p.r === 0 && p.c === 1), { x: PUZZLE_CELL, y: 0, rot: 0 });
+let rotSyncPromise = waitMessage(wsRot, m => m.type === "sync" && m.pieces);
+wsRot.send(JSON.stringify({ type: "init", pieces: rotPieces }));
+let rotSync = await rotSyncPromise;
+ok("позиция верная, но одна деталь повёрнута — НЕ стыкуются (piecesPlaced===0)",
+  rotSync.piecesPlaced === 0, JSON.stringify({ piecesPlaced: rotSync.piecesPlaced }));
+
+rotSyncPromise = waitMessage(wsRot, m => m.type === "sync" && m.pieces);
+wsRot.send(JSON.stringify({ type: "group", pieces: [{ r: 0, c: 0, x: 0, y: 0, rot: 0, placed: false }] }));
+rotSync = await rotSyncPromise;
+ok("довернули до 0° на той же позиции — теперь стыкуются (piecesPlaced===2)",
+  rotSync.piecesPlaced === 2, JSON.stringify({ piecesPlaced: rotSync.piecesPlaced }));
+ok("сервер эхом вернул rot в sync-раскладке",
+  rotSync.pieces.find(p => p.r === 0 && p.c === 0)?.rot === 0, JSON.stringify(rotSync.pieces.find(p => p.r === 0 && p.c === 0)));
+
+rotSyncPromise = waitMessage(wsRot, m => m.type === "sync" && m.pieces);
+wsRot.send(JSON.stringify({ type: "group", pieces: [{ r: 0, c: 1, x: PUZZLE_CELL, y: 0, rot: 45, placed: false }] }));
+rotSync = await rotSyncPromise;
+ok("невалидный rot (не кратно 90°) молча заменяется на 0 (sanitizePieceItem)",
+  rotSync.pieces.find(p => p.r === 0 && p.c === 1)?.rot === 0, JSON.stringify(rotSync.pieces.find(p => p.r === 0 && p.c === 1)));
+
+wsRot.close();
+
 // ───────── библиотека в комнате — по добавлению, не по умолчанию (см. план
 // «Библиотека в комнате — по добавлению, не по умолчанию») ─────────
 // roomId — тут состоят оба (tokenA и tokenB), значит подходит проверить, что

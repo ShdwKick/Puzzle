@@ -182,7 +182,11 @@ a{color:inherit}
 .bh-footer-links a{color:var(--md-sys-color-on-surface);text-decoration:none;font-size:.92rem;width:fit-content}
 .bh-footer-links a:hover{color:var(--md-sys-color-primary);text-decoration:underline}
 .bh-footer .faq{margin-top:0;padding-top:1.8rem;border-top:1px solid var(--md-sys-color-outline-variant)}
-.bh-footer-copy{margin-top:1.8rem;color:var(--md-sys-color-on-surface-variant);font-size:.82rem}
+/* Переключатель языка переехал сюда из шапки (см. план «Выдвигающиеся
+   кнопки») — не первоочередная настройка, рядом с копирайтом ему самое
+   место, не в основной панели навигации. */
+.bh-footer-bottom{display:flex;align-items:center;justify-content:space-between;gap:.8rem;margin-top:1.8rem}
+.bh-footer-copy{color:var(--md-sys-color-on-surface-variant);font-size:.82rem}
 
 /* ===================== ЗАГОЛОВОК БИБЛИОТЕКИ ===================== */
 .library-head{margin-bottom:1.4rem}
@@ -474,6 +478,16 @@ a{color:inherit}
 .piece.selected{
   filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 4px var(--flame-tip)) drop-shadow(0 0 4px var(--flame-tip));
 }
+/* Подсказка (см. план «Повороты деталей + звук + подсказка», pickHintPair
+   в app.js) — та же drop-shadow-обводка по форме детали, что .just-snapped/
+   .selected выше, только пульсирующая и заметно дольше (снимается JS-
+   таймером через ~3с, длительность самой анимации тут не обязана с ним
+   совпадать — просто зацикленная пульсация на всё время, пока класс висит). */
+@keyframes piece-hint-pulse{
+  0%, 100% { filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 3px var(--flame-tip)) }
+  50%      { filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 14px var(--flame-tip)) drop-shadow(0 0 14px var(--flame-tip)) }
+}
+.piece.hint-glow{animation:piece-hint-pulse .9s ease-in-out infinite}
 /* Во время самого драга — БЕЗ огонькового ободка выделения (только тень
    "приподнятости", как у .piece.dragging): ободок вокруг каждой детали
    группы во время движения читался как лишний шум, а не как полезная
@@ -497,9 +511,10 @@ a{color:inherit}
    .board-back, см. ниже), кнопка присутствия вверху справа, см.
    .presence-widget), чтобы ничего не перекрывалось. */
 .board-tools{
-  position:absolute;left:.9rem;bottom:.9rem;display:flex;flex-direction:row;gap:.4rem;
+  position:absolute;left:.9rem;bottom:.9rem;display:flex;flex-direction:row;align-items:center;gap:.4rem;
   background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
   border-radius:var(--md-sys-shape-corner-l);padding:.4rem;box-shadow:var(--e1);
+  transition:gap .25s var(--ease-emph-dec);
 }
 .board-tools .btn{width:2.4rem;height:2.4rem;padding:0}
 /* #selectModeBtn, пока включён (aria-pressed="true") — иначе снаружи не
@@ -508,6 +523,21 @@ a{color:inherit}
 .board-tools .btn[aria-pressed="true"]{
   background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);border-color:transparent;
 }
+/* Свёртывание в тоггл (см. план «Выдвигающиеся кнопки», bindCollapsibleCluster
+   в app.js) — .tools-row «выезжает»/«заезжает» по max-width+opacity, не
+   display: так есть анимация, а не мгновенное исчезновение. gap у самого
+   .board-tools/.table-widgets тоже схлопывается (см. .collapsed ниже) —
+   иначе между тогглом и невидимой (но всё ещё max-width:0-присутствующей)
+   строкой оставался бы пустой зазор. */
+.tools-row{
+  display:flex;align-items:center;gap:.4rem;overflow:hidden;
+  max-width:22rem;opacity:1;
+  transition:max-width .28s var(--ease-emph-dec),opacity .18s var(--ease-std);
+}
+.board-tools.collapsed, .table-widgets.collapsed{gap:0}
+.tools-row.collapsed{max-width:0;opacity:0;pointer-events:none}
+.tools-toggle svg{transition:transform .2s var(--ease-std)}
+.tools-toggle[aria-expanded="false"] svg{transform:rotate(180deg)}
 
 /* «Назад» — была текстовой ссылкой «← Комната»/«← Библиотека» в
    .table-toolbar, теперь иконка в стиле кнопок масштаба, в ЛЕВОМ ВЕРХНЕМ
@@ -590,7 +620,13 @@ a{color:inherit}
    aspect-ratio:4/3 — тот же, что у .puzzle-card-thumb на самой карточке
    (obj-fit:cover уже смирился с обрезкой краёв фото и там). */
 .puzzle-preview-image{
-  width:calc(100% + 2.6rem);margin:-1.1rem -1.3rem 0;aspect-ratio:4/3;
+  /* max-width:none — глобальный img{max-width:100%} (см. начало файла)
+     иначе перебивает width ниже своим "потолком": он резолвится в 100% от
+     content-box МОДАЛКИ (без учёта padding), тогда как width должен дойти
+     до padding-box (см. margin ниже) — без сброса картинка упиралась в
+     content-box и оставляла пустую тёмную полосу справа (со стороны, где
+     она не докатывалась до края модалки). */
+  width:calc(100% + 2.6rem);max-width:none;margin:-1.1rem -1.3rem 0;aspect-ratio:4/3;
   object-fit:cover;display:block;background:var(--md-sys-color-surface-container-high);
 }
 /* Название+рейтинг под картинкой, в одну строку (тот же приём, что
@@ -836,15 +872,22 @@ select.text-input{
    числом, вверху справа стола (см. расстановку углов у .board-tools выше),
    раскрывающая компактный поповер со списком — не полноэкранная модалка,
    лёгкая position:absolute панель рядом с кнопкой. */
-/* Обёртка над обоими виджетами (присутствие + чат, см. renderRoomTable) —
-   позиционирование в углу доски теперь тут одним местом, сами виджеты
-   внутри — просто position:relative для якоря своих поповеров. */
-.table-widgets{position:absolute;right:.9rem;top:.9rem;display:flex;gap:.5rem}
-.presence-widget, .chat-widget{position:relative}
-.btn.presence-btn, .btn.chat-btn{
-  position:relative;width:2.4rem;height:2.4rem;padding:0;
-  background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);box-shadow:var(--e1);
+/* Верхний правый угол — подсказка/звук + присутствие/чат, один сворачиваемый
+   кластер (см. план «Выдвигающиеся кнопки»): тот же визуальный язык и та же
+   .tools-row-механика, что .board-tools внизу слева, только тоггл — ПОСЛЕДНИЙ
+   ребёнок (якорь у самого правого края), а .tools-row — первый и раскрывается
+   влево, к центру стола. Сами chat-widget/presence-widget внутри —
+   position:relative только для якоря своих поповеров, собственный фон им
+   больше не нужен — теперь на общей плашке. */
+.table-widgets{
+  position:absolute;right:.9rem;top:.9rem;display:flex;flex-direction:row;align-items:center;gap:.4rem;
+  background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
+  border-radius:var(--md-sys-shape-corner-l);padding:.4rem;box-shadow:var(--e1);
+  transition:gap .25s var(--ease-emph-dec);
 }
+.table-widgets .btn{width:2.4rem;height:2.4rem;padding:0}
+.presence-widget, .chat-widget{position:relative}
+.btn.presence-btn, .btn.chat-btn{position:relative}
 .presence-count{
   position:absolute;top:-.15rem;right:-.15rem;min-width:1.1rem;height:1.1rem;padding:0 .25rem;
   border-radius:var(--md-sys-shape-corner-full);background:var(--flame-tip);color:#0a1408;

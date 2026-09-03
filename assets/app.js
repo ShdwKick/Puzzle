@@ -312,8 +312,24 @@ const EN = {
   "Общий чат за этим столом — сообщения не сохраняются, видны только пока открыта комната.":
     "Shared chat at this table — messages aren't saved, only visible while the room is open.",
   "Кто сейчас собирает этот пазл вместе с вами.": "Who's currently building this puzzle with you.",
+  "Готовые пазлы для сборки — выберите любой и приступайте, вход не нужен. Покажем, где что — можно пропустить в любой момент.":
+    "Ready-made puzzles to build — pick any one and dive in, no login needed. We'll show you where everything is — skip anytime.",
+  "Пазлы, сгруппированные по темам — можно смотреть по одной вместо всей библиотеки сразу.":
+    "Puzzles grouped by theme — browse one at a time instead of the whole library at once.",
+  "Карточка пазла": "Puzzle card",
+  "Нажмите на неё — откроется превью с рейтингом и выбором сложности. Кнопка «За стол» рядом сразу начинает сборку на лёгком уровне.":
+    "Click it — a preview opens with the rating and a difficulty picker. The “Play” button next to it jumps straight into an easy build.",
+  "Собирайте пазл вместе с друзьями в реальном времени — общий стол, чат и список участников.":
+    "Build a puzzle together with friends in real time — a shared table, chat, and a list of who's there.",
+  "Вход": "Log in",
+  "Сохраняет прогресс между заходами. Без входа тоже можно играть — прогресс останется в этом браузере.":
+    "Saves your progress between visits. You can play without logging in too — progress just stays in this browser.",
   "Это обучение": "This tutorial",
   "Открыть заново можно этой же кнопкой в любой момент.": "Reopen it anytime with this same button.",
+  "Подсказка": "Hint",
+  "Свернуть/развернуть инструменты": "Collapse/expand tools",
+  "Звук — выключить": "Sound — turn off",
+  "Звук — включить": "Sound — turn on",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -341,6 +357,7 @@ function applyStaticTranslations() {
   const byId = (id, fn) => { const el = document.getElementById(id); if (el) fn(el); };
   byId("installBtn", el => { el.title = t("Установить как приложение"); el.setAttribute("aria-label", el.title); });
   byId("themeBtn", el => { el.title = t("Тема"); el.setAttribute("aria-label", el.title); });
+  byId("libraryHelpBtn", el => { el.title = t("Обучение"); el.setAttribute("aria-label", el.title); });
   byId("headerLoginBtn", el => { el.textContent = t("Войти"); });
   byId("accountBtn", el => { el.title = t("Аккаунт"); el.setAttribute("aria-label", el.title); });
   document.querySelectorAll('a.icon-btn[href="/categories"]').forEach(el => { el.title = t("Категории"); el.setAttribute("aria-label", el.title); });
@@ -475,6 +492,7 @@ function openDifficultyModal(title, variants, onPlay) {
   document.getElementById("difficultyModalTitle").textContent = `${t("Выберите сложность")} — «${title}»`;
   buildDifficultyOptions(document.getElementById("difficultySelect"), variants);
   document.getElementById("difficultyAsymmetric").checked = false; // не запоминаем между открытиями — осознанный выбор каждый раз
+  document.getElementById("difficultyRotate").checked = false;
   pendingDifficultyChoice = { variants, onPlay };
   openModal("difficultyModalBackdrop");
 }
@@ -484,9 +502,10 @@ document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
   const { variants, onPlay } = pendingDifficultyChoice;
   const idx = Number(document.getElementById("difficultySelect").value);
   const asymmetric = document.getElementById("difficultyAsymmetric").checked;
+  const rotate = document.getElementById("difficultyRotate").checked;
   closeModal("difficultyModalBackdrop");
   pendingDifficultyChoice = null;
-  onPlay(variants[idx], asymmetric);
+  onPlay(variants[idx], asymmetric, rotate);
 });
 
 /* ───────────────────────── превью пазла ─────────────────────────
@@ -523,6 +542,7 @@ async function openPuzzlePreviewModal(p, { variants, onPlay }) {
   const select = document.getElementById("puzzlePreviewDifficulty");
   buildDifficultyOptions(select, variants);
   document.getElementById("puzzlePreviewAsymmetric").checked = false;
+  document.getElementById("puzzlePreviewRotate").checked = false;
 
   // Поделиться — только у ПУБЛИЧНОГО пазла (ownerUserId===null): своё
   // ещё не опубликованное фото по /table/:id отдаст дефолтную страницу без
@@ -541,8 +561,9 @@ async function openPuzzlePreviewModal(p, { variants, onPlay }) {
   document.getElementById("puzzlePreviewPlayBtn").onclick = () => {
     const idx = Number(select.value);
     const asymmetric = document.getElementById("puzzlePreviewAsymmetric").checked;
+    const rotate = document.getElementById("puzzlePreviewRotate").checked;
     closeModal("puzzlePreviewModalBackdrop");
-    onPlay(variants[idx], asymmetric);
+    onPlay(variants[idx], asymmetric, rotate);
   };
 
   // Рейтинг — любой вариант сложности резолвится сервером в ту же группу
@@ -793,9 +814,9 @@ async function uploadPuzzlePhoto(file, title, roomId) {
 /** POST /api/rooms/:id/sessions с готовой обработкой гонки (кто-то уже
  *  начал сеанс раньше) — редиректит на уже существующий вместо ошибки.
  *  Общий код для пикера, формы загрузки, экрана «уже собран» и истории. */
-async function startRoomSession(roomId, puzzleId, asymmetric) {
+async function startRoomSession(roomId, puzzleId, asymmetric, rotate) {
   const res = await roomFetch(`/api/rooms/${encodeURIComponent(roomId)}/sessions`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId, asymmetric: !!asymmetric }),
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ puzzleId, asymmetric: !!asymmetric, rotate: !!rotate }),
   });
   const data = await res.json();
   if (res.status === 409 && data.session) return data.session.id;
@@ -1154,6 +1175,10 @@ function renderAuthArea() {
   }
 }
 document.getElementById("headerLoginBtn").addEventListener("click", () => auth.login());
+// Обучение библиотеки — кнопка живёт в шапке постоянно (см. index.html),
+// видимость переключает route() (только на "/"), обработчик вешаем один раз
+// тут же, а не при каждом renderLibrary — сама шапка не перерисовывается.
+document.getElementById("libraryHelpBtn").addEventListener("click", () => openTour("library"));
 document.getElementById("accountBtn").addEventListener("click", () => {
   const user = auth.getUser();
   document.getElementById("accountModalName").textContent = (user && (user.name || user.username)) || t("аккаунт");
@@ -1303,8 +1328,8 @@ function buildCard(p, opts = {}) {
   }
 
   const playBtn = $(node, ".puzzle-card-play");
-  const onPlay = opts.onPlay || ((v, asymmetric) => {
-    navigate(`/table/${encodeURIComponent(v.id)}?shape=${asymmetric ? "asym" : "normal"}`);
+  const onPlay = opts.onPlay || ((v, asymmetric, rotate) => {
+    navigate(`/table/${encodeURIComponent(v.id)}?shape=${asymmetric ? "asym" : "normal"}&rotate=${rotate ? "1" : "0"}`);
   });
   // Всегда одна кнопка «За стол» — выбор сложности (если вариантов больше
   // одного) происходит ПОСЛЕ клика, в общей модалке (см. openDifficultyModal
@@ -1373,9 +1398,9 @@ function buildCard(p, opts = {}) {
   // внутри самой комнаты (renderRoom) у пазла уже есть прямое «За стол» в
   // ЭТУ комнату, второй выбор комнаты там был бы лишним (см. план).
   if (!opts.roomId) {
-    async function addToRoom(roomId, variant, asymmetric) {
+    async function addToRoom(roomId, variant, asymmetric, rotate) {
       try {
-        const sessionId = await startRoomSession(roomId, variant.id, asymmetric);
+        const sessionId = await startRoomSession(roomId, variant.id, asymmetric, rotate);
         navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`);
       } catch (e) {
         alert(e.message === "room session limit reached"
@@ -1386,7 +1411,7 @@ function buildCard(p, opts = {}) {
       }
     }
     function pickVariantThenAdd(roomId) {
-      if (variants.length > 1) openDifficultyModal(puzzleDisplayTitle(p), variants, (v, asymmetric) => addToRoom(roomId, v, asymmetric));
+      if (variants.length > 1) openDifficultyModal(puzzleDisplayTitle(p), variants, (v, asymmetric, rotate) => addToRoom(roomId, v, asymmetric, rotate));
       else addToRoom(roomId, variants[0]);
     }
     items.push({ label: t("+ В комнату"), onClick: async menuEl => {
@@ -1616,6 +1641,15 @@ async function renderLibrary(root, signal) {
   // сложности одного изображения (общий imageUrl) в одну карточку — иначе
   // Холмы/Лес/Горы показались бы по 6 раз каждый (см. server.js, BUILTIN_IMAGES).
   const allGroups = groupPuzzles(puzzles.filter(p => !p.ownerUserId));
+  // Перемешиваем порядок один раз за загрузку страницы (не кнопка, не при
+  // каждом ре-рендере/переключении категории — showPage(allGroups) ниже и
+  // клик по чипу «Все» переиспользуют этот же уже перемешанный массив, а не
+  // трогают shuffleInPlace повторно) — иначе библиотека каждый раз выглядит
+  // одинаково в исходном порядке БД, а с одной колодой пазлов интереснее
+  // открывать что-то новое сверху. Фильтр по категории (filterGroupsByCategory)
+  // сохраняет относительный порядок элементов — категории тоже наследуют
+  // это перемешивание, отдельно их не переупорядочиваем.
+  shuffleInPlace(allGroups);
   const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, ".pager"), signal);
 
   // Одна категория на пазл (см. план «Один пазл — одна категория») —
@@ -1652,6 +1686,7 @@ async function renderLibrary(root, signal) {
 
   showPage(allGroups);
   root.appendChild(renderCategorySuggestBox(signal));
+  maybeStartTour("library");
 }
 
 /** Профиль пользователя (см. план «Категории many-to-many, автор карточки,
@@ -1992,6 +2027,28 @@ function clusterMembersOf(pieces, key) {
   return members.get(clusterOf.get(key));
 }
 
+/** Подсказка (см. план «Повороты деталей + звук + подсказка») — случайная
+ *  ещё НЕ состыкованная пара соседних по сетке (r,c) деталей: перебираем
+ *  каждое ребро сетки (вправо/вниз, тем же приёмом, что buildClusters) и
+ *  оставляем те, чьи концы сейчас в РАЗНЫХ кластерах. Ничего не двигает и
+ *  не стыкует — вызывающий код (renderTable/renderRoomTable) сам решает,
+ *  как это подсветить и подвести туда камеру. null, если пазл уже собран
+ *  целиком (подсказывать нечего). */
+function pickHintPair(pieces) {
+  const { clusterOf } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+  const candidates = [];
+  for (const p of pieces.values()) {
+    for (const [dr, dc] of [[0, 1], [1, 0]]) {
+      const n = pieces.get(`${p.r + dr},${p.c + dc}`);
+      if (!n) continue;
+      if (clusterOf.get(`${p.r},${p.c}`) === clusterOf.get(`${n.r},${n.c}`)) continue;
+      candidates.push([p, n]);
+    }
+  }
+  if (!candidates.length) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
+}
+
 /** «Перемешать» с учётом кластеров: ЛЮБОЙ уже состыкованный кластер (от двух
  *  деталей — это уже прогресс, не только самый большой) не трогаем,
  *  расшвыриваем только одиночные, ещё ни с кем не соединённые детали.
@@ -2075,7 +2132,11 @@ function createPieceEl(puzzleId, r, c, rows, cols, cell, pad, edges, imageUrl, b
 }
 
 function applyPieceTransform(piece) {
-  piece.el.style.transform = `translate(${piece.x}px, ${piece.y}px)`;
+  // rotate — после translate, вокруг центра элемента (стандартный
+  // transform-origin) — см. план «Повороты деталей»/puzzle-clusters.js
+  // (buildClusters требует rot%360===0 для стыковки). ||0 — деталь без
+  // включённого режима поворотов просто не несёт этого поля.
+  piece.el.style.transform = `translate(${piece.x}px, ${piece.y}px) rotate(${piece.rot || 0}deg)`;
 }
 
 /** Превью-картинка «как должно получиться» на столе — раньше была чисто
@@ -2221,32 +2282,56 @@ async function renderTable(root, puzzleId, signal, queryString) {
         <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
              см. план п.4), в своей плашке в стиле .zoom-controls, но в другом
              углу, чтобы не пересекаться ни с ним, ни с .preview-thumb. -->
+        <!-- Кластер сворачивается в один тоггл (см. план «Выдвигающиеся
+             кнопки») — .tools-row внутри анимированно схлопывается по
+             max-width/opacity (см. styles.css), сам тоггл остаётся видимым
+             всегда, состояние помнит bindCollapsibleCluster (app.js). -->
         <div class="board-tools">
-          <button class="btn outlined icon" id="shuffleBtn" type="button" title="${t("Перемешать")}" aria-label="${t("Перемешать")}">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+          <button class="btn outlined icon tools-toggle" id="toolsToggleBtn" type="button" title="${t("Свернуть/развернуть инструменты")}" aria-label="${t("Свернуть/развернуть инструменты")}" aria-expanded="true">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
           </button>
-          <button class="btn outlined icon" id="previewBtn" type="button" title="${t("Показать картинку")}" aria-label="${t("Показать картинку")}">
-            <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-          </button>
-          <label class="btn outlined icon" id="boardBgBtn" title="${t("Фон стола — выбрать цвет")}" aria-label="${t("Фон стола — выбрать цвет")}">
-            <svg class="icon" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
-            <input type="color" id="boardBgInput" value="#f8f6ef">
-          </label>
-          <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="${t("Вернуть фон по умолчанию")}" aria-label="${t("Вернуть фон по умолчанию")}" hidden>
-            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-          <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
-               (тянуть рамку по пустому месту вместо панорамы), пока включён,
-               одним пальцем. На десктопе Shift+тяни работает и без него —
-               кнопка просто альтернативный способ включить то же самое. -->
-          <button class="btn outlined icon" id="selectModeBtn" type="button" title="${t("Режим выделения")}" aria-label="${t("Режим выделения")}" aria-pressed="false">
-            <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
-          </button>
+          <div class="tools-row" id="toolsRow">
+            <button class="btn outlined icon" id="shuffleBtn" type="button" title="${t("Перемешать")}" aria-label="${t("Перемешать")}">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+            </button>
+            <button class="btn outlined icon" id="previewBtn" type="button" title="${t("Показать картинку")}" aria-label="${t("Показать картинку")}">
+              <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            </button>
+            <label class="btn outlined icon" id="boardBgBtn" title="${t("Фон стола — выбрать цвет")}" aria-label="${t("Фон стола — выбрать цвет")}">
+              <svg class="icon" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+              <input type="color" id="boardBgInput" value="#f8f6ef">
+            </label>
+            <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="${t("Вернуть фон по умолчанию")}" aria-label="${t("Вернуть фон по умолчанию")}" hidden>
+              <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
+                 (тянуть рамку по пустому месту вместо панорамы), пока включён,
+                 одним пальцем. На десктопе Shift+тяни работает и без него —
+                 кнопка просто альтернативный способ включить то же самое. -->
+            <button class="btn outlined icon" id="selectModeBtn" type="button" title="${t("Режим выделения")}" aria-label="${t("Режим выделения")}" aria-pressed="false">
+              <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
+            </button>
+          </div>
         </div>
         <div class="zoom-controls">
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="${t("Приблизить")}" aria-label="${t("Приблизить")}">+</button>
           <button class="btn outlined icon" id="zoomResetBtn" type="button" title="${t("Показать всё")}" aria-label="${t("Показать всё")}">⤢</button>
           <button class="btn outlined icon" id="zoomOutBtn" type="button" title="${t("Отдалить")}" aria-label="${t("Отдалить")}">−</button>
+        </div>
+        <!-- Подсказка/звук — верхний правый угол (см. план «Выдвигающиеся
+             кнопки»), тот же сворачиваемый кластер, что и .board-tools,
+             просто якорем на другом углу — тоггл справа, .tools-row
+             раскрывается влево (см. styles.css). -->
+        <div class="table-widgets">
+          <div class="tools-row" id="widgetsRow">
+            <button class="btn outlined icon" id="hintBtn" type="button" title="${t("Подсказка")}" aria-label="${t("Подсказка")}">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.4 1 1.2 1 2.05V17h6v-2.25c0-.85.4-1.65 1-2.05A7 7 0 0 0 12 2z"/></svg>
+            </button>
+            <button class="btn outlined icon" id="soundBtn" type="button"></button>
+          </div>
+          <button class="btn outlined icon tools-toggle" id="widgetsToggleBtn" type="button" title="${t("Свернуть/развернуть инструменты")}" aria-label="${t("Свернуть/развернуть инструменты")}" aria-expanded="true">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
         </div>
       </div>
     </div>`;
@@ -2280,6 +2365,14 @@ async function renderTable(root, puzzleId, signal, queryString) {
     : localStorage.getItem(shapeKey) === "asym";
   localStorage.setItem(shapeKey, asymmetric ? "asym" : "normal");
   const edges = window.PuzzleShapes.buildEdges(puzzle.seed, rows, cols, { asymmetric });
+  // Повороты — тот же приём хранения режима, что у формы выше (см. план
+  // «Повороты деталей»): чисто визуальный выбор конкретной попытки,
+  // localStorage по puzzleId, чтобы не «прыгало» при возврате.
+  const rotateKey = `puzzle_rotate_${puzzleId}`;
+  const rotationEnabled = queryString
+    ? new URLSearchParams(queryString).get("rotate") === "1"
+    : localStorage.getItem(rotateKey) === "1";
+  localStorage.setItem(rotateKey, rotationEnabled ? "1" : "0");
 
   // ── прогресс: сервер для вошедшего, localStorage для гостя ──
   let saved = null;
@@ -2314,10 +2407,15 @@ async function renderTable(root, puzzleId, signal, queryString) {
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const savedPiece = saved && Array.isArray(saved.pieces) && saved.pieces.find(pc => pc.r === r && pc.c === c);
-      let x, y;
-      if (savedPiece) { x = savedPiece.x; y = savedPiece.y; }
-      else { const cell = scatter.cells[scatterIdx++]; x = cell.x; y = cell.y; }
-      pieces.set(`${r},${c}`, { r, c, x, y });
+      let x, y, rot;
+      if (savedPiece) { x = savedPiece.x; y = savedPiece.y; rot = savedPiece.rot || 0; }
+      else {
+        const cell = scatter.cells[scatterIdx++]; x = cell.x; y = cell.y;
+        // Случайный старт из 4 положений — только у свежих деталей (не у
+        // уже сохранённых, см. выше) и только если режим включён.
+        rot = rotationEnabled ? [0, 90, 180, 270][Math.floor(Math.random() * 4)] : 0;
+      }
+      pieces.set(`${r},${c}`, { r, c, x, y, rot });
     }
   }
 
@@ -2347,15 +2445,22 @@ async function renderTable(root, puzzleId, signal, queryString) {
   const ZOOM_MIN = 0.12, ZOOM_MAX = 3.2;
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   function applyWorldTransform() { world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
-  function fitView() {
+  // fitBox — общая математика вписывания прямоугольника мировых координат в
+  // stage (см. план «Повороты...» — подсказка вписывает только пару целевых
+  // деталей, не весь стол). marginFactor меньше 1 — свободные поля вокруг
+  // (0.94 — почти впритык, как раньше у fitView; у подсказки поля пошире,
+  // чтобы обе детали не упирались в края экрана).
+  function fitBox(x0, y0, x1, y1, marginFactor = 0.94) {
     const rect = stage.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const scale = Math.min(rect.width / scatter.worldW, rect.height / scatter.worldH) * 0.94;
+    const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
+    const scale = Math.min(rect.width / w, rect.height / h) * marginFactor;
     zoom = clamp(scale, ZOOM_MIN, ZOOM_MAX);
-    panX = (rect.width - scatter.worldW * zoom) / 2;
-    panY = (rect.height - scatter.worldH * zoom) / 2;
+    panX = rect.width / 2 - ((x0 + x1) / 2) * zoom;
+    panY = rect.height / 2 - ((y0 + y1) / 2) * zoom;
     applyWorldTransform();
   }
+  function fitView() { fitBox(0, 0, scatter.worldW, scatter.worldH); }
   function zoomAt(clientX, clientY, factor) {
     const rect = stage.getBoundingClientRect();
     const cx = clientX - rect.left, cy = clientY - rect.top;
@@ -2463,7 +2568,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     // wheel-хендлер), а кнопки +/−/⤢ (и, отдельно найденный тот же баг,
     // кнопки в окне победы) не реагировали на клик вовсе.
     if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
-      || e.target.closest(".board-back") || e.target.closest(".presence-widget") || e.target.closest(".preview-panel")
+      || e.target.closest(".board-back") || e.target.closest(".table-widgets") || e.target.closest(".preview-panel")
       || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -2575,6 +2680,24 @@ async function renderTable(root, puzzleId, signal, queryString) {
     scheduleSave();
   }, { signal });
 
+  // Подсказка (см. план) — случайная ещё не состыкованная пара соседних
+  // деталей: подводим камеру и подсвечиваем обе на пару секунд. Ничего не
+  // двигает и не сохраняет — чисто визуальная наводка.
+  $(root, "#hintBtn").addEventListener("click", () => {
+    const pair = pickHintPair(pieces);
+    if (!pair) return;
+    const [a, b] = pair;
+    const size = CELL + 2 * pad;
+    fitBox(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x) + size, Math.max(a.y, b.y) + size, 0.5);
+    for (const p of [a, b]) {
+      p.el.classList.add("hint-glow");
+      setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
+    }
+  }, { signal });
+  bindSoundButton($(root, "#soundBtn"), signal);
+  bindCollapsibleCluster($(root, "#toolsToggleBtn"), $(root, "#toolsRow"), "puzzle_tools_collapsed", signal);
+  bindCollapsibleCluster($(root, "#widgetsToggleBtn"), $(root, "#widgetsRow"), "puzzle_widgets_collapsed", signal);
+
   /* ── перетаскивание детали: группа = объединение кластеров текущего выделения ──
      activeDrag — общее (не per-piece) состояние, см. блок авто-панорамы
      выше: rAF-тику edgePanTick нужно знать о текущем драге независимо от
@@ -2642,8 +2765,9 @@ async function renderTable(root, puzzleId, signal, queryString) {
       window.PuzzleClusters.stitchGroup(pieces, draggingKeys, CELL, SNAP_TOLERANCE);
       for (const k of draggingKeys) applyPieceTransform(pieces.get(k));
       const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
-      const { nextIds } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
+      const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
       lastClusterEdgeIds = nextIds;
+      if (newCount > 0) playConnectSound();
       updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(members), rows * cols);
       setSelected([]);
       scheduleSave();
@@ -2657,6 +2781,22 @@ async function renderTable(root, puzzleId, signal, queryString) {
     // элемент теряет захват указателя, каким бы ни был повод, поэтому это
     // надёжная точка для финального finish() и очистки activeDrag.
     el.addEventListener("lostpointercapture", finish, { signal });
+    // Поворот (см. план «Повороты деталей») — двойной клик/тап. Только у
+    // ОДИНОЧНОЙ детали: деталь внутри уже собранного кластера (>1) физически
+    // уже стоит вертикально (buildClusters требует rot===0 для стыковки, см.
+    // puzzle-clusters.js), крутить её второй раз незачем.
+    el.addEventListener("dblclick", () => {
+      if (clusterMembersOf(pieces, key).size > 1) return;
+      piece.rot = ((piece.rot || 0) + 90) % 360;
+      window.PuzzleClusters.stitchGroup(pieces, new Set([key]), CELL, SNAP_TOLERANCE);
+      applyPieceTransform(piece);
+      const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
+      lastClusterEdgeIds = nextIds;
+      if (newCount > 0) playConnectSound();
+      updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(members), rows * cols);
+      scheduleSave();
+    }, { signal });
   }
 
   /* ── сохранение прогресса ── */
@@ -2740,6 +2880,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     overlay.appendChild(card);
     stage.appendChild(overlay);
     launchConfetti(overlay);
+    playWinSound();
   }
 
   // Флаш сохранения при уходе со стола (смена маршрута), сворачивании вкладки
@@ -3004,6 +3145,93 @@ function launchConfetti(overlay) {
     else canvas.remove();
   }
   requestAnimationFrame(frame);
+}
+
+/* ───────────────────────── звук (см. план «Повороты деталей + звук +
+ * подсказка») ─────────────────────────
+ * Синтезированные тоны через Web Audio, без файлов-ассетов — короткий щелчок
+ * на стыковку (playConnectSound) и более протяжный на победу (playWinSound).
+ * Один AudioContext на вкладку, создаётся лениво при первом звуке (браузеры
+ * не разрешают создавать/резюмировать контекст ДО первого пользовательского
+ * жеста — к моменту первой стыковки жест уже был, так что resume() тут
+ * не нужен). Настройка — тумблер #soundBtn в тулбаре стола (renderTable/
+ * renderRoomTable), состояние в localStorage, читается ЖИВЬЁМ на каждый
+ * звук (не кэшируется в переменную) — так переключение мгновенно действует
+ * даже если тумблер переключили уже после того, как стол отрисовался. */
+const SOUND_KEY = "puzzle_sound";
+function soundEnabled() { return localStorage.getItem(SOUND_KEY) !== "off"; }
+let audioCtx = null;
+function getAudioCtx() {
+  if (!audioCtx) { try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; } }
+  return audioCtx;
+}
+/** tone({freq, dur, type, gain}) — один осциллятор с плавной огибающей
+ *  громкости (без щелчков атаки/отсечки на границах). */
+function tone({ freq, dur, type = "sine", gain = 0.16, delay = 0 }) {
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  const t0 = ctx.currentTime + delay;
+  const osc = ctx.createOscillator();
+  const g = ctx.createGain();
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, t0);
+  g.gain.setValueAtTime(0, t0);
+  g.gain.linearRampToValueAtTime(gain, t0 + 0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  osc.connect(g).connect(ctx.destination);
+  osc.start(t0);
+  osc.stop(t0 + dur + 0.02);
+}
+function playConnectSound() {
+  if (!soundEnabled()) return;
+  tone({ freq: 720, dur: 0.09, type: "triangle" });
+}
+function playWinSound() {
+  if (!soundEnabled()) return;
+  // Короткое взбегающее трезвучие — три ноты одна за другой (delay).
+  tone({ freq: 523.25, dur: 0.22, type: "sine", gain: 0.14 });
+  tone({ freq: 659.25, dur: 0.22, type: "sine", gain: 0.14, delay: 0.09 });
+  tone({ freq: 783.99, dur: 0.32, type: "sine", gain: 0.16, delay: 0.18 });
+}
+function applySoundButton(btn) {
+  const on = soundEnabled();
+  btn.setAttribute("aria-pressed", String(on));
+  btn.title = on ? t("Звук — выключить") : t("Звук — включить");
+  btn.setAttribute("aria-label", btn.title);
+  btn.innerHTML = on ? SOUND_ON_ICON : SOUND_OFF_ICON;
+}
+const SOUND_ON_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9H4z"/><path d="M16 8a5 5 0 0 1 0 8"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>';
+const SOUND_OFF_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M4 9v6h4l5 5V4L8 9H4z"/><path d="M16 9l5 6M21 9l-5 6"/></svg>';
+/** Общий обработчик тумблера — переиспользуется соло и комнатой (см.
+ *  renderTable/renderRoomTable). */
+function bindSoundButton(btn, signal) {
+  applySoundButton(btn);
+  btn.addEventListener("click", () => {
+    localStorage.setItem(SOUND_KEY, soundEnabled() ? "off" : "on");
+    applySoundButton(btn);
+  }, { signal });
+}
+
+/** Свёртывание кластера кнопок (низ-лево .board-tools / верх-право
+ *  .table-widgets) в компактную кнопку-тоггл — «выдвигающийся блок» (см.
+ *  план): toggleBtn всегда виден, rowEl — остальные кнопки, скрывается
+ *  через max-width/opacity (см. .tools-row в styles.css), а не display —
+ *  так есть анимация «выезда», а не мгновенное исчезновение. Состояние
+ *  запоминается в localStorage (свой ключ на каждый кластер), по умолчанию
+ *  развёрнут — не прячем инструменты от тех, кто ещё не знает про тоггл.
+ *  Общая на соло и комнату — оба места просто зовут её с разными ключами. */
+function bindCollapsibleCluster(toggleBtn, rowEl, storageKey, signal) {
+  const apply = collapsed => {
+    rowEl.classList.toggle("collapsed", collapsed);
+    toggleBtn.closest(".board-tools, .table-widgets")?.classList.toggle("collapsed", collapsed);
+    toggleBtn.setAttribute("aria-expanded", String(!collapsed));
+  };
+  apply(localStorage.getItem(storageKey) === "1");
+  toggleBtn.addEventListener("click", () => {
+    const collapsed = !rowEl.classList.contains("collapsed");
+    localStorage.setItem(storageKey, collapsed ? "1" : "0");
+    apply(collapsed);
+  }, { signal });
 }
 
 const ROOMS_PAGE_SIZE = 5;
@@ -3303,9 +3531,9 @@ async function renderRoom(root, roomId, signal) {
   if (signal.aborted) return;
   const grid = $(activeEl, "#roomPuzzleGrid");
 
-  async function playVariant(variant, asymmetric) {
+  async function playVariant(variant, asymmetric, rotate) {
     try {
-      const sessionId = await startRoomSession(roomId, variant.id, asymmetric);
+      const sessionId = await startRoomSession(roomId, variant.id, asymmetric, rotate);
       navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(sessionId)}`);
     } catch (e) {
       if (e.message === "room session limit reached") {
@@ -3523,63 +3751,76 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
              углу, чтобы не пересекаться ни с ним, ни с .preview-thumb, ни с
              кнопкой присутствия ниже. -->
         <div class="board-tools">
-          <button class="btn outlined icon" id="shuffleBtn" type="button" title="${t("Перемешать")}" aria-label="${t("Перемешать")}">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+          <button class="btn outlined icon tools-toggle" id="toolsToggleBtn" type="button" title="${t("Свернуть/развернуть инструменты")}" aria-label="${t("Свернуть/развернуть инструменты")}" aria-expanded="true">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
           </button>
-          <button class="btn outlined icon" id="previewBtn" type="button" title="${t("Показать картинку")}" aria-label="${t("Показать картинку")}">
-            <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
-          </button>
-          <label class="btn outlined icon" id="boardBgBtn" title="${t("Фон стола — выбрать цвет")}" aria-label="${t("Фон стола — выбрать цвет")}">
-            <svg class="icon" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
-            <input type="color" id="boardBgInput" value="#f8f6ef">
-          </label>
-          <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="${t("Вернуть фон по умолчанию")}" aria-label="${t("Вернуть фон по умолчанию")}" hidden>
-            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-          <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
-               (тянуть рамку по пустому месту вместо панорамы), пока включён,
-               одним пальцем. На десктопе Shift+тяни работает и без него —
-               кнопка просто альтернативный способ включить то же самое. -->
-          <button class="btn outlined icon" id="selectModeBtn" type="button" title="${t("Режим выделения")}" aria-label="${t("Режим выделения")}" aria-pressed="false">
-            <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
-          </button>
+          <div class="tools-row" id="toolsRow">
+            <button class="btn outlined icon" id="shuffleBtn" type="button" title="${t("Перемешать")}" aria-label="${t("Перемешать")}">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M16 3h5v5"/><path d="M4 20 21 3"/><path d="M21 16v5h-5"/><path d="M15 15l6 6"/><path d="M4 4l5 5"/></svg>
+            </button>
+            <button class="btn outlined icon" id="previewBtn" type="button" title="${t("Показать картинку")}" aria-label="${t("Показать картинку")}">
+              <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            </button>
+            <label class="btn outlined icon" id="boardBgBtn" title="${t("Фон стола — выбрать цвет")}" aria-label="${t("Фон стола — выбрать цвет")}">
+              <svg class="icon" viewBox="0 0 24 24"><circle cx="13.5" cy="6.5" r=".5" fill="currentColor"/><circle cx="17.5" cy="10.5" r=".5" fill="currentColor"/><circle cx="8.5" cy="7.5" r=".5" fill="currentColor"/><circle cx="6.5" cy="12.5" r=".5" fill="currentColor"/><path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.926 0 1.648-.746 1.648-1.688 0-.437-.18-.835-.437-1.125-.29-.289-.438-.652-.438-1.125a1.64 1.64 0 0 1 1.668-1.668h1.996c3.051 0 5.555-2.503 5.555-5.554C21.965 6.012 17.461 2 12 2z"/></svg>
+              <input type="color" id="boardBgInput" value="#f8f6ef">
+            </label>
+            <button class="btn outlined icon" id="boardBgResetBtn" type="button" title="${t("Вернуть фон по умолчанию")}" aria-label="${t("Вернуть фон по умолчанию")}" hidden>
+              <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+            </button>
+            <!-- На тач-устройствах нет Shift — этот тоггл даёт тот же жест
+                 (тянуть рамку по пустому месту вместо панорамы), пока включён,
+                 одним пальцем. На десктопе Shift+тяни работает и без него —
+                 кнопка просто альтернативный способ включить то же самое. -->
+            <button class="btn outlined icon" id="selectModeBtn" type="button" title="${t("Режим выделения")}" aria-label="${t("Режим выделения")}" aria-pressed="false">
+              <svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2" stroke-dasharray="4 3"/></svg>
+            </button>
+          </div>
         </div>
-        <!-- Присутствующие за столом и чат — рядом друг с другом, один и тот
-             же паттерн «кнопка-иконка с бейджем-числом + всплывающая
-             панель» (см. updatePresence/handleChatMessage ниже), а не
-             постоянно видимые панели или полноэкранная модалка — это лёгкие
-             быстрые виджеты, не диалог. Чат — намеренно эфемерный (см. план
-             «Чат на доску») — ничего не хранится ни на сервере, ни тут,
+        <!-- Подсказка/звук + присутствующие/чат — один сворачиваемый кластер
+             верхнего правого угла (см. план «Выдвигающиеся кнопки»): тот же
+             паттерн, что .board-tools, но якорем справа — тоггл справа,
+             .tools-row раскрывается влево. Чат — намеренно эфемерный (см.
+             план «Чат на доску») — ничего не хранится ни на сервере, ни тут,
              история живёт только пока открыта эта вкладка. -->
         <div class="table-widgets">
-          <div class="chat-widget">
-            <button class="btn outlined icon chat-btn" id="chatBtn" type="button"
-              title="${t("Чат")}" aria-label="${t("Чат")}" aria-haspopup="true" aria-expanded="false">
-              💬<span class="presence-count" id="chatUnread" hidden>0</span>
+          <div class="tools-row" id="widgetsRow">
+            <button class="btn outlined icon" id="hintBtn" type="button" title="${t("Подсказка")}" aria-label="${t("Подсказка")}">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.4 1 1.2 1 2.05V17h6v-2.25c0-.85.4-1.65 1-2.05A7 7 0 0 0 12 2z"/></svg>
             </button>
-            <div class="chat-popover hidden" id="chatPopover">
-              <p class="presence-popover-title">${t("Чат")}</p>
-              <div class="chat-messages" id="chatMessages">
-                <p class="state-note">${t("Пока никто ничего не написал.")}</p>
+            <button class="btn outlined icon" id="soundBtn" type="button"></button>
+            <div class="chat-widget">
+              <button class="btn outlined icon chat-btn" id="chatBtn" type="button"
+                title="${t("Чат")}" aria-label="${t("Чат")}" aria-haspopup="true" aria-expanded="false">
+                💬<span class="presence-count" id="chatUnread" hidden>0</span>
+              </button>
+              <div class="chat-popover hidden" id="chatPopover">
+                <p class="presence-popover-title">${t("Чат")}</p>
+                <div class="chat-messages" id="chatMessages">
+                  <p class="state-note">${t("Пока никто ничего не написал.")}</p>
+                </div>
+                <form class="chat-form" id="chatForm">
+                  <input class="text-input" id="chatInput" type="text" maxlength="500" placeholder="${t("Сообщение…")}" autocomplete="off">
+                  <button class="btn filled icon sm" type="submit" title="${t("Отправить")}" aria-label="${t("Отправить")}">
+                    <svg class="icon" viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-2-7-8-1z"/></svg>
+                  </button>
+                </form>
               </div>
-              <form class="chat-form" id="chatForm">
-                <input class="text-input" id="chatInput" type="text" maxlength="500" placeholder="${t("Сообщение…")}" autocomplete="off">
-                <button class="btn filled icon sm" type="submit" title="${t("Отправить")}" aria-label="${t("Отправить")}">
-                  <svg class="icon" viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-2-7-8-1z"/></svg>
-                </button>
-              </form>
+            </div>
+            <div class="presence-widget">
+              <button class="btn outlined icon presence-btn" id="presenceBtn" type="button"
+                title="${t("Участники за столом")}" aria-label="${t("Участники за столом")}" aria-haspopup="true" aria-expanded="false">
+                👥<span class="presence-count" id="presenceCount" hidden>0</span>
+              </button>
+              <div class="presence-popover hidden" id="presencePopover">
+                <p class="presence-popover-title">${t("За столом")}</p>
+                <div class="presence-popover-list" id="presenceList"></div>
+              </div>
             </div>
           </div>
-          <div class="presence-widget">
-            <button class="btn outlined icon presence-btn" id="presenceBtn" type="button"
-              title="${t("Участники за столом")}" aria-label="${t("Участники за столом")}" aria-haspopup="true" aria-expanded="false">
-              👥<span class="presence-count" id="presenceCount" hidden>0</span>
-            </button>
-            <div class="presence-popover hidden" id="presencePopover">
-              <p class="presence-popover-title">${t("За столом")}</p>
-              <div class="presence-popover-list" id="presenceList"></div>
-            </div>
-          </div>
+          <button class="btn outlined icon tools-toggle" id="widgetsToggleBtn" type="button" title="${t("Свернуть/развернуть инструменты")}" aria-label="${t("Свернуть/развернуть инструменты")}" aria-expanded="true">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+          </button>
         </div>
         <div class="zoom-controls">
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="${t("Приблизить")}" aria-label="${t("Приблизить")}">+</button>
@@ -3640,6 +3881,8 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   // Форма зафиксирована на СЕАНСЕ (см. server.js, asymmetric_shape) — общая
   // для всех участников комнаты, а не выбор каждого зрителя по отдельности.
   const edges = window.PuzzleShapes.buildEdges(puzzle.seed, rows, cols, { asymmetric: session.asymmetricShape });
+  // Повороты — тем же приёмом, что форма выше (см. server.js, rotation_enabled).
+  const rotationEnabled = session.rotationEnabled;
 
   const world = $(root, "#world");
   const progressEl = $(root, "#tableProgress");
@@ -3769,15 +4012,22 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const ZOOM_MIN = 0.12, ZOOM_MAX = 3.2;
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
   function applyWorldTransform() { world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
-  function fitView() {
+  // fitBox — общая математика вписывания прямоугольника мировых координат в
+  // stage (см. план «Повороты...» — подсказка вписывает только пару целевых
+  // деталей, не весь стол). marginFactor меньше 1 — свободные поля вокруг
+  // (0.94 — почти впритык, как раньше у fitView; у подсказки поля пошире,
+  // чтобы обе детали не упирались в края экрана).
+  function fitBox(x0, y0, x1, y1, marginFactor = 0.94) {
     const rect = stage.getBoundingClientRect();
     if (!rect.width || !rect.height) return;
-    const scale = Math.min(rect.width / scatter.worldW, rect.height / scatter.worldH) * 0.94;
+    const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
+    const scale = Math.min(rect.width / w, rect.height / h) * marginFactor;
     zoom = clamp(scale, ZOOM_MIN, ZOOM_MAX);
-    panX = (rect.width - scatter.worldW * zoom) / 2;
-    panY = (rect.height - scatter.worldH * zoom) / 2;
+    panX = rect.width / 2 - ((x0 + x1) / 2) * zoom;
+    panY = rect.height / 2 - ((y0 + y1) / 2) * zoom;
     applyWorldTransform();
   }
+  function fitView() { fitBox(0, 0, scatter.worldW, scatter.worldH); }
   function zoomAt(clientX, clientY, factor) {
     const rect = stage.getBoundingClientRect();
     const cx = clientX - rect.left, cy = clientY - rect.top;
@@ -3989,10 +4239,31 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // и слепая замена state.pieces целиком откатывала бы этот чужой ход.
     const arr = [...next.entries()].map(([k, pos]) => {
       const piece = pieces.get(k);
-      return { r: piece.r, c: piece.c, x: pos.x, y: pos.y, placed: false };
+      // rot — сохраняем ТЕКУЩИЙ поворот детали (см. план «Повороты
+      // деталей»): «Перемешать» двигает только x/y, без этого поля
+      // sanitizePieceItem на сервере молча подставил бы 0 и откатил бы
+      // повёрнутую-но-ещё-не-состыкованную деталь обратно вертикально.
+      return { r: piece.r, c: piece.c, x: pos.x, y: pos.y, rot: piece.rot || 0, placed: false };
     });
     socket.send({ type: "shuffle", pieces: arr });
   }, { signal });
+
+  // Подсказка + звук — см. солo-версию выше, тот же приём.
+  $(root, "#hintBtn").addEventListener("click", () => {
+    if (!pieces) return;
+    const pair = pickHintPair(pieces);
+    if (!pair) return;
+    const [a, b] = pair;
+    const size = CELL + 2 * pad;
+    fitBox(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x) + size, Math.max(a.y, b.y) + size, 0.5);
+    for (const p of [a, b]) {
+      p.el.classList.add("hint-glow");
+      setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
+    }
+  }, { signal });
+  bindSoundButton($(root, "#soundBtn"), signal);
+  bindCollapsibleCluster($(root, "#toolsToggleBtn"), $(root, "#toolsRow"), "puzzle_tools_collapsed", signal);
+  bindCollapsibleCluster($(root, "#widgetsToggleBtn"), $(root, "#widgetsRow"), "puzzle_widgets_collapsed", signal);
 
   function updateProgressLabel(placed, total) {
     progressEl.innerHTML = "";
@@ -4052,6 +4323,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     overlay.appendChild(card);
     stage.appendChild(overlay);
     launchConfetti(overlay);
+    playWinSound();
   }
 
   /* ── перетаскивание детали: локально сразу, серверу — троттлингом ── */
@@ -4136,6 +4408,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
       const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
       lastClusterEdgeIds = nextIds;
+      if (newCount > 0) playConnectSound();
       updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(members), rows * cols);
       setSelected([]);
       // >1 детали тащили или стыковка образовала новое ребро — шлём группой
@@ -4156,14 +4429,29 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // элемент теряет захват указателя, каким бы ни был повод, поэтому это
     // надёжная точка для финального finish() и очистки draggingKeys/activeDrag.
     el.addEventListener("lostpointercapture", finish, { signal });
+    // Поворот — двойной клик/тап, см. аналогичный обработчик в renderTable/
+    // bindPieceDrag. Только у одиночной детали (кластер >1 уже rot===0).
+    el.addEventListener("dblclick", () => {
+      if (clusterMembersOf(pieces, key).size > 1) return;
+      piece.rot = ((piece.rot || 0) + 90) % 360;
+      window.PuzzleClusters.stitchGroup(pieces, new Set([key]), CELL, SNAP_TOLERANCE);
+      applyPieceTransform(piece);
+      const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
+      lastClusterEdgeIds = nextIds;
+      if (newCount > 0) playConnectSound();
+      updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(members), rows * cols);
+      sendGroup(new Set([key]));
+    }, { signal });
   }
 
-  function reconcilePiece(r, c, x, y) {
+  function reconcilePiece(r, c, x, y, rot) {
     const key = `${r},${c}`;
     if (draggingKeys.has(key)) return;
     const piece = pieces.get(key);
     if (!piece) return;
     piece.x = x; piece.y = y;
+    if (rot !== undefined) piece.rot = rot;
     applyPieceTransform(piece);
   }
 
@@ -4173,14 +4461,17 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const known = initialPieces && initialPieces.find(p => p.r === r && p.c === c);
-        let x, y;
-        if (known) { x = known.x; y = known.y; }
-        else { const cell = scatter.cells[scatterIdx++]; x = cell.x; y = cell.y; }
-        pieces.set(`${r},${c}`, { r, c, x, y });
+        let x, y, rot;
+        if (known) { x = known.x; y = known.y; rot = known.rot || 0; }
+        else {
+          const cell = scatter.cells[scatterIdx++]; x = cell.x; y = cell.y;
+          rot = rotationEnabled ? [0, 90, 180, 270][Math.floor(Math.random() * 4)] : 0;
+        }
+        pieces.set(`${r},${c}`, { r, c, x, y, rot });
       }
     }
 
-    const sendMove = throttle(p => socket.send({ type: "move", r: p.r, c: p.c, x: p.x, y: p.y }), 70);
+    const sendMove = throttle(p => socket.send({ type: "move", r: p.r, c: p.c, x: p.x, y: p.y, rot: p.rot || 0 }), 70);
     // keys — только детали ЭТОГО жеста (см. bindRoomPieceDrag), не весь
     // борд: сервер мержит group/shuffle по ключу поверх своего состояния
     // (см. server.js), полный локальный снимок отправителя мог быть
@@ -4188,7 +4479,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // затирал чужой параллельный ход (гонка при одновременном перетаскивании
     // разными участниками — регресс test/e2e-rooms.mjs).
     const sendGroup = throttle(keys => {
-      const arr = [...keys].map(k => { const p = pieces.get(k); return { r: p.r, c: p.c, x: p.x, y: p.y, placed: false }; });
+      const arr = [...keys].map(k => { const p = pieces.get(k); return { r: p.r, c: p.c, x: p.x, y: p.y, rot: p.rot || 0, placed: false }; });
       socket.send({ type: "group", pieces: arr });
     }, 70);
 
@@ -4209,7 +4500,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // Раскладку никто не задал — эту раскладку и предлагаем как каноническую
     // (см. план: "первый валидный init побеждает", гонка самоисцеляется).
     if (!initialPieces) {
-      socket.send({ type: "init", pieces: [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, placed: false })) });
+      socket.send({ type: "init", pieces: [...pieces.values()].map(p => ({ r: p.r, c: p.c, x: p.x, y: p.y, rot: p.rot || 0, placed: false })) });
     }
   }
 
@@ -4220,7 +4511,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     if (msg.you) myIdentity = msg.you;
     if (msg.type === "sync") {
       if (!pieces) return void buildBoard(msg.pieces);
-      if (msg.pieces) for (const p of msg.pieces) reconcilePiece(p.r, p.c, p.x, p.y);
+      if (msg.pieces) for (const p of msg.pieces) reconcilePiece(p.r, p.c, p.x, p.y, p.rot);
       // Кластеры/вспышка/прогресс пересчитываются здесь целиком — это ловит
       // и стыковку своим драгом (эхо своего же group/shuffle), и стыковку
       // чужим драгом (пришедшую только через sync), одним и тем же путём.
@@ -4319,6 +4610,10 @@ function route() {
   // на /room/... Сами renderCategories/renderCategoryPage переопределяют
   // это после загрузки своих данных (см. setPageMeta там).
   setPageMeta(DEFAULT_TITLE, DEFAULT_DESCRIPTION);
+  // Обучение библиотеки (#libraryHelpBtn) — только на самой главной, не на
+  // /categories, /profile/:id и т.п., где renderLibrary тоже мог бы
+  // сработать как fallback, но тур библиотеки там ни при чём.
+  document.getElementById("libraryHelpBtn").hidden = pathname !== "/";
 
   const run = roomTableMatch
     ? renderRoomTable(root, decodeURIComponent(roomTableMatch[1]), decodeURIComponent(roomTableMatch[2]), signal)

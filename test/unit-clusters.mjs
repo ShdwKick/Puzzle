@@ -48,6 +48,56 @@ ok("tolerance(100) === 28", near(TOL, 28));
   ok("buildClusters: всего кластеров — 2", members.size === 2);
 }
 
+/* ── buildClusters: повороты (см. план «Повороты деталей + звук +
+   подсказка») — сосед стыкуется, только если ОБА rot%360===0 ── */
+{
+  // Позиция идеальная, но одна деталь повёрнута на 90° — не стыкуются.
+  const pieces = [
+    { r: 0, c: 0, x: 0, y: 0, rot: 90 },
+    { r: 0, c: 1, x: 100, y: 0, rot: 0 },
+  ];
+  const { members } = buildClusters(pieces, CELL, TOL);
+  ok("buildClusters: позиция верна, но одна деталь повёрнута — НЕ стыкуются", largestClusterSize(members) === 1);
+}
+{
+  // Обе повёрнуты, но ОДИНАКОВО (не 0) — по правилу это тоже НЕ стыковка:
+  // для настоящей сборки нужен именно rot===0, не просто совпадение углов.
+  const pieces = [
+    { r: 0, c: 0, x: 0, y: 0, rot: 180 },
+    { r: 0, c: 1, x: 100, y: 0, rot: 180 },
+  ];
+  const { members } = buildClusters(pieces, CELL, TOL);
+  ok("buildClusters: обе повёрнуты одинаково (не 0°) — всё равно НЕ стыкуются", largestClusterSize(members) === 1);
+}
+{
+  // Обе на 0° (явно) — стыкуются как обычно.
+  const pieces = [
+    { r: 0, c: 0, x: 0, y: 0, rot: 0 },
+    { r: 0, c: 1, x: 100, y: 0, rot: 0 },
+  ];
+  const { members } = buildClusters(pieces, CELL, TOL);
+  ok("buildClusters: обе явно на 0° — стыкуются", largestClusterSize(members) === 2);
+}
+{
+  // rot отсутствует (старые сохранённые данные до этой фичи) — трактуется
+  // как 0 (||0 в buildClusters), стыковка работает как раньше без изменений.
+  const pieces = [
+    { r: 0, c: 0, x: 0, y: 0 },
+    { r: 0, c: 1, x: 100, y: 0 },
+  ];
+  const { members } = buildClusters(pieces, CELL, TOL);
+  ok("buildClusters: rot отсутствует у обеих — совместимость со старыми данными, стыкуются", largestClusterSize(members) === 2);
+}
+{
+  // rot===360 (полный оборот) — тоже эквивалент 0° (% 360 в buildClusters).
+  const pieces = [
+    { r: 0, c: 0, x: 0, y: 0, rot: 360 },
+    { r: 0, c: 1, x: 100, y: 0, rot: 0 },
+  ];
+  const { members } = buildClusters(pieces, CELL, TOL);
+  ok("buildClusters: rot===360 эквивалентен 0° — стыкуются", largestClusterSize(members) === 2);
+}
+
 /* ── connectedPiecesCount: счётчик "собрано" — сумма ВСЕХ кластеров от 2,
  * не только самого большого (регресс на запрос пользователя: раньше
  * счётчик использовал largestClusterSize, и деталь, состыкованная в
