@@ -1291,7 +1291,9 @@ function buildInProgressCard(ip, signal, onDeleted) {
       </div>
       <p class="puzzle-card-meta"></p>
     </div>`;
-  $(card, "img").src = ip.imageUrl;
+  const img = $(card, "img");
+  img.src = ip.imageUrl;
+  img.alt = puzzleDisplayTitle(ip);
   $(card, ".puzzle-card-title").textContent = puzzleDisplayTitle(ip);
   const badge = $(card, ".puzzle-card-badge");
   badge.textContent = `${Math.round((ip.piecesPlaced / ip.piecesTotal) * 100)}%`;
@@ -2094,7 +2096,10 @@ async function renderCategories(root, signal) {
     thumb.className = "category-block-thumb";
     const img = document.createElement("img");
     img.src = cover.imageUrl;
-    img.alt = "";
+    // Название категории, не пусто — та же правка, что и у серверного
+    // categoriesListHtml (см. server.js): картиночный поиск может завести
+    // сюда, alt тогда должен что-то говорить сам по себе.
+    img.alt = categoryDisplayName(c);
     img.loading = "lazy";
     thumb.appendChild(img);
     const body = document.createElement("div");

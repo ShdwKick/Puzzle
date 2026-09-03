@@ -1104,7 +1104,7 @@ const DEFAULT_TITLE = "Пазлы онлайн бесплатно — собра
 const DEFAULT_DESCRIPTION = "Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.";
 const DEFAULT_HEAD_BLOCK = `  <div class="library-head">
     <h1>Пазлы онлайн бесплатно — собрать пазл в браузере</h1>
-    <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
+    <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Можно собирать одному или вместе с друзьями. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
   </div>`;
 const DEFAULT_LOADING_NOTE = `  <p class="state-note">Загружаем библиотеку пазлов…</p>`;
 
@@ -1160,7 +1160,12 @@ function categoriesListHtml() {
   // порядке sort_order/created_at (см. stmt.categoryFirstImage).
   const items = cats.map(c => {
     const cover = stmt.categoryFirstImage.get(c.id);
-    const img = cover ? `<img src="${escapeHtml(imageUrlFor(cover.image_file))}" alt="" loading="lazy">` : "";
+    // alt — название категории (не пусто): картиночный поиск может завести
+    // сюда отдельно от текста рядом (см. правку «SEO-аудит» — пустой alt на
+    // единственных реально SSR-рендерящихся <img> во всём приложении был
+    // упущенной возможностью, хоть соседний текст ссылки его технически и
+    // дублирует для скринридера).
+    const img = cover ? `<img src="${escapeHtml(imageUrlFor(cover.image_file))}" alt="${escapeHtml(c.name)}" loading="lazy">` : "";
     return `<li><a href="/category/${encodeURIComponent(c.slug)}">${img}${escapeHtml(c.name)} (${c.count})</a></li>`;
   }).join("\n    ");
   return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
