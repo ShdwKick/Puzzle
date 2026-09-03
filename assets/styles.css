@@ -656,6 +656,35 @@ a{color:inherit}
 #puzzlePreviewModalBackdrop .modal-head{position:absolute;top:.6rem;left:.6rem;right:.6rem;z-index:2;justify-content:flex-end}
 #puzzlePreviewModalBackdrop .modal-head-actions .icon-btn{background:rgba(0,0,0,.45);color:#fff}
 .modal-head-actions{display:flex;align-items:center;gap:.1rem}
+/* Модалка выбора сложности (см. план «Стилистически интереснее») — тот же
+   приём «картинка на всю ширину + шапка плавает поверх», что у превью
+   пазла выше (#puzzlePreviewModalBackdrop) — .puzzle-preview-image
+   переиспользуется как есть, свой класс под неё тут не заводим. */
+#difficultyModalTitle{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+#difficultyModalBackdrop .modal{position:relative}
+#difficultyModalBackdrop .modal-head{position:absolute;top:.6rem;left:.6rem;right:.6rem;z-index:2;justify-content:flex-end}
+#difficultyModalBackdrop .modal-head .icon-btn{background:rgba(0,0,0,.45);color:#fff}
+.difficulty-caption{font-weight:650;font-size:1rem;margin-top:.8rem}
+/* Плитки уровней сложности вместо прежнего <select> (см. renderDifficultyGrid
+   в app.js) — крупнее и заметнее ряда в выпадающем списке, выбранная
+   подсвечена акцентным цветом вместо синей рамки нативного select:checked. */
+.difficulty-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-top:.9rem}
+.difficulty-pill{
+  display:flex;flex-direction:column;align-items:center;gap:.15rem;
+  padding:.65rem .4rem;border-radius:var(--md-sys-shape-corner-l);
+  border:1px solid var(--md-sys-color-outline-variant);background:var(--md-sys-color-surface-container-low);
+  cursor:pointer;transition:transform .15s var(--ease-std),border-color .15s var(--ease-std),background .15s var(--ease-std);
+}
+.difficulty-pill:hover{transform:translateY(-1px);border-color:var(--md-sys-color-primary)}
+.difficulty-pill.is-selected{background:var(--md-sys-color-primary);border-color:var(--md-sys-color-primary)}
+.difficulty-pill.is-selected .difficulty-pill-level,
+.difficulty-pill.is-selected .difficulty-pill-count{color:var(--md-sys-color-on-primary)}
+.difficulty-pill-level{font-weight:650;font-size:.92rem}
+.difficulty-pill-count{font-size:.76rem;color:var(--md-sys-color-on-surface-variant)}
+#difficultyPlayBtn{width:100%;margin-top:1.1rem}
 /* Оценка на окне победы (см. план «Оценка пазла на окне победы») —
    5 звёзд, контурные по умолчанию, заливаются акцентным цветом до выбранной
    (или наведённой) включительно. */

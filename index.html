@@ -433,9 +433,14 @@
 <!-- ===================== МОДАЛКА: ВЫБОР СЛОЖНОСТИ =====================
      Общая на все карточки пазлов (и библиотека, и комната) — buildCard()
      всегда показывает одну кнопку «За стол»; если у пазла больше одного
-     уровня сложности, клик по ней открывает эту модалку с выпадающим
-     списком вместо прежнего ряда мелких кнопок на самой карточке (см.
-     openDifficultyModal в assets/app.js). -->
+     уровня сложности, клик по ней открывает эту модалку вместо прежнего
+     ряда мелких кнопок на самой карточке (см. openDifficultyModal в
+     assets/app.js). Картинка на всю ширину + сетка уровней плитками —
+     тот же визуальный приём, что у превью пазла (#puzzlePreviewModalBackdrop,
+     по образцу Movies): h2 спрятан sr-only (только aria-labelledby),
+     .modal-head плавает поверх картинки, видимое название — под ней в
+     .difficulty-caption. Плитки уровней (#difficultyGrid) заполняет и
+     подсвечивает выбранную openDifficultyModal — вместо прежнего <select>. -->
 <div class="modal-backdrop hidden" id="difficultyModalBackdrop">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="difficultyModalTitle">
     <div class="modal-head">
@@ -444,10 +449,9 @@
         <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
     </div>
-    <div class="bar">
-      <select class="text-input" id="difficultySelect"></select>
-      <button class="btn filled" id="difficultyPlayBtn" type="button">Играть</button>
-    </div>
+    <img class="puzzle-preview-image" id="difficultyImage" alt="">
+    <p class="difficulty-caption" id="difficultyCaption"></p>
+    <div class="difficulty-grid" id="difficultyGrid"></div>
     <!-- «Экстремальный» уровень (см. README) — та же сетка и картинка, но
          форма деталей ассиметричная (см. assets/puzzle-shapes.js, режим
          asymmetric): выступы смещены от центра грани и разного размера с
@@ -465,6 +469,7 @@
       <input type="checkbox" id="difficultyRotate">
       <span>Повороты деталей — детали нужно ещё повернуть, не только сложить</span>
     </label>
+    <button class="btn filled" id="difficultyPlayBtn" type="button">Играть</button>
   </div>
 </div>
 

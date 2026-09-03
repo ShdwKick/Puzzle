@@ -317,8 +317,8 @@ const EN = {
   "Пазлы, сгруппированные по темам — можно смотреть по одной вместо всей библиотеки сразу.":
     "Puzzles grouped by theme — browse one at a time instead of the whole library at once.",
   "Карточка пазла": "Puzzle card",
-  "Нажмите на неё — откроется превью с рейтингом и выбором сложности. Кнопка «За стол» рядом сразу начинает сборку на лёгком уровне.":
-    "Click it — a preview opens with the rating and a difficulty picker. The “Play” button next to it jumps straight into an easy build.",
+  "Нажмите на неё — откроется превью с рейтингом и автором (если это чьё-то фото). Кнопка «За стол» рядом сразу открывает выбор сложности.":
+    "Click it — a preview opens with the rating and the author (if it's someone's own photo). The “Play” button next to it opens the difficulty picker right away.",
   "Собирайте пазл вместе с друзьями в реальном времени — общий стол, чат и список участников.":
     "Build a puzzle together with friends in real time — a shared table, chat, and a list of who's there.",
   "Вход": "Log in",
@@ -487,20 +487,48 @@ function buildDifficultyOptions(select, variants) {
     select.appendChild(opt);
   });
 }
-let pendingDifficultyChoice = null; // {variants, onPlay} между открытием модалки и подтверждением выбора
+let pendingDifficultyChoice = null; // {variants, onPlay, idx} между открытием модалки и подтверждением выбора
+/** Плитки уровней сложности вместо прежнего <select> (см. план
+ *  «Стилистически интереснее») — та же подпись «Уровень — N деталей», что
+ *  строила buildDifficultyOptions, просто карточкой, не строкой списка.
+ *  Перерисовывается целиком при каждом выборе — вариантов всего 6, дороже
+ *  городить точечное обновление одного класса, чем один невидимый reflow. */
+function renderDifficultyGrid(grid, variants, choice) {
+  grid.innerHTML = "";
+  variants.forEach((v, i) => {
+    const total = v.gridRows * v.gridCols;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "difficulty-pill" + (i === choice.idx ? " is-selected" : "");
+    btn.setAttribute("aria-pressed", String(i === choice.idx));
+    const level = document.createElement("span");
+    level.className = "difficulty-pill-level";
+    level.textContent = t(DIFFICULTY_LABELS[i]) || `${t("Уровень")} ${i + 1}`;
+    const count = document.createElement("span");
+    count.className = "difficulty-pill-count";
+    count.textContent = `${total} ${tn(total, ["деталь", "детали", "деталей"], ["piece", "pieces"])}`;
+    btn.append(level, count);
+    btn.addEventListener("click", () => { choice.idx = i; renderDifficultyGrid(grid, variants, choice); });
+    grid.appendChild(btn);
+  });
+}
 function openDifficultyModal(title, variants, onPlay) {
+  // h2 — sr-only (см. styles.css, тот же приём, что у превью пазла), видимое
+  // название — в .difficulty-caption под картинкой.
   document.getElementById("difficultyModalTitle").textContent = `${t("Выберите сложность")} — «${title}»`;
-  buildDifficultyOptions(document.getElementById("difficultySelect"), variants);
+  document.getElementById("difficultyCaption").textContent = title;
+  const img = document.getElementById("difficultyImage");
+  img.src = variants[0].imageUrl; img.alt = title;
+  pendingDifficultyChoice = { variants, onPlay, idx: 0 };
+  renderDifficultyGrid(document.getElementById("difficultyGrid"), variants, pendingDifficultyChoice);
   document.getElementById("difficultyAsymmetric").checked = false; // не запоминаем между открытиями — осознанный выбор каждый раз
   document.getElementById("difficultyRotate").checked = false;
-  pendingDifficultyChoice = { variants, onPlay };
   openModal("difficultyModalBackdrop");
 }
 bindModal("difficultyModalBackdrop", null, "difficultyModalClose");
 document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
   if (!pendingDifficultyChoice) return;
-  const { variants, onPlay } = pendingDifficultyChoice;
-  const idx = Number(document.getElementById("difficultySelect").value);
+  const { variants, onPlay, idx } = pendingDifficultyChoice;
   const asymmetric = document.getElementById("difficultyAsymmetric").checked;
   const rotate = document.getElementById("difficultyRotate").checked;
   closeModal("difficultyModalBackdrop");
