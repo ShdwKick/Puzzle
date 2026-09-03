@@ -63,7 +63,11 @@ const ASSETS_DIR = path.join(__dirname, "assets");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
 const PUZZLE_PHOTO_DIR = path.join(DATA_DIR, "puzzle-photos");
 const MAX_PHOTO_BYTES = parseInt(process.env.MAX_PHOTO_BYTES || String(4 * 1024 * 1024), 10);
-const PIECE_PRESETS = [12, 48, 108, 216, 300, 480];
+// Мастер/Легенда (два последних уровня) увеличены — 300→600, 480→1000 (см.
+// план «Обновить пресеты сложности»). Первые четыре не трогаем: они несут
+// LEGACY_BUILTIN_TOTALS/EXPECTED_LEGACY_GRID ниже — менять их означало бы
+// расходиться с уже сохранённым pieces JSON у встроенных пазлов.
+const PIECE_PRESETS = [12, 48, 108, 216, 600, 1000];
 const CELL = 100; // должно совпадать с CELL в assets/app.js
 // Временное послабление (см. план «до 5 параллельных сборок») — потом,
 // когда понадобится, ограничим строже; пока просто константа-потолок,
@@ -120,6 +124,23 @@ db.exec(`
     PRIMARY KEY (user_id, puzzle_id)
   );
   CREATE INDEX IF NOT EXISTS idx_progress_user ON puzzle_progress(user_id);
+
+  -- Оценка по 5-балльной шкале (см. план «Оценка пазла на окне победы») —
+  -- ключ image_file (ГРУППА загрузки), не puzzle_id: оценивают сам пазл
+  -- (картинку), не конкретный уровень сложности, которым его собрали —
+  -- тот же принцип, что у category_id/title/moderation_status. rater_id —
+  -- user.id вошедшего ИЛИ анонимная личность из cookie (тот же приём, что
+  -- у комнат, см. getOrCreateAnonIdentity) — оценивать можно и без входа,
+  -- как и играть. PRIMARY KEY даёт upsert «одна оценка на человека на
+  -- пазл, повторная — просто меняет прежнюю».
+  CREATE TABLE IF NOT EXISTS puzzle_ratings (
+    image_file  TEXT NOT NULL,
+    rater_id    TEXT NOT NULL,
+    rating      INTEGER NOT NULL,
+    created_at  INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL,
+    PRIMARY KEY (image_file, rater_id)
+  );
 
   CREATE TABLE IF NOT EXISTS rooms (
     id          TEXT PRIMARY KEY,
@@ -372,6 +393,13 @@ const stmt = {
       updated_at = excluded.updated_at,
       completed_at = excluded.completed_at`),
   deleteProgress: db.prepare("DELETE FROM puzzle_progress WHERE user_id = ? AND puzzle_id = ?"),
+  // Оценка (см. план «Оценка пазла на окне победы») — upsert одним запросом,
+  // тот же приём excluded.*, что у upsertProgress выше.
+  upsertRating: db.prepare(`
+    INSERT INTO puzzle_ratings (image_file,rater_id,rating,created_at,updated_at) VALUES (?,?,?,?,?)
+    ON CONFLICT(image_file,rater_id) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at`),
+  myRating: db.prepare("SELECT rating FROM puzzle_ratings WHERE image_file = ? AND rater_id = ?"),
+  ratingSummary: db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS avg FROM puzzle_ratings WHERE image_file = ?"),
   // Список незавершённых сборок для «Продолжить сборку» над библиотекой
   // (см. план) — только публичные пазлы (owner_user_id IS NULL): свои фото,
   // загруженные в комнату, вне контекста той комнаты не открываются вообще
@@ -926,6 +954,26 @@ for (const [key, [rows, cols]] of Object.entries(EXPECTED_LEGACY_GRID)) {
   }
 }
 
+// Одноразовая уборка (см. план «Обновить пресеты сложности») — id
+// неleгаси-уровней завязан на сам total (`${key}-${total}`, см. цикл выше),
+// поэтому смена PIECE_PRESETS не трогает старые строки "hills-300"/
+// "hills-480" и т.п. автоматически — они просто перестают попадать в цикл
+// вставки и остаются в БД осиротевшими, раздувая группу до 8 вариантов
+// вместо 6 (два лишних уровня без метки сложности на клиенте, см.
+// DIFFICULTY_LABELS в app.js). Чистим только то, чем никогда не играли в
+// комнате (тот же guard, что у DELETE /internal/puzzles/:id) — если сеанс
+// есть, оставляем строку как есть, не рискуя чужим сохранённым pieces JSON.
+const RETIRED_BUILTIN_TOTALS = [300, 480];
+for (const img of BUILTIN_IMAGES) {
+  for (const oldTotal of RETIRED_BUILTIN_TOTALS) {
+    if (PIECE_PRESETS.includes(oldTotal)) continue;
+    const oldId = `${img.key}-${oldTotal}`;
+    if (!stmt.puzzle.get(oldId)) continue;
+    if (stmt.sessionsForPuzzle.get(oldId)) continue;
+    stmt.deletePuzzle.run(oldId);
+  }
+}
+
 function roomPayload(r, role, membersCount) {
   return { id: r.id, title: r.title, joinCode: r.join_code, createdBy: r.created_by,
     createdAt: r.created_at, updatedAt: r.updated_at, role, membersCount };
@@ -1042,17 +1090,21 @@ const DEFAULT_HEAD_BLOCK = `  <div class="library-head">
   </div>`;
 const DEFAULT_LOADING_NOTE = `  <p class="state-note">Загружаем библиотеку пазлов…</p>`;
 
-/** Плюрализация «пазл/пазла/пазлов» — тот же общий приём, что plural() в
+/** Русское склонение по числу — тот же общий приём, что plural() в
  *  assets/app.js (см. renderRoomsList «N участник/-а/-ов»), тут отдельная
  *  копия — это единственное место в server.js, где такое нужно. */
-function pluralPuzzles(n) {
+function pluralRu(n, one, few, many) {
   const mod10 = n % 10, mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return "пазл";
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return "пазла";
-  return "пазлов";
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
 }
+const pluralPuzzles = n => pluralRu(n, "пазл", "пазла", "пазлов");
+const pluralPieces = n => pluralRu(n, "деталь", "детали", "деталей");
 
-function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement }) {
+const DEFAULT_OG_IMAGE = `${PUBLIC_URL}/assets/og-image.png`;
+
+function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement, image }) {
   if (title) html = html.replaceAll(DEFAULT_TITLE, title);
   if (description) html = html.replaceAll(DEFAULT_DESCRIPTION, description);
   // Канонический URL встречается 3 раза байт-в-байт (canonical, og:url,
@@ -1063,6 +1115,13 @@ function applySeoOverride(html, { title, description, path: routePath, headBlock
   if (routePath) html = html.replaceAll(`${PUBLIC_URL}/"`, `${PUBLIC_URL}${routePath}"`);
   if (headBlock) html = html.replaceAll(DEFAULT_HEAD_BLOCK, headBlock);
   if (loadingNoteReplacement) html = html.replaceAll(DEFAULT_LOADING_NOTE, loadingNoteReplacement);
+  // og:image/twitter:image — картинка САМОГО пазла вместо общего баннера
+  // сайта (см. план «Публичная ссылка на пазл») — превью в мессенджере/
+  // соцсети должно показывать именно этот пазл, а не логотип сервиса.
+  // og:image:width/height НЕ трогаем — они посчитаны под баннер 1200×630,
+  // у реальных фото другие пропорции, но эти теги — необязательная
+  // подсказка, не критично, если чуть разойдётся с фактическим кадром.
+  if (image) html = html.replaceAll(DEFAULT_OG_IMAGE, image);
   return html;
 }
 
@@ -1105,6 +1164,7 @@ function serveApp(res, pathname) {
       });
     } else {
       const slugMatch = pathname.match(/^\/category\/([^/]+)$/);
+      const tableMatch = pathname.match(/^\/table\/([\w-]+)$/);
       if (slugMatch) {
         const category = stmt.categoryBySlug.get(decodeURIComponent(slugMatch[1]));
         if (category && category.status === "approved") {
@@ -1127,6 +1187,30 @@ function serveApp(res, pathname) {
     <h1>Пазлы: ${name}</h1>
     <p>${count} ${pluralPuzzles(count)} в категории «${name}» — собирайте онлайн бесплатно.</p>
   </div>`,
+          });
+        }
+      } else if (tableMatch) {
+        // Публичная ссылка на конкретный пазл (см. план «Публичная ссылка
+        // на пазл») — только библиотечные (owner_user_id IS NULL): своя
+        // приватная/ещё не одобренная загрузка сюда не должна течь чужому
+        // краулеру/превью в мессенджере даже по прямому угаданному id.
+        // Название — «сырое» puzzle.title (Холмы/Лес/...), НЕ вычисляемое
+        // «Категория #N» (см. puzzleDisplayTitle в app.js) — дублировать
+        // ранжирование по категориям тут ради SEO-заголовка не стоит той
+        // сложности, обычного узнаваемого названия достаточно для превью.
+        const puzzle = stmt.puzzle.get(tableMatch[1]);
+        if (puzzle && puzzle.owner_user_id === null) {
+          const title = escapeHtml(puzzle.title);
+          const pieces = puzzle.grid_rows * puzzle.grid_cols;
+          html = applySeoOverride(html, {
+            title: `Пазл «${title}» онлайн — собрать бесплатно | Что собираем?`,
+            description: `Собери пазл «${title}» онлайн бесплатно, без регистрации и скачивания — ${pieces} ${pluralPieces(pieces)}, прямо в браузере.`,
+            path: `/table/${encodeURIComponent(puzzle.id)}`,
+            headBlock: `  <div class="library-head">
+    <h1>Пазл «${title}»</h1>
+    <p>${pieces} ${pluralPieces(pieces)} — собирайте онлайн бесплатно, без регистрации и скачивания.</p>
+  </div>`,
+            image: `${PUBLIC_URL}${imageUrlFor(puzzle.image_file)}`,
           });
         }
       }
@@ -1613,12 +1697,28 @@ const server = http.createServer(async (req, res) => {
       // Пустые категории (0 пазлов) — не в sitemap: страница без единой
       // карточки не стоит краулингового бюджета (см. план «Не показываем
       // категорию, если в ней 0 пазлов», та же фильтрация — categoriesListHtml выше).
+      // Один URL на группу (не на каждый уровень сложности) — ведёт на
+      // САМЫЙ ЛЁГКИЙ вариант (см. план «Публичная ссылка на пазл»): для
+      // захода из поиска/шаринга это самый низкий порог входа, остальные
+      // уровни того же пазла всё равно на расстоянии одного клика
+      // (openDifficultyModal). puzzlesPublic уже отсортирован по
+      // sort_order/created_at — в рамках одной группы (одинаковый
+      // image_file) все строки делят эти же значения, так что порядок
+      // внутри группы решает только Map (первый увиденный ряд остаётся,
+      // если он легче уже сохранённого — см. цикл ниже).
+      const puzzleUrlByImage = new Map();
+      for (const row of stmt.puzzlesPublic.all()) {
+        const existing = puzzleUrlByImage.get(row.image_file);
+        const pieces = row.grid_rows * row.grid_cols;
+        if (!existing || pieces < existing.pieces) puzzleUrlByImage.set(row.image_file, { id: row.id, pieces });
+      }
       const urls = [
         { loc: `${PUBLIC_URL}/`, priority: "1.0" },
         { loc: `${PUBLIC_URL}/categories`, priority: "0.8" },
         ...stmt.listApprovedCategories.all()
           .filter(c => stmt.categoryPublicPuzzleCount.get(c.id).n > 0)
           .map(c => ({ loc: `${PUBLIC_URL}/category/${encodeURIComponent(c.slug)}`, priority: "0.6" })),
+        ...[...puzzleUrlByImage.values()].map(p => ({ loc: `${PUBLIC_URL}/table/${encodeURIComponent(p.id)}`, priority: "0.5" })),
       ];
       const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n`
         + urls.map(u => `  <url>\n    <loc>${escapeHtml(u.loc)}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`).join("\n")
@@ -1884,6 +1984,35 @@ async function api(req, res, url, user) {
       // прячется из списка.
       stmt.deleteProgress.run(user.id, puzzle.id);
       return json(res, 200, { ok: true });
+    }
+    return json(res, 405, { error: "method not allowed" });
+  }
+
+  // Оценка пазла по 5-балльной шкале (см. план «Оценка пазла на окне
+  // победы») — в отличие от progress выше, доступна и без входа (тот же
+  // анонимный cookie, что у комнат, см. getOrCreateAnonIdentity): оценить
+  // только что собранный пазл можно и не логинясь, как и саму сборку.
+  if (seg[1] === "puzzles" && seg[2] && seg[3] === "rating" && seg.length === 4) {
+    const puzzle = stmt.puzzle.get(seg[2]);
+    if (!puzzle) return json(res, 404, { error: "not found" });
+    const identity = user || getOrCreateAnonIdentity(req, res);
+
+    if (m === "GET") {
+      const summary = stmt.ratingSummary.get(puzzle.image_file);
+      const mine = stmt.myRating.get(puzzle.image_file, identity.id);
+      return json(res, 200, {
+        average: summary.n > 0 ? summary.avg : null, count: summary.n,
+        mine: mine ? mine.rating : null,
+      });
+    }
+    if (m === "PUT") {
+      const body = await readJson(req);
+      const rating = parseInt(body.rating, 10);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) return json(res, 400, { error: "bad rating" });
+      const ts = now();
+      stmt.upsertRating.run(puzzle.image_file, identity.id, rating, ts, ts);
+      const summary = stmt.ratingSummary.get(puzzle.image_file);
+      return json(res, 200, { ok: true, average: summary.avg, count: summary.n });
     }
     return json(res, 405, { error: "method not allowed" });
   }

@@ -199,7 +199,7 @@
 <main id="app" class="content">
   <div class="library-head">
     <h1>Пазлы онлайн бесплатно — собрать пазл в браузере</h1>
-    <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии.Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
+    <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Можно собирать одному или вместе с друзьями. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
   </div>
   <p class="state-note">Загружаем библиотеку пазлов…</p>
 </main>
@@ -368,6 +368,40 @@
     </div>
     <div id="addPuzzleLibraryMount"></div>
     <div id="uploadPuzzleFormMount" hidden></div>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: ПРЕВЬЮ ПАЗЛА =====================
+     Открывается кликом по самой карточке пазла (не по кнопке «За стол» —
+     та по-прежнему сразу открывает выбор сложности, см. кнопку play в
+     tplPuzzleCard, эта модалка — второй, более информативный путь, см.
+     план «Поделиться из превью и окна победы»). Дублирует выбор сложности
+     и «За стол» тут же, плюс картинка покрупнее, автор (если это чья-то
+     публикация) и рейтинг — то, что не помещалось на саму карточку.
+     openPuzzlePreviewModal в assets/app.js заполняет содержимое перед
+     каждым открытием — статичная разметка тут только форма. -->
+<div class="modal-backdrop hidden" id="puzzlePreviewModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="puzzlePreviewTitle">
+    <div class="modal-head">
+      <h2 id="puzzlePreviewTitle"></h2>
+      <button class="icon-btn" id="puzzlePreviewModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <img class="puzzle-preview-image" id="puzzlePreviewImage" alt="">
+    <a class="puzzle-card-author" id="puzzlePreviewAuthor" href="#" hidden></a>
+    <p class="puzzle-preview-rating" id="puzzlePreviewRating" hidden></p>
+    <div class="bar">
+      <select class="text-input" id="puzzlePreviewDifficulty"></select>
+      <button class="btn outlined icon" id="puzzlePreviewShareBtn" type="button" title="Скопировать ссылку на пазл" aria-label="Скопировать ссылку на пазл">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></svg>
+      </button>
+      <button class="btn filled" id="puzzlePreviewPlayBtn" type="button">За стол</button>
+    </div>
+    <label class="checkbox-row">
+      <input type="checkbox" id="puzzlePreviewAsymmetric">
+      <span>Ассиметричная форма деталей — сложнее, детали неровные</span>
+    </label>
   </div>
 </div>
 

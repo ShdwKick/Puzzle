@@ -245,6 +245,7 @@ a{color:inherit}
 .puzzle-card{
   position:relative;background:var(--md-sys-color-surface-container-low);
   border-radius:var(--md-sys-shape-corner-l);box-shadow:var(--e1);display:flex;flex-direction:column;
+  cursor:pointer; /* вся карточка кликабельна — открывает превью, см. buildCard */
 }
 /* Скругление верхних углов — теперь СВОЁ (border-radius + overflow:hidden
    именно на превью), не унаследованное от overflow:hidden всей карточки:
@@ -562,6 +563,7 @@ a{color:inherit}
   animation:puzzle-win-fade .25s var(--ease-emph-dec) both;
 }
 @keyframes puzzle-win-fade{from{opacity:0}to{opacity:1}}
+.confetti-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .win-card{
   background:var(--md-sys-color-surface-container-lowest);border-radius:var(--md-sys-shape-corner-xl);
   padding:2rem 2.2rem;text-align:center;box-shadow:var(--e2);max-width:22rem;
@@ -573,6 +575,27 @@ a{color:inherit}
   background:var(--md-sys-color-surface-container-high);
 }
 .win-actions{display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap}
+/* Превью пазла (см. план «Поделиться из превью и окна победы») — та же
+   картинка-плашка, что у окна победы, просто без текстового центрирования
+   вокруг (тут обычный модал, не win-card). */
+.puzzle-preview-image{
+  width:100%;max-height:16rem;object-fit:contain;border-radius:var(--md-sys-shape-corner-l);
+  background:var(--md-sys-color-surface-container-high);margin-bottom:.6rem;
+}
+.puzzle-preview-rating{color:var(--md-sys-color-on-surface-variant);font-size:.88rem;margin:.3rem 0 0}
+/* Оценка на окне победы (см. план «Оценка пазла на окне победы») —
+   5 звёзд, контурные по умолчанию, заливаются акцентным цветом до выбранной
+   (или наведённой) включительно. */
+.win-rating{margin-bottom:1.2rem}
+.win-rating-label{color:var(--md-sys-color-on-surface-variant);margin-bottom:.4rem;font-size:.88rem}
+.win-rating-stars{display:flex;gap:.2rem;justify-content:center}
+.star{
+  background:transparent;border:0;padding:.1em;font-size:1.7rem;line-height:1;cursor:pointer;
+  color:var(--md-sys-color-outline);transition:color .12s var(--ease-std),transform .12s var(--ease-std);
+}
+.star:hover{transform:scale(1.12)}
+.star.filled{color:var(--flame-tip)}
+.win-rating-note{color:var(--md-sys-color-on-surface-variant);font-size:.82rem;margin-top:.3rem}
 
 /* Фон стола — свободный выбор цвета (см. план «RGB-фон стола», bindBoardBackground
    в app.js) — не пресет светлый/тёмный, как раньше (см. историю, .light-board):

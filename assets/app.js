@@ -288,6 +288,10 @@ const EN = {
   "Пока никто ничего не написал.": "No one's written anything yet.",
   "Сообщение…": "Message…",
   "Отправить": "Send",
+  "Скопировать ссылку на пазл": "Copy puzzle link",
+  "Оцените пазл:": "Rate this puzzle:",
+  "Оценка": "Rating",
+  "Спасибо за оценку!": "Thanks for rating!",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -337,6 +341,8 @@ function applyStaticTranslations() {
   byId("addPuzzleTabUpload", el => { el.textContent = t("Загрузить своё фото"); });
   byId("difficultyModalTitle", el => { el.textContent = t("Выберите сложность"); });
   byId("difficultyPlayBtn", el => { el.textContent = t("Играть"); });
+  byId("puzzlePreviewPlayBtn", el => { el.textContent = t("За стол"); });
+  byId("puzzlePreviewShareBtn", el => { el.title = t("Скопировать ссылку на пазл"); el.setAttribute("aria-label", el.title); });
   byId("publishModalTitle", el => { el.textContent = t("Опубликовать в общую библиотеку"); });
   byId("publishConfirmBtn", el => { el.textContent = t("Отправить на модерацию"); });
   byId("publishNewCategoryName", el => { el.placeholder = t("Предложить новую категорию (пойдёт на модерацию) — необязательно"); });
@@ -426,10 +432,10 @@ function bindModal(backdropId, openBtnId, closeBtnId) {
  * «За стол»; если у пазла больше одного уровня сложности, клик открывает
  * эту модалку с выпадающим списком, выбор происходит ПОСЛЕ клика на «За
  * стол», а не вместо него (раньше — ряд мелких кнопок прямо на карточке). */
-let pendingDifficultyChoice = null; // {variants, onPlay} между открытием модалки и подтверждением выбора
-function openDifficultyModal(title, variants, onPlay) {
-  document.getElementById("difficultyModalTitle").textContent = `${t("Выберите сложность")} — «${title}»`;
-  const select = document.getElementById("difficultySelect");
+/** Заполняет <select> уровнями сложности — общая часть модалки выбора
+ *  сложности и превью пазла (см. openPuzzlePreviewModal ниже), чтобы не
+ *  дублировать формулу подписи («Уровень N — M деталей»). */
+function buildDifficultyOptions(select, variants) {
   select.innerHTML = "";
   variants.forEach((v, i) => {
     const opt = document.createElement("option");
@@ -441,6 +447,11 @@ function openDifficultyModal(title, variants, onPlay) {
     opt.textContent = `${t(DIFFICULTY_LABELS[i]) || `${t("Уровень")} ${i + 1}`} — ${total} ${tn(total, ["деталь", "детали", "деталей"], ["piece", "pieces"])}`;
     select.appendChild(opt);
   });
+}
+let pendingDifficultyChoice = null; // {variants, onPlay} между открытием модалки и подтверждением выбора
+function openDifficultyModal(title, variants, onPlay) {
+  document.getElementById("difficultyModalTitle").textContent = `${t("Выберите сложность")} — «${title}»`;
+  buildDifficultyOptions(document.getElementById("difficultySelect"), variants);
   document.getElementById("difficultyAsymmetric").checked = false; // не запоминаем между открытиями — осознанный выбор каждый раз
   pendingDifficultyChoice = { variants, onPlay };
   openModal("difficultyModalBackdrop");
@@ -455,6 +466,76 @@ document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
   pendingDifficultyChoice = null;
   onPlay(variants[idx], asymmetric);
 });
+
+/* ───────────────────────── превью пазла ─────────────────────────
+ * Открывается кликом по самой карточке (см. buildCard ниже) — не по кнопке
+ * «За стол», та по-прежнему сразу зовёт openDifficultyModal выше (быстрый
+ * путь остаётся). Тут — картинка покрупнее, автор (если чья-то публикация),
+ * рейтинг и тот же выбор сложности + «За стол» ещё раз, плюс «Поделиться»
+ * (см. план «Поделиться из превью и окна победы»). Статичная модалка —
+ * переиспользуется между открытиями (см. bindShareButton выше — там же
+ * объяснение, почему .onclick=, а не addEventListener). */
+async function openPuzzlePreviewModal(p, { variants, onPlay }) {
+  const displayTitle = puzzleDisplayTitle(p);
+  document.getElementById("puzzlePreviewTitle").textContent = displayTitle;
+  const img = document.getElementById("puzzlePreviewImage");
+  img.src = p.imageUrl;
+  img.alt = displayTitle;
+
+  // Автор — то же условие, что у buildCard (см. .puzzle-card-author там):
+  // только у ОДОБРЕННЫХ публикаций, встроенные/добавленные через Admin —
+  // без uploaderUsername вовсе, туда эта ветка не попадает.
+  const authorEl = document.getElementById("puzzlePreviewAuthor");
+  if (p.uploaderUsername && p.moderationStatus === "approved") {
+    authorEl.hidden = false;
+    authorEl.href = `/profile/${encodeURIComponent(p.uploaderUserId)}`;
+    authorEl.textContent = `${t("Добавил:")} ${p.uploaderUsername}`;
+  } else {
+    authorEl.hidden = true;
+  }
+
+  const select = document.getElementById("puzzlePreviewDifficulty");
+  buildDifficultyOptions(select, variants);
+  document.getElementById("puzzlePreviewAsymmetric").checked = false;
+
+  // Поделиться — только у ПУБЛИЧНОГО пазла (ownerUserId===null): своё
+  // ещё не опубликованное фото по /table/:id отдаст дефолтную страницу без
+  // превью (см. server.js, serveApp), ссылка была бы бесполезной. Ссылка
+  // читает ТЕКУЩИЙ выбор сложности в момент клика (getUrl — колбэк, не
+  // готовая строка), меняется вместе со select без пересборки обработчика.
+  const shareBtn = document.getElementById("puzzlePreviewShareBtn");
+  shareBtn.hidden = !!p.ownerUserId;
+  if (!p.ownerUserId) {
+    bindShareButton(shareBtn, () => {
+      const variant = variants[Number(select.value)] || variants[0];
+      return `${location.origin}/table/${encodeURIComponent(variant.id)}`;
+    });
+  }
+
+  document.getElementById("puzzlePreviewPlayBtn").onclick = () => {
+    const idx = Number(select.value);
+    const asymmetric = document.getElementById("puzzlePreviewAsymmetric").checked;
+    closeModal("puzzlePreviewModalBackdrop");
+    onPlay(variants[idx], asymmetric);
+  };
+
+  // Рейтинг — любой вариант сложности резолвится сервером в ту же группу
+  // (см. server.js, ratingSummary по image_file), первого достаточно.
+  // Не блокирует открытие модалки — просто появляется, когда придёт.
+  const ratingEl = document.getElementById("puzzlePreviewRating");
+  ratingEl.hidden = true;
+  roomFetch(`/api/puzzles/${encodeURIComponent(variants[0].id)}/rating`)
+    .then(r => r.ok ? r.json() : null)
+    .then(data => {
+      if (!data || !data.count) return;
+      ratingEl.hidden = false;
+      ratingEl.textContent = `★ ${data.average.toFixed(1)} (${data.count} ${tn(data.count, ["оценка", "оценки", "оценок"], ["rating", "ratings"])})`;
+    })
+    .catch(() => {});
+
+  openModal("puzzlePreviewModalBackdrop");
+}
+bindModal("puzzlePreviewModalBackdrop", null, "puzzlePreviewModalClose");
 
 /* ───────────────────────── публикация своего фото ─────────────────────────
  * См. план «Модерация загруженных фото» — отдельное, более строгое согласие,
@@ -1201,10 +1282,21 @@ function buildCard(p, opts = {}) {
   });
   // Всегда одна кнопка «За стол» — выбор сложности (если вариантов больше
   // одного) происходит ПОСЛЕ клика, в общей модалке (см. openDifficultyModal
-  // выше), не рядом мелких кнопок прямо на карточке.
-  playBtn.addEventListener("click", () => {
+  // выше), не рядом мелких кнопок прямо на карточке. Быстрый путь — сразу
+  // к выбору сложности, без превью.
+  playBtn.addEventListener("click", e => {
+    e.stopPropagation(); // не даём всплыть до клика по card ниже — то же самое действие делать дважды незачем
     if (variants.length > 1) openDifficultyModal(puzzleDisplayTitle(p), variants, onPlay);
     else onPlay(variants[0]);
+  });
+  // Клик по самой карточке (не по «За стол» — тот уже обработан и
+  // остановлен выше, не по меню «…» — см. проверку ниже) — более
+  // информативный путь: превью с картинкой покрупнее, автором, рейтингом
+  // и тем же выбором сложности (см. план «Поделиться из превью и окна
+  // победы», openPuzzlePreviewModal).
+  node.addEventListener("click", e => {
+    if (e.target.closest(".menu-wrap") || e.target.closest(".puzzle-card-author")) return;
+    openPuzzlePreviewModal(p, { variants, onPlay });
   });
 
   // Второстепенные действия — одно меню «…» (см. renderCardMenu выше,
@@ -2581,18 +2673,28 @@ async function renderTable(root, puzzleId, signal, queryString) {
     const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
     const displayTitle = puzzleDisplayTitle(puzzle);
     const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete.` : `Пазл «${displayTitle}» собран.`;
+    const rating = buildRatingWidget(puzzle, signal);
     const actions = document.createElement("div");
     actions.className = "win-actions";
+    // Соло-стол показывает только ПУБЛИЧНЫЕ библиотечные пазлы (своё фото
+    // отбивается раньше, см. начало renderTable, «только в комнатах») —
+    // ownerUserId тут всегда null, кнопка нужна без условия.
+    const shareBtn = document.createElement("button");
+    shareBtn.className = "btn outlined icon"; shareBtn.type = "button";
+    shareBtn.title = t("Скопировать ссылку на пазл"); shareBtn.setAttribute("aria-label", shareBtn.title);
+    shareBtn.innerHTML = SHARE_ICON;
+    bindShareButton(shareBtn, () => `${location.origin}/table/${encodeURIComponent(puzzle.id)}`);
     const stayBtn = document.createElement("button");
     stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = t("Остаться");
     stayBtn.addEventListener("click", () => overlay.remove());
     const homeBtn = document.createElement("button");
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("На главную");
     homeBtn.addEventListener("click", () => { navigate("/"); });
-    actions.append(stayBtn, homeBtn);
-    card.append(img, h2, p, actions);
+    actions.append(shareBtn, stayBtn, homeBtn);
+    card.append(img, h2, p, rating, actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
+    launchConfetti(overlay);
   }
 
   // Флаш сохранения при уходе со стола (смена маршрута), сворачивании вкладки
@@ -2704,6 +2806,158 @@ function plural(n, one, few, many) {
   if (a > 10 && a < 20) return many;
   if (b > 1 && b < 5) return few;
   return b === 1 ? one : many;
+}
+
+const SHARE_ICON = '<svg class="icon" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></svg>';
+const SHARE_ICON_DONE = '<svg class="icon" viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg>';
+/** Кнопка «Поделиться» — копирует публичную ссылку на пазл (см. план
+ *  «Поделиться из превью и окна победы»). getUrl вызывается В МОМЕНТ
+ *  клика, не заранее — в превью-модалке ссылка меняется вместе с выбором
+ *  сложности (см. openPuzzlePreviewModal), а не фиксируется при открытии.
+ *  Общая на превью-модалку (статичная модалка, переиспользуется между
+ *  открытиями — .onclick=, не addEventListener, иначе каждый повторный
+ *  вызов копил бы ещё один обработчик на тот же узел) и оба окна победы
+ *  (соло/комната, там наоборот — свежий узел на каждый показ, но .onclick
+ *  работает и для него точно так же). Раньше была своя копия прямо в
+ *  тулбаре стола, теперь кнопки там нет вообще (см. план «Поделиться
+ *  иначе» — на самой доске это было не особо нужно). getUrl() может
+ *  вернуть falsy (приватный пазл, ещё не в общей библиотеке) — тогда клик
+ *  просто ничего не делает, кнопка обычно и не показана в этом случае
+ *  вовсе (см. вызовы). */
+function bindShareButton(btn, getUrl) {
+  let flashTimer = null;
+  btn.onclick = async () => {
+    const url = getUrl();
+    if (!url) return;
+    try { await navigator.clipboard.writeText(url); }
+    catch { return; /* буфер недоступен — тихо промолчим */ }
+    clearTimeout(flashTimer);
+    btn.title = t("Скопировано");
+    btn.setAttribute("aria-label", btn.title);
+    btn.innerHTML = SHARE_ICON_DONE;
+    flashTimer = setTimeout(() => {
+      btn.title = t("Скопировать ссылку на пазл");
+      btn.setAttribute("aria-label", btn.title);
+      btn.innerHTML = SHARE_ICON;
+    }, 1800);
+  };
+}
+
+/** Оценка пазла по 5-балльной шкале на окне победы (см. план «Оценка
+ *  пазла на окне победы») — общая на соло и комнатное showWin (см. вызовы
+ *  ниже), сама решает свою судьбу: подхватывает уже стоящую оценку (если
+ *  пазл переигрывают), шлёт PUT при клике, не блокирует ничего вокруг —
+ *  ошибка сети тут не критична, просто тихо не сохранится. roomFetch (не
+ *  auth.fetch) — оценивать можно и без входа, как и саму сборку. */
+function buildRatingWidget(puzzle, signal) {
+  const wrap = document.createElement("div");
+  wrap.className = "win-rating";
+  const label = document.createElement("p");
+  label.className = "win-rating-label";
+  label.textContent = t("Оцените пазл:");
+  const stars = document.createElement("div");
+  stars.className = "win-rating-stars";
+  stars.setAttribute("role", "radiogroup");
+  stars.setAttribute("aria-label", t("Оценка"));
+  const note = document.createElement("p");
+  note.className = "win-rating-note";
+  note.hidden = true;
+
+  const buttons = [];
+  let mine = 0;
+  function paint(value) {
+    buttons.forEach((b, i) => b.classList.toggle("filled", i < value));
+  }
+  for (let i = 1; i <= 5; i++) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "star";
+    btn.textContent = "★";
+    btn.setAttribute("aria-label", `${i} ${tn(i, ["звезда", "звезды", "звёзд"], ["star", "stars"])}`);
+    btn.addEventListener("click", () => submit(i), { signal });
+    btn.addEventListener("mouseenter", () => paint(i), { signal });
+    buttons.push(btn);
+    stars.appendChild(btn);
+  }
+  stars.addEventListener("mouseleave", () => paint(mine), { signal });
+
+  async function submit(value) {
+    mine = value;
+    paint(value);
+    note.hidden = true;
+    try {
+      await roomFetch(`/api/puzzles/${encodeURIComponent(puzzle.id)}/rating`, {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating: value }),
+      });
+      note.textContent = t("Спасибо за оценку!");
+      note.hidden = false;
+    } catch { /* тихо — оценка не критична, окно не блокируем */ }
+  }
+
+  roomFetch(`/api/puzzles/${encodeURIComponent(puzzle.id)}/rating`)
+    .then(r => r.ok ? r.json() : null)
+    .then(data => { if (data && data.mine) { mine = data.mine; paint(mine); } })
+    .catch(() => {});
+
+  wrap.append(label, stars, note);
+  return wrap;
+}
+
+/* Конфетти на окне победы — канвас поверх win-overlay, без библиотек.
+   Уважает prefers-reduced-motion (просто не запускается). Останавливается
+   сама, если оверлей убрали досрочно («Остаться»/«В комнату») — проверяем
+   overlay.isConnected на каждом кадре вместо отдельного слушателя. */
+function launchConfetti(overlay) {
+  if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  const rect = overlay.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  const canvas = document.createElement("canvas");
+  canvas.className = "confetti-canvas";
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  overlay.appendChild(canvas);
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+
+  const COLORS = ["#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#ff9ff3", "#54a0ff"];
+  const particles = Array.from({ length: 140 }, () => ({
+    x: Math.random() * rect.width,
+    y: -20 - Math.random() * rect.height * 0.6,
+    w: 6 + Math.random() * 5,
+    h: 8 + Math.random() * 6,
+    color: COLORS[(Math.random() * COLORS.length) | 0],
+    vx: (Math.random() - 0.5) * 2,
+    vy: 2 + Math.random() * 2.5,
+    rot: Math.random() * Math.PI * 2,
+    vrot: (Math.random() - 0.5) * 0.2,
+    sway: Math.random() * Math.PI * 2,
+  }));
+
+  const duration = 3000;
+  const start = performance.now();
+  function frame(now) {
+    if (!overlay.isConnected) return;
+    const elapsed = now - start;
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    const fade = elapsed > duration - 500 ? Math.max(0, 1 - (elapsed - (duration - 500)) / 500) : 1;
+    for (const p of particles) {
+      p.sway += 0.05;
+      p.x += p.vx + Math.sin(p.sway) * 0.6;
+      p.y += p.vy;
+      p.rot += p.vrot;
+      ctx.save();
+      ctx.globalAlpha = fade;
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    }
+    if (elapsed < duration) requestAnimationFrame(frame);
+    else canvas.remove();
+  }
+  requestAnimationFrame(frame);
 }
 
 const ROOMS_PAGE_SIZE = 5;
@@ -3721,8 +3975,21 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
     const displayTitle = puzzleDisplayTitle(puzzle);
     const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete — solved together with friends.` : `Пазл «${displayTitle}» собран вместе с друзьями.`;
+    const rating = buildRatingWidget(puzzle, signal);
     const actions = document.createElement("div");
     actions.className = "win-actions";
+    // В комнате пазл может оказаться и чужим/своим НЕопубликованным фото
+    // (ownerUserId не null) — публичной /table/:id ссылки у него ещё нет
+    // (см. server.js, serveApp отдаёт дефолт по такому id), кнопку в этом
+    // случае просто не показываем, а не ведём на страницу без превью.
+    if (!puzzle.ownerUserId) {
+      const shareBtn = document.createElement("button");
+      shareBtn.className = "btn outlined icon"; shareBtn.type = "button";
+      shareBtn.title = t("Скопировать ссылку на пазл"); shareBtn.setAttribute("aria-label", shareBtn.title);
+      shareBtn.innerHTML = SHARE_ICON;
+      bindShareButton(shareBtn, () => `${location.origin}/table/${encodeURIComponent(puzzle.id)}`);
+      actions.appendChild(shareBtn);
+    }
     const stayBtn = document.createElement("button");
     stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = t("Остаться");
     stayBtn.addEventListener("click", () => overlay.remove());
@@ -3730,9 +3997,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("В комнату");
     homeBtn.addEventListener("click", () => { navigate(`/room/${encodeURIComponent(roomId)}`); });
     actions.append(stayBtn, homeBtn);
-    card.append(img, h2, p, actions);
+    card.append(img, h2, p, rating, actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
+    launchConfetti(overlay);
   }
 
   /* ── перетаскивание детали: локально сразу, серверу — троттлингом ── */

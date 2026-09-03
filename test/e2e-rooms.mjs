@@ -892,6 +892,59 @@ ok("/categories — canonical указывает на /categories",
 ok("несуществующий слаг — просто дефолтная страница (тот же <title>, что и главная), без 404",
   titleOf(missingCategoryHtml) === titleOf(homeHtml), titleOf(missingCategoryHtml));
 
+// ───────── публичная ссылка на конкретный пазл (см. план «Публичная ссылка
+// на пазл») — /table/:id отдаёт свои title/description/canonical/og:image,
+// но только для БИБЛИОТЕЧНЫХ (owner_user_id IS NULL) — приватная/чужая
+// загрузка по угаданному id не должна течь в превью/индексацию ─────────
+const ogImageOf = html => (html.match(/<meta property="og:image" content="([^"]*)">/) || [])[1];
+const hillsHtml = await (await fetch(PUZZLE + "/table/hills")).text();
+ok("/table/hills отдаёт свой <title> с названием пазла", (titleOf(hillsHtml) || "").includes("Холмы"), titleOf(hillsHtml));
+ok("/table/hills — canonical указывает именно на эту страницу", canonicalOf(hillsHtml) === "https://puzzle.burninghouse.ru/table/hills", canonicalOf(hillsHtml));
+ok("/table/hills — og:image указывает на картинку самого пазла, не на общий баннер",
+  (ogImageOf(hillsHtml) || "").includes("hills.svg"), ogImageOf(hillsHtml));
+
+const missingTableHtml = await (await fetch(PUZZLE + "/table/нет-такого-пазла")).text();
+ok("несуществующий id пазла — дефолтная страница, без 404", titleOf(missingTableHtml) === titleOf(homeHtml), titleOf(missingTableHtml));
+
+r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комната для проверки приватной ссылки" } });
+const linkTestRoomId = r.body.id;
+ur = await callRaw(tokenA, `/puzzles?roomId=${linkTestRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Приватное фото для проверки ссылки")}`, fakePng, "image/png");
+const privateUploadForLinkTest = await ur.json();
+const privateTableHtml = await (await fetch(PUZZLE + `/table/${privateUploadForLinkTest.variants[0].id}`)).text();
+ok("приватная (ещё не опубликованная) загрузка — дефолтная страница по угаданному id, не своя SEO-подмена",
+  titleOf(privateTableHtml) === titleOf(homeHtml), titleOf(privateTableHtml));
+
+ir = await fetch(PUZZLE + "/sitemap.xml");
+sitemapXml = await ir.text();
+ok("sitemap.xml содержит /table/hills — по одному URL на группу, самый лёгкий вариант",
+  sitemapXml.includes("<loc>https://puzzle.burninghouse.ru/table/hills</loc>"), "");
+ok("sitemap.xml НЕ содержит вариантов посложнее той же группы (hills-48 и т.п.)",
+  !sitemapXml.includes("/table/hills-48<"), "");
+
+// ───────── обновлённые пресеты сложности (см. план «Обновить пресеты
+// сложности») — два самых сложных уровня стали больше (300→600, 480→1000) ─────────
+ir = await fetch(PUZZLE + "/api/config");
+const config = await ir.json();
+ok("GET /api/config отдаёт обновлённые пресеты — 300/480 заменены на 600/1000",
+  JSON.stringify(config.piecePresets) === JSON.stringify([12, 48, 108, 216, 600, 1000]), JSON.stringify(config.piecePresets));
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+const libAfterPresetChange = await ir.json();
+const hills600 = libAfterPresetChange.find(p => p.id === "hills-600");
+const hills1000 = libAfterPresetChange.find(p => p.id === "hills-1000");
+// gridForPieceTarget округляет rows/cols НЕЗАВИСИМО (см. server.js) — точное
+// произведение не гарантировано, тот же эффект уже виден у старых пресетов
+// (216→221, 480→475 деталей по факту), поэтому сверяем близость, не равенство.
+const closeTo = (actual, target, tolerancePct = 5) => Math.abs(actual - target) / target * 100 <= tolerancePct;
+ok("новый уровень «hills-600» создан — около 600 деталей", hills600 && closeTo(hills600.gridRows * hills600.gridCols, 600),
+  JSON.stringify(hills600 && { rows: hills600.gridRows, cols: hills600.gridCols, total: hills600.gridRows * hills600.gridCols }));
+ok("новый уровень «hills-1000» создан — около 1000 деталей", hills1000 && closeTo(hills1000.gridRows * hills1000.gridCols, 1000),
+  JSON.stringify(hills1000 && { rows: hills1000.gridRows, cols: hills1000.gridCols, total: hills1000.gridRows * hills1000.gridCols }));
+ok("старые «hills-300»/«hills-480» пропали (одноразовая уборка при старте, см. server.js)",
+  !libAfterPresetChange.some(p => p.id === "hills-300" || p.id === "hills-480"), "");
+ok("группа «Холмы» содержит ровно 6 вариантов, не 8", libAfterPresetChange.filter(p => p.imageUrl === hills600.imageUrl).length === 6,
+  String(libAfterPresetChange.filter(p => p.imageUrl === hills600.imageUrl).length));
+
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
   method: "POST", body: { title: "С категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: categoryA.id },
 });
@@ -1193,6 +1246,45 @@ ok("DELETE прогресса hills — 200", r.status === 200 && r.body.ok === 
 
 r = await asJson(tokenA, "/puzzles/progress");
 ok("после DELETE hills пропал из bulk-списка", r.status === 200 && !r.body.some(x => x.puzzleId === hillsPuzzle.id), JSON.stringify(r.body));
+
+// ───────── оценка пазла на окне победы (см. план «Оценка пазла на окне
+// победы») — 5-балльная шкала, upsert, доступна и без входа ─────────
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/rating`);
+ok("рейтинга ещё нет — average/count/mine пусты", r.status === 200 && r.body.average === null && r.body.count === 0 && r.body.mine === null, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/rating`, { method: "PUT", body: { rating: 0 } });
+ok("оценка 0 — вне диапазона, отбита 400", r.status === 400, String(r.status));
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/rating`, { method: "PUT", body: { rating: 6 } });
+ok("оценка 6 — вне диапазона, отбита 400", r.status === 400, String(r.status));
+
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/rating`, { method: "PUT", body: { rating: 4 } });
+ok("danil поставил 4 — 200", r.status === 200 && r.body.ok === true && r.body.count === 1, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/rating`);
+ok("danil видит свою оценку — mine===4", r.status === 200 && r.body.mine === 4 && r.body.average === 4, JSON.stringify(r.body));
+
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/rating`, { method: "PUT", body: { rating: 2 } });
+ok("повторная оценка тем же человеком — заменяет прежнюю (upsert), count не растёт", r.status === 200 && r.body.count === 1 && r.body.average === 2, JSON.stringify(r.body));
+
+r = await asJson(tokenB, `/puzzles/${hillsPuzzle.id}/rating`, { method: "PUT", body: { rating: 5 } });
+ok("sputnik поставил 5 — второй голос, count===2, average===(2+5)/2", r.status === 200 && r.body.count === 2 && r.body.average === 3.5, JSON.stringify(r.body));
+
+r = await asJson(tokenB, `/puzzles/${hillsPuzzle.id}/rating`);
+ok("sputnik видит именно СВОЮ оценку (5), не чужую", r.status === 200 && r.body.mine === 5, JSON.stringify(r.body));
+
+// Другой уровень сложности ТОГО ЖЕ пазла (общий image_file с hillsPuzzle,
+// см. план — оценка на группу, не на конкретный вариант) — должен видеть
+// тот же средний рейтинг.
+ar = await anonCall(anonCookie, `/puzzles/hills-48/rating`);
+ok("другой уровень сложности того же пазла (hills-48) — общий рейтинг, не свой", ar.status === 200 && (await ar.json()).count === 2, "");
+
+ar = await anonCall(anonCookie, `/puzzles/hills-48/rating`, { method: "PUT", body: { rating: 3 } });
+ok("аноним тоже может оценить (без входа) — count===3", ar.status === 200 && (await ar.json()).count === 3, "");
+ar = await anonCall(anonCookie, `/puzzles/hills-48/rating`);
+ok("аноним видит свою оценку по своей cookie", ar.status === 200 && (await ar.json()).mine === 3, "");
+
+r = await asJson(tokenA, `/puzzles/no-such-puzzle/rating`);
+ok("несуществующий пазл — 404", r.status === 404, String(r.status));
 
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);
