@@ -55,25 +55,29 @@
 <meta name="twitter:image" content="https://puzzle.burninghouse.ru/assets/og-image.png">
 
 <!-- JSON-LD (см. план «SEO») — помогает Google/Яндекс понять тип сущности
-     страницы (веб-приложение, бесплатное, категория «игра»), не влияет на
-     то, что видит пользователь. Один объект описывает сервис в целом —
-     страницы /categories и /category/:slug (см. план «Прямые ссылки +
-     страница категорий») получают собственные title/description/canonical
-     на сервере (см. server.js, serveApp), но отдельной JSON-LD разметки
-     под каждую из них здесь нет. -->
+     страницы, не влияет на то, что видит пользователь. Один объект описывает
+     сервис в целом — страницы /categories и /category/:slug (см. план
+     «Прямые ссылки + страница категорий») получают собственные title/
+     description/canonical на сервере (см. server.js, serveApp), но отдельной
+     JSON-LD разметки под каждую из них здесь нет.
+     @type WebSite, не WebApplication/SoftwareApplication (см. правку
+     «SEO-аудит», SEMrush отметил как invalid) — у SoftwareApplication
+     Google требует aggregateRating или review для right-result, а
+     настоящих отзывов о самом СЕРВИСЕ (не отдельных пазлах) у нас нет —
+     подделывать рейтинг нельзя (нарушение политик Google по структурированным
+     данным), выдавать средний рейтинг ПАЗЛОВ за рейтинг приложения тоже
+     неверно по смыслу. WebSite такого поля не требует и точнее описывает,
+     что это такое. -->
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "WebApplication",
+  "@type": "WebSite",
   "name": "Что собираем?",
   "alternateName": ["Пазлы онлайн", "BurningHouse Пазлы"],
   "url": "https://puzzle.burninghouse.ru/",
   "description": "Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.",
-  "applicationCategory": "GameApplication",
-  "operatingSystem": "Any",
   "inLanguage": "ru",
-  "isAccessibleForFree": true,
-  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "RUB" }
+  "isAccessibleForFree": true
 }
 </script>
 

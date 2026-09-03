@@ -13,6 +13,7 @@ WORKDIR /app
 COPY *.js ./
 COPY index.html ./
 COPY robots.txt ./
+COPY llms.txt ./
 # sitemap.xml больше НЕ копируется — теперь генерируется на лету
 # (GET /sitemap.xml в server.js, см. план «Прямые ссылки вместо #/ +
 # страница категорий»), статичный файл был бы просто мёртвым грузом.

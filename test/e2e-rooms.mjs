@@ -969,6 +969,29 @@ ok("/categories — canonical указывает на /categories",
 ok("несуществующий слаг — просто дефолтная страница (тот же <title>, что и главная), без 404",
   titleOf(missingCategoryHtml) === titleOf(homeHtml), titleOf(missingCategoryHtml));
 
+// ───────── SSR-список пазлов на /category/:slug (см. правку «SSR для
+// категорий») — раньше страница отдавала краулеру только заголовок, без
+// единой ссылки дальше; категория А (природа) сейчас снова пуста (тестовый
+// пазл из проверки sitemap уже удалён выше), временно прикрепляем встроенный
+// hills, чтобы проверить настоящий список, и отвязываем сразу после —
+// дальше по файлу hills используется во множестве других блоков, категория
+// у него нигде больше не проверяется, но не хотим оставлять лишнее состояние. ─────────
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles/hills/category", { method: "POST", body: { categoryId: categoryA.id } });
+ok("hills временно прикреплён к категории «Природа»", ir.status === 200, String(ir.status));
+
+const categoryHtmlWithPuzzle = await (await fetch(PUZZLE + `/category/${encodeURIComponent(categoryASlug)}`)).text();
+const ssrListOf = html => (html.match(/<ul class="category-server-list">[\s\S]*?<\/ul>/) || [])[0];
+const ssrList = ssrListOf(categoryHtmlWithPuzzle);
+ok("/category/природа отдаёт SSR-ссылку на /puzzle/hills",
+  !!ssrList && ssrList.includes('href="/puzzle/hills"'), ssrList);
+ok("SSR-ссылка подписана «Природа #1» (та же формула, что и клиентский puzzleDisplayTitle)",
+  !!ssrList && ssrList.includes("Природа #1"), ssrList);
+ok("SSR-<img> с непустым alt (см. правку «SEO-аудит»)",
+  !!ssrList && /alt="Природа #1"/.test(ssrList), ssrList);
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles/hills/category", { method: "POST", body: { categoryId: null } });
+ok("уборка: hills откреплён от категории «Природа»", ir.status === 200, String(ir.status));
+
 // ───────── публичная ссылка на конкретный пазл (см. план «Публичная ссылка
 // на пазл») — /table/:id отдаёт свои title/description/canonical/og:image,
 // но только для БИБЛИОТЕЧНЫХ (owner_user_id IS NULL) — приватная/чужая
@@ -1407,6 +1430,23 @@ ok("аноним видит свою оценку по своей cookie", ar.st
 
 r = await asJson(tokenA, `/puzzles/no-such-puzzle/rating`);
 ok("несуществующий пазл — 404", r.status === 404, String(r.status));
+
+// ───────── GET /internal/stats — метрики для Admin (см. план «Метрики для
+// пазлов»): puzzlesStarted/puzzlesCompleted — headline-сумма соло
+// (puzzle_progress) и комнатных (room_sessions) сборок ─────────
+ir = await internalCall("wrong-key", "/internal/stats");
+ok("GET /internal/stats без верного ключа — 403", ir.status === 403, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, "/internal/stats");
+const stats = await ir.json();
+ok("GET /internal/stats — 200", ir.status === 200 && stats.ok === true, JSON.stringify(stats));
+ok("puzzlesStarted === progressRows + roomSessions", stats.puzzlesStarted === stats.progressRows + stats.roomSessions, JSON.stringify(stats));
+ok("puzzlesCompleted === completed + roomSessionsCompleted", stats.puzzlesCompleted === stats.completed + stats.roomSessionsCompleted, JSON.stringify(stats));
+ok("puzzlesCompleted7d — число, не отрицательное", typeof stats.puzzlesCompleted7d === "number" && stats.puzzlesCompleted7d >= 0, String(stats.puzzlesCompleted7d));
+// К этому моменту теста уже накопилась реальная активность (progress/сессии
+// из более ранних блоков) — не просто нули, значит формула реально сложила
+// что-то ненулевое, а не только совпала по нулям.
+ok("puzzlesStarted > 0 (реальная активность теста уже накопилась)", stats.puzzlesStarted > 0, String(stats.puzzlesStarted));
 
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

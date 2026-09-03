@@ -488,6 +488,14 @@ const stmt = {
     SELECT p.image_file FROM puzzles p
     WHERE p.category_id = ? AND p.owner_user_id IS NULL
     ORDER BY p.sort_order, p.created_at LIMIT 1`),
+  // Полный список пазлов категории для SSR /category/:slug (см. правку
+  // «SSR для категорий») — тот же owner_user_id IS NULL фильтр видимости,
+  // что и у categoryPublicPuzzleCount/categoryFirstImage выше, тот же
+  // порядок, что у puzzlesPublic (важно — от него зависит нумерация
+  // «Категория #N», см. categoryPuzzlesListHtml).
+  categoryPuzzles: db.prepare(`
+    SELECT * FROM puzzles WHERE category_id = ? AND owner_user_id IS NULL
+    ORDER BY sort_order, created_at`),
   insertCategory: db.prepare("INSERT INTO categories (id, name, slug, status, created_by, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   setCategorySlug: db.prepare("UPDATE categories SET slug = ? WHERE id = ?"),
   // Редактирование категории Админом (см. план «Алиас и публичное название
@@ -1045,7 +1053,7 @@ const MIME = {
 // Dockerfile (см. историю с lib/mailer.js — забытая директория в COPY
 // роняет контейнер MODULE_NOT_FOUND, тот же принцип и тут, наоборот —
 // лишний файл в этом списке, которого нет в COPY, тихо не найдётся).
-const ROOT_FILES = ["robots.txt"];
+const ROOT_FILES = ["robots.txt", "llms.txt"];
 
 /** Отдаём только index.html, assets/ и uploads/ (свои фото). store.db и
  *  server.js снаружи недоступны. */
@@ -1171,6 +1179,47 @@ function categoriesListHtml() {
   return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
 }
 
+/** Реальный список пазлов ВНУТРИ категории для /category/:slug (см. правку
+ *  «SSR для категорий») — раньше страница отдавала краулеру только h1+
+ *  интро (headBlock), сама сетка появлялась только после JS: с точки зрения
+ *  краулера без JS это тупиковая страница почти без текста и без единой
+ *  ссылки дальше — ровно то, что SEO-аудит отдельно отметил и как «низкое
+ *  text/html», и как «orphaned pages» (пазлы есть в sitemap.xml, но никакая
+ *  СТАТИЧНАЯ страница на них не ссылается). JS всё равно перерисует #app
+ *  целиком при гидратации (см. renderCategoryPage в app.js) — это не влияет
+ *  на то, что видит живой пользователь, только на то, что видит краулер.
+ *
+ *  Номер «Категория #N» в подписи — та же формула, что и клиентский
+ *  puzzleDisplayTitle/ensureDisplayTitleCache (assets/app.js): пользуется
+ *  ТЕМ ЖЕ порядком (sort_order, created_at), что и общий puzzlesPublic, и
+ *  считает только группы embedded/добавленных через Admin пазлов
+ *  (uploader_user_id IS NULL) — у одобренных публикаций пользователей
+ *  (uploader_user_id есть, даже после approve, см. setModerationApproved)
+ *  клиент всегда показывает СЫРОЙ title, а не вычисляемый номер, номер для
+ *  них тут тоже не считается. Раз оба конца читают один и тот же порядок
+ *  строк по одной и той же формуле — результат совпадает сам по себе, это
+ *  не отдельно согласуемая логика, которую можно нечаянно рассинхронизировать. */
+function categoryPuzzlesListHtml(category) {
+  const rows = stmt.categoryPuzzles.all(category.id);
+  const groups = new Map(); // image_file -> { firstRow, lightestId }
+  for (const row of rows) {
+    let g = groups.get(row.image_file);
+    if (!g) { g = { firstRow: row, lightestId: row.id, lightestPieces: row.grid_rows * row.grid_cols }; groups.set(row.image_file, g); continue; }
+    const pieces = row.grid_rows * row.grid_cols;
+    if (pieces < g.lightestPieces) { g.lightestId = row.id; g.lightestPieces = pieces; }
+  }
+  if (!groups.size) return "";
+  let n = 0;
+  const items = [...groups.values()].map(g => {
+    const title = g.firstRow.uploader_user_id
+      ? escapeHtml(g.firstRow.title)
+      : `${escapeHtml(category.name)} #${++n}`;
+    const img = `<img src="${escapeHtml(imageUrlFor(g.firstRow.image_file))}" alt="${title}" loading="lazy">`;
+    return `<li><a href="/puzzle/${encodeURIComponent(g.lightestId)}">${img}${title}</a></li>`;
+  }).join("\n    ");
+  return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
+}
+
 function serveApp(res, pathname) {
   try {
     let html = fs.readFileSync(APP_HTML, "utf8");
@@ -1216,6 +1265,10 @@ function serveApp(res, pathname) {
     <h1>Пазлы: ${name}</h1>
     <p>${count} ${pluralPuzzles(count)} в категории «${name}» — собирайте онлайн бесплатно.</p>
   </div>`,
+            // Реальные ссылки на пазлы категории (см. правку «SSR для
+            // категорий») — без этого страница отдавала краулеру только
+            // заголовок, ни одной ссылки дальше по сайту не было вовсе.
+            loadingNoteReplacement: categoryPuzzlesListHtml(category) || DEFAULT_LOADING_NOTE,
           });
         }
       } else if (tableMatch || puzzleMatch) {
@@ -1276,17 +1329,35 @@ const server = http.createServer(async (req, res) => {
     if (p === "/internal/stats" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       const since7d = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      // Сборки — соло (puzzle_progress, ТОЛЬКО вошедшие: у гостя прогресс
+      // живёт в localStorage браузера, сервер его не видит и посчитать не
+      // может — см. README «Свои фото»/localProgress в app.js) и комнатные
+      // (room_sessions, считает и анонимных — там личность не требуется).
+      // puzzlesStarted/puzzlesCompleted ниже — headline-сумма этих двух
+      // источников (см. план «Метрики для пазлов»): раньше приходилось
+      // складывать progressRows+roomSessions и completed+roomSessionsCompleted
+      // в уме, глядя на дашборд — теперь готовое число уже отдельным полем,
+      // а исходные счётчики по-прежнему тут же для разбивки соло/комната.
+      const progressRows = db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress").get().n;
+      const completed = db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress WHERE completed_at IS NOT NULL").get().n;
+      const completed7d = db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress WHERE completed_at > ?").get(since7d).n;
+      const roomSessions = db.prepare("SELECT COUNT(*) AS n FROM room_sessions").get().n;
+      const roomSessionsCompleted = db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE completed_at IS NOT NULL").get().n;
+      const roomSessionsCompleted7d = db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE completed_at > ?").get(since7d).n;
       return json(res, 200, {
         ok: true,
         puzzles: db.prepare("SELECT COUNT(*) AS n FROM puzzles").get().n,
         customPuzzles: db.prepare("SELECT COUNT(*) AS n FROM puzzles WHERE owner_user_id IS NOT NULL").get().n,
-        progressRows: db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress").get().n,
-        completed: db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress WHERE completed_at IS NOT NULL").get().n,
+        puzzlesStarted: progressRows + roomSessions,
+        puzzlesCompleted: completed + roomSessionsCompleted,
+        puzzlesCompleted7d: completed7d + roomSessionsCompleted7d,
+        progressRows,
+        completed,
         progressUpdated7d: db.prepare("SELECT COUNT(*) AS n FROM puzzle_progress WHERE updated_at > ?").get(since7d).n,
         rooms: db.prepare("SELECT COUNT(*) AS n FROM rooms").get().n,
         roomsCreated7d: db.prepare("SELECT COUNT(*) AS n FROM rooms WHERE created_at > ?").get(since7d).n,
-        roomSessions: db.prepare("SELECT COUNT(*) AS n FROM room_sessions").get().n,
-        roomSessionsCompleted: db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE completed_at IS NOT NULL").get().n,
+        roomSessions,
+        roomSessionsCompleted,
         roomSessionsStarted7d: db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE started_at > ?").get(since7d).n,
       });
     }
