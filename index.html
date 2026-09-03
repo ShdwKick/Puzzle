@@ -379,23 +379,34 @@
      и «За стол» тут же, плюс картинка покрупнее, автор (если это чья-то
      публикация) и рейтинг — то, что не помещалось на саму карточку.
      openPuzzlePreviewModal в assets/app.js заполняет содержимое перед
-     каждым открытием — статичная разметка тут только форма. -->
+     каждым открытием — статичная разметка тут только форма.
+     Шапка — по образцу Movies (#movieInfoModalBackdrop, «Фильм»): h2 спрятан
+     sr-only (остаётся только ради aria-labelledby), сама .modal-head
+     абсолютным позиционированием переезжает поверх картинки — .modal-head-
+     actions (поделиться/закрыть) там же, где у Movies. Видимое название —
+     ниже картинки, в .puzzle-preview-caption, вместе с рейтингом-чипом
+     справа (тот же приём, что .movie-info-caption). -->
 <div class="modal-backdrop hidden" id="puzzlePreviewModalBackdrop">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="puzzlePreviewTitle">
     <div class="modal-head">
       <h2 id="puzzlePreviewTitle"></h2>
-      <button class="icon-btn" id="puzzlePreviewModalClose" aria-label="Закрыть">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
+      <div class="modal-head-actions">
+        <button class="icon-btn" id="puzzlePreviewShareBtn" type="button" title="Скопировать ссылку на пазл" aria-label="Скопировать ссылку на пазл">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></svg>
+        </button>
+        <button class="icon-btn" id="puzzlePreviewModalClose" aria-label="Закрыть">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
     </div>
     <img class="puzzle-preview-image" id="puzzlePreviewImage" alt="">
+    <div class="puzzle-preview-caption">
+      <span class="puzzle-preview-caption-title" id="puzzlePreviewCaptionTitle"></span>
+      <p class="puzzle-preview-rating" id="puzzlePreviewRating" hidden></p>
+    </div>
     <a class="puzzle-card-author" id="puzzlePreviewAuthor" href="#" hidden></a>
-    <p class="puzzle-preview-rating" id="puzzlePreviewRating" hidden></p>
     <div class="bar">
       <select class="text-input" id="puzzlePreviewDifficulty"></select>
-      <button class="btn outlined icon" id="puzzlePreviewShareBtn" type="button" title="Скопировать ссылку на пазл" aria-label="Скопировать ссылку на пазл">
-        <svg class="icon" viewBox="0 0 24 24"><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 1 1 0 10h-2"/><path d="M8 12h8"/></svg>
-      </button>
       <button class="btn filled" id="puzzlePreviewPlayBtn" type="button">За стол</button>
     </div>
     <label class="checkbox-row">
@@ -467,10 +478,22 @@
   </div>
 </div>
 
+<!-- ===================== ОБУЧЕНИЕ НА СТОЛЕ =====================
+     Затемнение с «дырой» на подсвеченном элементе тулбара + карточка с
+     шагом рядом — тот же приём и та же разметка, что в «Поездках»/«Моих
+     финансах» (см. assets/onboarding.js). Кнопка со знаком вопроса
+     (#tableHelpBtn), которая это открывает, — в .table-toolbar каждого
+     стола (renderTable/renderRoomTable в app.js), тут разметки для неё нет. -->
+<div class="onb-scrim" id="onbScrim">
+  <div class="onb-spotlight" id="onbSpotlight"></div>
+  <div class="onb-card" id="onbCard"></div>
+</div>
+
 <script src="/assets/brand.js"></script>
 <script src="/assets/auth-client.js"></script>
 <script src="/assets/puzzle-shapes.js"></script>
 <script src="/assets/puzzle-clusters.js"></script>
 <script src="/assets/app.js"></script>
+<script src="/assets/onboarding.js"></script>
 </body>
 </html>

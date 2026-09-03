@@ -246,7 +246,14 @@ a{color:inherit}
   position:relative;background:var(--md-sys-color-surface-container-low);
   border-radius:var(--md-sys-shape-corner-l);box-shadow:var(--e1);display:flex;flex-direction:column;
   cursor:pointer; /* вся карточка кликабельна — открывает превью, см. buildCard */
+  transition:transform .18s var(--ease-emph),box-shadow .18s;
 }
+/* Наведение/клавиатурный фокус — тот же приём, что .movie-tile в Movies
+   (см. buildCard, role=button/tabIndex/keydown): карточка САМА не <button>,
+   поэтому фокусируемость и подсветку даёт role=button + свой :focus-visible,
+   не браузерный дефолт кнопки. */
+.puzzle-card:hover{transform:translateY(-2px);box-shadow:var(--e2)}
+.puzzle-card:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
 /* Скругление верхних углов — теперь СВОЁ (border-radius + overflow:hidden
    именно на превью), не унаследованное от overflow:hidden всей карточки:
    картинка edge-to-edge всё ещё должна обрезаться по углам, но выпадающее
@@ -575,14 +582,44 @@ a{color:inherit}
   background:var(--md-sys-color-surface-container-high);
 }
 .win-actions{display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap}
-/* Превью пазла (см. план «Поделиться из превью и окна победы») — та же
-   картинка-плашка, что у окна победы, просто без текстового центрирования
-   вокруг (тут обычный модал, не win-card). */
+/* Превью пазла (см. план «Карточка — по образцу Movies») — картинка на всю
+   ширину модалки, вровень с краями (отрицательные margin компенсируют
+   padding .modal:1.1rem 1.3rem 1.3rem — см. .movie-info-poster в Movies,
+   тот же рецепт день в день), скругление верхних углов даёт сама модалка
+   (overflow:auto + border-radius), отдельно тут клипать не нужно.
+   aspect-ratio:4/3 — тот же, что у .puzzle-card-thumb на самой карточке
+   (obj-fit:cover уже смирился с обрезкой краёв фото и там). */
 .puzzle-preview-image{
-  width:100%;max-height:16rem;object-fit:contain;border-radius:var(--md-sys-shape-corner-l);
-  background:var(--md-sys-color-surface-container-high);margin-bottom:.6rem;
+  width:calc(100% + 2.6rem);margin:-1.1rem -1.3rem 0;aspect-ratio:4/3;
+  object-fit:cover;display:block;background:var(--md-sys-color-surface-container-high);
 }
-.puzzle-preview-rating{color:var(--md-sys-color-on-surface-variant);font-size:.88rem;margin:.3rem 0 0}
+/* Название+рейтинг под картинкой, в одну строку (тот же приём, что
+   .movie-info-caption: название слева, чип рейтинга справа). */
+.puzzle-preview-caption{display:flex;justify-content:space-between;align-items:flex-start;gap:.8rem;margin-top:.8rem}
+.puzzle-preview-caption-title{font-weight:650;font-size:1rem;min-width:0}
+.puzzle-preview-rating{
+  flex:none;white-space:nowrap;font-size:.78rem;font-weight:600;padding:.28em .7em;
+  border-radius:var(--md-sys-shape-corner-full);
+  background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container);
+}
+#puzzlePreviewAuthor{margin-top:.3rem}
+/* Шапка поверх картинки — тот же приём, что #movieInfoModalBackdrop в
+   Movies: h2 остаётся в DOM только ради aria-labelledby (визуально спрятан
+   sr-only, не display:none — тот убрал бы его и из accessibility-дерева),
+   видимое название переехало в .puzzle-preview-caption выше. .modal-head
+   абсолютным позиционированием ложится поверх картинки (та теперь первая
+   в потоке и идёт вровень с верхним краем модалки), justify-content:
+   flex-end — иконки жмутся к правому краю, раз текстового заголовка в
+   строке больше нет. Полупрозрачная тёмная подложка на кнопках — иначе
+   «поделиться»/крестик потерялись бы на светлом фото. */
+#puzzlePreviewTitle{
+  position:absolute;width:1px;height:1px;padding:0;margin:-1px;
+  overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;
+}
+#puzzlePreviewModalBackdrop .modal{position:relative}
+#puzzlePreviewModalBackdrop .modal-head{position:absolute;top:.6rem;left:.6rem;right:.6rem;z-index:2;justify-content:flex-end}
+#puzzlePreviewModalBackdrop .modal-head-actions .icon-btn{background:rgba(0,0,0,.45);color:#fff}
+.modal-head-actions{display:flex;align-items:center;gap:.1rem}
 /* Оценка на окне победы (см. план «Оценка пазла на окне победы») —
    5 звёзд, контурные по умолчанию, заливаются акцентным цветом до выбранной
    (или наведённой) включительно. */
@@ -657,6 +694,10 @@ select.text-input{
 /* Пейджер под списком комнат (Стр. N из M) — прячется целиком, если комнат
    меньше ROOMS_PAGE_SIZE (см. renderRoomsList в app.js). */
 .pager{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:.8rem;margin-top:1rem}
+/* Та же специфичность, что у браузерного [hidden]{display:none} (см. комментарий
+   выше про .icon-btn[hidden]) — без этой строчки класс .pager побеждает и
+   пейджер остаётся видимым (с disabled-стрелками) даже когда hidden выставлен. */
+.pager[hidden]{display:none}
 
 /* «Не нашли нужные пазлы?» — подвал библиотеки/категорий (см. план,
    renderCategorySuggestBox в app.js). Всё по центру одной колонкой —
@@ -874,6 +915,47 @@ select.text-input{
   background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-l);
   box-shadow:var(--e2);z-index:2000;max-width:22rem;
 }
+
+/* ===================== ОБУЧЕНИЕ НА СТОЛЕ =====================
+   Затемнение с «дырой» на подсвеченном элементе: один блок с box-shadow
+   0 0 0 9999px — «дыра» получается сама собой, без клип-путей и без
+   раскладки затемнения на четыре прямоугольника вокруг цели. Приём,
+   разметка и имена классов — те же, что в «Поездках»/«Моих финансах» (см.
+   assets/onboarding.js), чтобы обучение выглядело одинаково по всей
+   BurningHouse. Слой выше модалок (30) — подсказка не должна оказаться
+   под ними. */
+.onb-scrim{position:fixed;inset:0;z-index:90;display:none}
+.onb-scrim.show{display:block}
+.onb-spotlight{
+  position:fixed;border-radius:var(--md-sys-shape-corner-l);
+  box-shadow:0 0 0 9999px rgba(10,8,6,.62);pointer-events:none;
+  outline:2px solid var(--flame-tip);outline-offset:3px;
+  transition:top .25s var(--ease-emph-dec),left .25s var(--ease-emph-dec),
+             width .25s var(--ease-emph-dec),height .25s var(--ease-emph-dec);
+}
+.onb-card{
+  position:fixed;z-index:91;max-width:320px;padding:18px;
+  background:var(--md-sys-color-surface-container-lowest);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);box-shadow:var(--e2);
+  animation:rise .25s var(--ease-emph-dec); /* уже есть в файле — своей у карточек тура не заводим */
+}
+.onb-card.center{
+  top:50%;left:50%;max-width:360px;text-align:center;
+  animation:popCenter .25s var(--ease-emph-dec) forwards;
+}
+@keyframes popCenter{from{opacity:0;transform:translate(-50%,-50%) scale(.92)}to{opacity:1;transform:translate(-50%,-50%) scale(1)}}
+.onb-card h3{font-size:17px;margin-bottom:6px}
+.onb-card p{font-size:13px;line-height:1.5;color:var(--md-sys-color-on-surface-variant);margin-bottom:14px}
+.onb-actions{display:flex;align-items:center;gap:8px}
+.onb-actions .spacer{flex:1}
+.onb-dots{display:flex;gap:5px;justify-content:center;margin-bottom:10px}
+.onb-dots i{width:6px;height:6px;border-radius:50%;background:var(--md-sys-color-outline-variant);display:block}
+.onb-dots i.on{background:var(--flame-tip)}
+/* Подсвеченная цель на время шага показывается целиком, даже если обычно
+   проявляется только по наведению (например, меню «…» карточки). */
+.onb-target{opacity:1 !important}
+@media(max-width:520px){.onb-card{max-width:calc(100vw - 32px)}}
 
 /* ===================== СОСТОЯНИЯ ЗАГРУЗКИ/ОШИБКИ ===================== */
 .state-note{padding:2.4rem 1rem;text-align:center;color:var(--md-sys-color-on-surface-variant)}

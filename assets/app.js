@@ -292,6 +292,28 @@ const EN = {
   "Оцените пазл:": "Rate this puzzle:",
   "Оценка": "Rating",
   "Спасибо за оценку!": "Thanks for rating!",
+  "Обучение": "Help",
+  "Пропустить": "Skip",
+  "Дальше": "Next",
+  "Стол сборки": "The build table",
+  "Тащите детали и стыкуйте — совпавшие сами защёлкнутся в кластер. Покажем, где что на столе — можно пропустить в любой момент.":
+    "Drag pieces and connect them — matching ones snap into a cluster on their own. We'll show you where everything is — skip anytime.",
+  "Возвращает назад — прогресс сборки сохраняется, продолжить можно в любой момент.":
+    "Takes you back — build progress is saved, you can continue anytime.",
+  "Раскидывает ещё не собранные детали по столу заново — пригодится, если они слиплись в кучу.":
+    "Scatters the not-yet-placed pieces across the table again — handy if they've piled up.",
+  "Показывает исходное фото пазла для ориентира.": "Shows the puzzle's original photo for reference.",
+  "Свой цвет фона — если деталь плохо видна на исходном фоне, замените его.":
+    "Pick your own table color — if a piece is hard to see against the default, change it.",
+  "Рамкой выделяет сразу несколько деталей — на телефоне и планшете это замена зажатому Shift на компьютере.":
+    "Marquee-selects several pieces at once — on phone/tablet this replaces holding Shift on a computer.",
+  "Приближает, отдаляет и одной кнопкой показывает весь стол целиком.":
+    "Zooms in, zooms out, and fits the whole table into view with one button.",
+  "Общий чат за этим столом — сообщения не сохраняются, видны только пока открыта комната.":
+    "Shared chat at this table — messages aren't saved, only visible while the room is open.",
+  "Кто сейчас собирает этот пазл вместе с вами.": "Who's currently building this puzzle with you.",
+  "Это обучение": "This tutorial",
+  "Открыть заново можно этой же кнопкой в любой момент.": "Reopen it anytime with this same button.",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -477,7 +499,11 @@ document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
  * объяснение, почему .onclick=, а не addEventListener). */
 async function openPuzzlePreviewModal(p, { variants, onPlay }) {
   const displayTitle = puzzleDisplayTitle(p);
+  // h2 — sr-only (только aria-labelledby, см. styles.css), видимое название
+  // теперь в .puzzle-preview-caption рядом с рейтингом (тот же приём, что
+  // .movie-info-caption в Movies) — оба выставляем одним и тем же текстом.
   document.getElementById("puzzlePreviewTitle").textContent = displayTitle;
+  document.getElementById("puzzlePreviewCaptionTitle").textContent = displayTitle;
   const img = document.getElementById("puzzlePreviewImage");
   img.src = p.imageUrl;
   img.alt = displayTitle;
@@ -1294,9 +1320,23 @@ function buildCard(p, opts = {}) {
   // информативный путь: превью с картинкой покрупнее, автором, рейтингом
   // и тем же выбором сложности (см. план «Поделиться из превью и окна
   // победы», openPuzzlePreviewModal).
+  // Клавиатура + role=button/tabIndex — тем же приёмом, что .movie-tile в
+  // Movies (см. renderMovieTile): карточка не <button> (внутри уже есть
+  // свои button/a — «За стол», меню «…», автор), поэтому доступность через
+  // div[role=button][tabindex=0] + свой keydown на Enter/Space, а не через
+  // родной элемент. closest("button")/closest(".puzzle-card-author") — тот
+  // же фильтр, что и у click ниже: keydown с фокусed вложенной кнопки/ссылки
+  // тоже всплывает сюда, превью не должно открываться поверх их действия.
+  const isCardPreviewTarget = e => !e.target.closest("button") && !e.target.closest(".puzzle-card-author");
+  node.setAttribute("role", "button");
+  node.tabIndex = 0;
   node.addEventListener("click", e => {
-    if (e.target.closest(".menu-wrap") || e.target.closest(".puzzle-card-author")) return;
+    if (!isCardPreviewTarget(e)) return;
     openPuzzlePreviewModal(p, { variants, onPlay });
+  });
+  node.addEventListener("keydown", e => {
+    if (!isCardPreviewTarget(e)) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openPuzzlePreviewModal(p, { variants, onPlay }); }
   });
 
   // Второстепенные действия — одно меню «…» (см. renderCardMenu выше,
@@ -2161,6 +2201,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
         <span class="table-progress" id="tableProgress"></span>
+        <button class="icon-btn" id="tableHelpBtn" type="button" title="${t("Обучение")}" aria-label="${t("Обучение")}">?</button>
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
@@ -2210,6 +2251,10 @@ async function renderTable(root, puzzleId, signal, queryString) {
       </div>
     </div>`;
   const stage = $(root, "#stage");
+  // Обучение (см. assets/onboarding.js) — кнопка открывает тур заново в
+  // любой момент; сам тур один на оба стола (соло/комната), шаги про
+  // отсутствующие тут элементы (чат/присутствие) молча пропускаются.
+  $(root, "#tableHelpBtn").addEventListener("click", () => openTour(), { signal });
 
   let puzzles;
   try { [puzzles] = await Promise.all([getPuzzles(), ensureDisplayTitleCache()]); } catch { stage.innerHTML = `<p class="state-note">${t("Не удалось загрузить пазл — обновите страницу.")}</p>`; return; }
@@ -2702,6 +2747,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   signal.addEventListener("abort", () => { clearTimeout(saveTimer); saveProgress(); });
   window.addEventListener("visibilitychange", () => { if (document.hidden) { clearTimeout(saveTimer); saveProgress(); } }, { signal });
   window.addEventListener("pagehide", () => { clearTimeout(saveTimer); saveProgress(); }, { signal });
+  maybeStartTour("table");
 }
 
 /* ───────────────────────── комнаты: сокет-обвязка ───────────────────────── */
@@ -3455,6 +3501,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <strong id="tableTitle"></strong>
         <div class="spacer"></div>
         <span class="table-progress" id="tableProgress"></span>
+        <button class="icon-btn" id="tableHelpBtn" type="button" title="${t("Обучение")}" aria-label="${t("Обучение")}">?</button>
       </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
@@ -3542,6 +3589,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       </div>
     </div>`;
   const stage = $(root, "#stage");
+  // Обучение (см. assets/onboarding.js) — кнопка открывает тур заново в
+  // любой момент; сам тур один на оба стола (соло/комната), шаги про
+  // отсутствующие тут элементы (чат/присутствие) молча пропускаются.
+  $(root, "#tableHelpBtn").addEventListener("click", () => openTour(), { signal });
 
   let session;
   try {
@@ -4203,6 +4254,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         : `<p class="state-note table-give-up">Не удаётся подключиться к столу. <a class="btn text sm" href="/room/${encodeURIComponent(roomId)}">${t("Вернуться в комнату")}</a> или обновите страницу.</p>`);
     },
   });
+  maybeStartTour("table");
 }
 
 /* ───────────────────────── Яндекс.Метрика: переходы внутри SPA ─────────────────────────
