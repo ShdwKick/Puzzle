@@ -756,6 +756,13 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .puzzle-page-crumbs a:hover{color:var(--md-sys-color-primary)}
 .puzzle-page{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:2rem;align-items:start}
 @media (max-width:46rem){ .puzzle-page{grid-template-columns:1fr} }
+/* Левая колонка — картинка + «своя статистика» под ней (см. правку
+   «SEO-аудит»/расположение блока статистики): раньше mystats жил в правой
+   .puzzle-page-info вместе со сложностью и растягивал только правую
+   колонку — под картинкой при этом просто пустовало место, а справа
+   получался длинный столбец. Теперь занимает как раз тот пустой остаток
+   под картинкой, а не удлиняет и без того более длинную колонку. */
+.puzzle-page-media{display:flex;flex-direction:column;gap:1rem}
 .puzzle-page-image{
   width:100%;aspect-ratio:4/3;object-fit:cover;display:block;
   border-radius:var(--md-sys-shape-corner-xl);box-shadow:var(--e1);
@@ -783,12 +790,12 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .puzzle-page-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:.2rem 0}
 .puzzle-page-subhead{font-size:1rem;font-weight:650;margin-bottom:-.3rem}
 /* «Своя статистика» (см. план «Статистика сборки») — выделена лёгкой
-   плашкой, не просто ещё одна строка в колонке: это не общая информация о
-   пазле, а обращение конкретно к этому зрителю («вы уже…»), должно
-   считываться сразу. .win-stats/.win-stat* переиспользуются как есть (тот
-   же блок, что и на окне победы) — только выравнивание влево, как у
-   .puzzle-page-rate выше, там та же логика «модалка по центру / колонка по
-   левому краю». */
+   плашкой под картинкой (см. .puzzle-page-media выше), не просто ещё одна
+   строка в правой колонке: это не общая информация о пазле, а обращение
+   конкретно к этому зрителю («вы уже…»), должно считываться сразу.
+   .win-stats/.win-stat* переиспользуются как есть (тот же блок, что и на
+   окне победы) — только выравнивание влево, там та же логика «модалка по
+   центру / колонка по левому краю», что и у .puzzle-page-rate. */
 .puzzle-page-mystats{
   background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container);
   border-radius:var(--md-sys-shape-corner-l);padding:.9rem 1rem;

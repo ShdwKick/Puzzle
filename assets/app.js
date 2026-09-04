@@ -714,7 +714,12 @@ async function renderPuzzlePage(root, id, signal) {
       ${category ? `<span aria-hidden="true">/</span><a id="puzzlePageCrumbCat" href="#"></a>` : ""}
     </nav>
     <div class="puzzle-page">
-      <img class="puzzle-page-image" id="puzzlePageImage" alt="">
+      <div class="puzzle-page-media">
+        <img class="puzzle-page-image" id="puzzlePageImage" alt="">
+        <div class="puzzle-page-mystats" id="puzzlePageMyStats" hidden>
+          <h2 class="puzzle-page-subhead" id="puzzlePageMyStatsHeading"></h2>
+        </div>
+      </div>
       <div class="puzzle-page-info">
         <div class="puzzle-page-title-row">
           <h1 id="puzzlePageTitle"></h1>
@@ -724,9 +729,6 @@ async function renderPuzzlePage(root, id, signal) {
         <a class="puzzle-card-author" id="puzzlePageAuthor" href="#" hidden></a>
         <p class="puzzle-page-rating-summary" id="puzzlePageRatingSummary" hidden></p>
         <div class="puzzle-page-rate" id="puzzlePageRate"></div>
-        <div class="puzzle-page-mystats" id="puzzlePageMyStats" hidden>
-          <h2 class="puzzle-page-subhead" id="puzzlePageMyStatsHeading"></h2>
-        </div>
         <div class="puzzle-page-sep"></div>
         <h2 class="puzzle-page-subhead">${t("Сложность")}</h2>
         <div class="difficulty-grid" id="puzzlePageDifficultyGrid"></div>
