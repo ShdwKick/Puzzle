@@ -409,7 +409,7 @@ function applyStaticTranslations() {
   byId("accountModalLoginBtnText", el => { el.textContent = t("Войти"); });
   byId("accountModalManageLabel", el => { el.textContent = t("Аккаунт BurningHouse"); });
   byId("accountModalManageText", el => { el.textContent = t("Управление аккаунтом →"); });
-  byId("accountNotificationsHeading", el => { el.textContent = t("Уведомления"); });
+  byId("accountNotificationsToggleText", el => { el.textContent = t("Уведомления"); });
   byId("accountModalLogoutText", el => { el.textContent = t("Выйти"); });
   byId("accountModalAppearanceLabel", el => { el.textContent = t("Оформление"); });
   byId("accountModalHelpLabel", el => { el.textContent = t("Обучение"); });
@@ -1595,25 +1595,47 @@ document.getElementById("accountBtn").addEventListener("click", () => {
   const authed = auth.isAuthenticated();
   document.getElementById("accountModalGuest").hidden = authed;
   document.getElementById("accountModalUser").hidden = !authed;
+  // «Выйти» — вне #accountModalUser (см. правку «Уведомления за колокольчик,
+  // Выйти вниз», index.html) — своей видимостью повторяет то же условие,
+  // что и вся карточка аккаунта above.
+  document.getElementById("accountModalLogout").hidden = !authed;
   if (authed) {
     const user = auth.getUser();
     document.getElementById("accountModalName").textContent = (user && (user.name || user.username)) || t("аккаунт");
     document.getElementById("accountModalMeta").textContent = (user && user.email) || "";
+    // Список уведомлений свёрнут при каждом новом открытии модалки — не
+    // остаётся раскрытым с прошлого раза (см. accountNotificationsToggle
+    // ниже).
+    const notifToggle = document.getElementById("accountNotificationsToggle");
+    notifToggle.setAttribute("aria-expanded", "false");
+    document.getElementById("accountNotificationsList").hidden = true;
     loadAccountNotifications(); // асинхронно, не блокирует открытие модалки
   }
   openModal("accountModalBackdrop");
 });
 bindModal("accountModalBackdrop", null, "accountModalClose");
+document.getElementById("accountNotificationsToggle").addEventListener("click", () => {
+  const btn = document.getElementById("accountNotificationsToggle");
+  const list = document.getElementById("accountNotificationsList");
+  const expanded = btn.getAttribute("aria-expanded") === "true";
+  btn.setAttribute("aria-expanded", String(!expanded));
+  list.hidden = expanded;
+});
 
 /** Системные уведомления Auth (см. план «Системные уведомления Auth →
- *  Puzzle») — только приём и отображение, без бейджа/поллинга/колокольчика:
- *  тех тут пока сознательно нет (первый сервис семьи, который вообще
- *  показывает этот канал). Показываем ТОЛЬКО свой префикс (type начинается
- *  на "puzzle.") — уведомления других сервисов эта вкладка не трогает и не
- *  помечает прочитанными, у каждого сервиса своя срезка одного общего
- *  списка (см. Auth/INTEGRATION.md, соглашение о префиксах). */
+ *  Puzzle») — список сам по себе за колокольчиком (см. правку «Уведомления
+ *  за колокольчик, Выйти вниз», accountNotificationsToggle в index.html),
+ *  но бейдж непрочитанных на самой свёрнутой кнопке уже есть — грузим
+ *  список сразу при открытии модалки (см. accountBtn click), не по клику
+ *  на колокольчик, иначе бейдж нечем было бы посчитать, пока список
+ *  свёрнут. Поллинга/живого обновления бейджа между открытиями всё ещё
+ *  нет — за один заход достаточно. Показываем ТОЛЬКО свой префикс (type
+ *  начинается на "puzzle.") — уведомления других сервисов эта вкладка не
+ *  трогает и не помечает прочитанными, у каждого сервиса своя срезка
+ *  одного общего списка (см. Auth/INTEGRATION.md, соглашение о префиксах). */
 async function loadAccountNotifications() {
   const list = document.getElementById("accountNotificationsList");
+  const badge = document.getElementById("accountNotificationsBadge");
   list.innerHTML = `<p class="state-note">${t("Загрузка…")}</p>`;
   let all;
   try {
@@ -1622,9 +1644,13 @@ async function loadAccountNotifications() {
     all = (await res.json()).notifications || [];
   } catch {
     list.innerHTML = `<p class="state-note">${t("Не удалось загрузить уведомления.")}</p>`;
+    badge.hidden = true;
     return;
   }
   const mine = all.filter(n => n.type.startsWith("puzzle."));
+  const unreadCount = mine.filter(n => !n.readAt).length;
+  if (unreadCount > 0) { badge.hidden = false; badge.textContent = unreadCount > 9 ? "9+" : String(unreadCount); }
+  else badge.hidden = true;
   if (!mine.length) {
     list.innerHTML = `<p class="state-note">${t("Нет уведомлений")}</p>`;
     return;

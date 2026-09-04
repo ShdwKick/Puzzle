@@ -1055,9 +1055,21 @@ const MIME = {
 // лишний файл в этом списке, которого нет в COPY, тихо не найдётся).
 const ROOT_FILES = ["robots.txt", "llms.txt"];
 
+// HEAD — та же логика поиска/заголовков, что и GET, просто без тела (см.
+// правку «HEAD-запросы к статике» — Яндекс.Вебмастер жаловался «файл
+// favicon не найден», хотя GET /favicon.ico отдавал его прекрасно: сам
+// диспетчер ниже раньше отвечал 404 на любой метод, кроме GET, ДО того,
+// как запрос вообще доходил до serveStatic — Google фавиконку той же
+// GET-проверкой нашёл нормально, а Яндекс, судя по всему, сперва бьёт HEAD.
+function sendFile(res, file, headers, isHead) {
+  res.writeHead(200, headers);
+  if (isHead) return res.end();
+  fs.createReadStream(file).pipe(res);
+}
+
 /** Отдаём только index.html, assets/ и uploads/ (свои фото). store.db и
  *  server.js снаружи недоступны. */
-function serveStatic(res, pathname) {
+function serveStatic(res, pathname, isHead) {
   // Некоторые краулеры/тулы запрашивают /favicon.ico напрямую с корня,
   // игнорируя <link rel="icon"> в index.html — отдаём тот же файл, что и
   // из assets/, без отдельного правила ниже.
@@ -1065,8 +1077,7 @@ function serveStatic(res, pathname) {
   if (ROOT_FILES.includes(pathname.replace(/^\//, ""))) {
     const file = path.join(__dirname, pathname.replace(/^\//, ""));
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
-    res.writeHead(200, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" });
-    fs.createReadStream(file).pipe(res);
+    sendFile(res, file, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" }, isHead);
     return true;
   }
   if (pathname.startsWith("/uploads/")) {
@@ -1074,11 +1085,10 @@ function serveStatic(res, pathname) {
     if (!/^[\w-]+\.(jpg|png|webp)$/i.test(name)) return false;
     const file = path.join(PUZZLE_PHOTO_DIR, name);
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
-    res.writeHead(200, {
+    sendFile(res, file, {
       "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
       "Cache-Control": "public, max-age=31536000, immutable",
-    });
-    fs.createReadStream(file).pipe(res);
+    }, isHead);
     return true;
   }
   if (pathname !== "/index.html" && !pathname.startsWith("/assets/")) return false;
@@ -1095,8 +1105,7 @@ function serveStatic(res, pathname) {
   // изменения долетают в разумный срок. index.html — без кэша вовсе,
   // это точка входа, свежесть важнее.
   if (file.startsWith(ASSETS_DIR + path.sep)) headers["Cache-Control"] = "public, max-age=3600";
-  res.writeHead(200, headers);
-  fs.createReadStream(file).pipe(res);
+  sendFile(res, file, headers, isHead);
   return true;
 }
 // Точечный SSR для /categories и /category/:slug (см. план «Прямые ссылки
@@ -1220,7 +1229,7 @@ function categoryPuzzlesListHtml(category) {
   return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
 }
 
-function serveApp(res, pathname) {
+function serveApp(res, pathname, isHead) {
   try {
     let html = fs.readFileSync(APP_HTML, "utf8");
     if (pathname === "/categories") {
@@ -1299,10 +1308,10 @@ function serveApp(res, pathname) {
       }
     }
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-    res.end(html);
+    res.end(isHead ? undefined : html);
   } catch {
     res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
-    res.end("index.html не найден рядом с server.js");
+    res.end(isHead ? undefined : "index.html не найден рядом с server.js");
   }
 }
 
@@ -1842,7 +1851,7 @@ const server = http.createServer(async (req, res) => {
     // страница категорий») — раньше статичный файл (см. ROOT_FILES выше),
     // но категории меняются во времени, статика устарела бы. Не через
     // ROOT_FILES/serveStatic — та ветка только читает файл с диска.
-    if (p === "/sitemap.xml" && req.method === "GET") {
+    if (p === "/sitemap.xml" && (req.method === "GET" || req.method === "HEAD")) {
       // Пустые категории (0 пазлов) — не в sitemap: страница без единой
       // карточки не стоит краулингового бюджета (см. план «Не показываем
       // категорию, если в ней 0 пазлов», та же фильтрация — categoriesListHtml выше).
@@ -1877,7 +1886,7 @@ const server = http.createServer(async (req, res) => {
         + urls.map(u => `  <url>\n    <loc>${escapeHtml(u.loc)}</loc>\n    <changefreq>weekly</changefreq>\n    <priority>${u.priority}</priority>\n  </url>`).join("\n")
         + `\n</urlset>\n`;
       res.writeHead(200, { "Content-Type": "application/xml; charset=utf-8" });
-      return res.end(xml);
+      return res.end(req.method === "HEAD" ? undefined : xml);
     }
 
     // Адрес auth отдаём с сервера, чтобы он не был зашит в статику.
@@ -1904,13 +1913,18 @@ const server = http.createServer(async (req, res) => {
       return await api(req, res, url, user);
     }
 
-    if (req.method === "GET") {
-      if (p !== "/" && serveStatic(res, p)) return;
+    // HEAD — вместе с GET, не отдельным случаем (см. sendFile/serveStatic
+    // выше) — иначе любой HEAD на статику/страницу падает в общий 404 в
+    // конце функции, хотя тот же путь GET-ом отдаётся нормально (см. правку
+    // «HEAD-запросы к статике»).
+    if (req.method === "GET" || req.method === "HEAD") {
+      const isHead = req.method === "HEAD";
+      if (p !== "/" && serveStatic(res, p, isHead)) return;
       // Остальное — SPA с маршрутизацией по прямым путям (History API, см.
       // план «Прямые ссылки вместо #/ + страница категорий»): любой
       // нераспознанный GET-путь получает index.html, точечно
       // подготовленный под сам путь (см. serveApp/applySeoOverride выше).
-      return serveApp(res, p);
+      return serveApp(res, p, isHead);
     }
     res.writeHead(404); res.end();
   } catch (e) {
