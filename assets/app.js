@@ -46,12 +46,22 @@ const PROHIBITED_TIER_B = [
  * это разные вещи. Кнопка переехала из шапки в модалку «Аккаунт» (см.
  * правку «Тема и обучение — в окно "Аккаунт"», index.html
  * #accountModalThemeBtn, сам клик привязан там же, ниже по файлу) — тут
- * только applyTheme() и текст кнопки, отражающий ЦЕЛЕВУЮ тему (на какую
- * переключит клик), тот же смысл, что раньше был у иконки. */
+ * только applyTheme() и подпись кнопки, отражающая ЦЕЛЕВУЮ тему (на какую
+ * переключит клик), тот же смысл, что раньше был у иконки в шапке. Теперь у
+ * кнопки снова есть своя иконка (см. правку «Переделать окно Аккаунт») —
+ * SUN/MOON ниже дословно те же path, что у Admin/assets/app.js (общий
+ * приём переключателя темы в семье), просто раньше жили в шапке отдельной
+ * кнопкой, а не внутри модалки. */
+const THEME_SUN = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
+const THEME_MOON = '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>';
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("puzzle.theme", theme);
-  document.getElementById("accountModalThemeBtn").textContent = theme === "dark" ? t("Светлая тема") : t("Тёмная тема");
+  // Показываем иконку и подпись ЦЕЛЕВОЙ темы (солнце — «сейчас тёмная,
+  // нажми — станет светлая», и наоборот) — та же логика, что раньше была
+  // у иконки в шапке, просто теперь ещё и текстом рядом.
+  document.getElementById("accountModalThemeIcon").innerHTML = theme === "dark" ? THEME_SUN : THEME_MOON;
+  document.getElementById("accountModalThemeText").textContent = theme === "dark" ? t("Светлая тема") : t("Тёмная тема");
 }
 
 /* ───────────────────────── язык интерфейса ─────────────────────────
@@ -110,6 +120,9 @@ const EN = {
   "Установить как приложение": "Install app",
   "Аккаунт": "Account",
   "аккаунт": "account",
+  "Аккаунт BurningHouse": "BurningHouse account",
+  "Оформление": "Appearance",
+  "Начать обучение": "Start the tour",
   "Управление аккаунтом →": "Manage account →",
   "Выйти": "Log out",
   "Создать комнату": "Create room",
@@ -392,11 +405,14 @@ function applyStaticTranslations() {
   // переводится там, где рендерится (openPublishModal и т.п. — см. ниже).
   byId("accountModalTitle", el => { el.textContent = t("Аккаунт"); });
   byId("accountModalGuestNote", el => { el.textContent = t("Вход нужен только для того, чтобы прогресс сохранялся между заходами."); });
-  byId("accountModalLoginBtn", el => { el.textContent = t("Войти"); });
-  byId("accountModalManage", el => { el.textContent = t("Управление аккаунтом →"); });
+  byId("accountModalLoginBtnText", el => { el.textContent = t("Войти"); });
+  byId("accountModalManageLabel", el => { el.textContent = t("Аккаунт BurningHouse"); });
+  byId("accountModalManageText", el => { el.textContent = t("Управление аккаунтом →"); });
   byId("accountNotificationsHeading", el => { el.textContent = t("Уведомления"); });
-  byId("accountModalLogout", el => { el.textContent = t("Выйти"); });
-  byId("accountModalTourBtn", el => { el.textContent = t("Обучение"); });
+  byId("accountModalLogoutText", el => { el.textContent = t("Выйти"); });
+  byId("accountModalAppearanceLabel", el => { el.textContent = t("Оформление"); });
+  byId("accountModalHelpLabel", el => { el.textContent = t("Обучение"); });
+  byId("accountModalTourBtnText", el => { el.textContent = t("Начать обучение"); });
   byId("createRoomModalTitle", el => { el.textContent = t("Создать комнату"); });
   byId("newRoomTitle", el => { el.placeholder = t("Название комнаты"); });
   byId("createRoomBtn", el => { el.textContent = t("Создать"); });

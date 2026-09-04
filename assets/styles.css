@@ -93,16 +93,27 @@ a{color:inherit}
 .menu-user b{font-weight:650}
 #accountModalBackdrop .menu-user{padding:0 0 .2rem;margin-bottom:0;border-bottom:0}
 #accountModalBackdrop .btn{margin-top:.5rem}
-/* Разделитель перед темой/обучением (см. правку «Тема и обучение — в окно
-   "Аккаунт"») — те доступны и гостю, и вошедшему, разделитель просто
-   отделяет их от аккаунт-специфичной части модалки выше. */
-.modal-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:1.1rem 0 .5rem}
+/* Ведущая иконка в кнопках модалки (см. правку «Переделать окно Аккаунт») —
+   дефолтные 24px (.icon) рядом с текстом кнопки выглядят слишком крупно,
+   чуть уменьшаем именно тут, не трогая .icon глобально (используется и как
+   самостоятельная иконка покрупнее в других местах). */
+#accountModalBackdrop .btn .icon{width:20px;height:20px}
+/* Секции модалки «Аккаунт» (см. правку «Переделать окно Аккаунт») — тот же
+   приём, что у Movies/assets/styles.css (#accountModalBackdrop .modal-
+   section-label) — маленькая подпись с верхней чертой вместо одного общего
+   .modal-sep на всю модалку: раньше уведомления/тема/обучение/управление
+   шли плоским стопкom кнопок почти без визуальной иерархии. */
+#accountModalBackdrop .modal-section-label{
+  font-size:12px;color:var(--md-sys-color-on-surface-variant);
+  margin-top:1.2rem;padding-top:.9rem;border-top:1px solid var(--md-sys-color-outline-variant);
+}
+/* Первая секция сразу после карточки аккаунта — своей верхней черты не
+   нужно, .menu-user уже визуально закрывает эту роль (см. правило выше). */
+#accountModalUser .modal-section-label:first-of-type{margin-top:.3rem;padding-top:0;border-top:0}
 /* Уведомления (см. план «Системные уведомления Auth → Puzzle») — простой
    список внутри модалки аккаунта, без бейджа/поповера: первый показ этого
    канала в семье сервисов, пока намеренно минимальный. */
-#accountNotifications{margin:.8rem 0}
-#accountNotifications .room-section-title{margin:0 0 .5rem}
-#accountNotificationsList{display:flex;flex-direction:column;gap:.4rem;max-height:14rem;overflow:auto}
+#accountNotificationsList{display:flex;flex-direction:column;gap:.4rem;max-height:14rem;overflow:auto;margin-top:.5rem}
 .notification-item{
   display:block;text-decoration:none;color:inherit;padding:.5em .7em;
   border-radius:var(--md-sys-shape-corner-m);background:var(--md-sys-color-surface-container-low);
