@@ -1386,11 +1386,59 @@ ok("bulk-прогресс теперь содержит hills с 2/N детал�
 r = await asJson(tokenB, "/puzzles/progress");
 ok("bulk-прогресс — только свой, у sputnik пусто (danil его не трогал)", r.status === 200 && r.body.length === 0, JSON.stringify(r.body));
 
+// ───────── статистика сборки (см. план «Статистика сборки») — startedAt в
+// одиночном GET прогресса, myStats в групповом GET /api/puzzles/:id ─────────
+r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/progress`);
+ok("GET одиночного прогресса теперь отдаёт startedAt", r.status === 200 && typeof r.body.startedAt === "number" && r.body.startedAt > 0, JSON.stringify(r.body));
+
+pr = await fetch(PUZZLE + "/api/puzzles/hills", { headers: { Authorization: "Bearer " + tokenA } });
+pb = await pr.json();
+ok("GET /api/puzzles/hills для danil — myStats отражает незавершённый прогресс",
+  pr.status === 200 && pb.myStats && pb.myStats.puzzleId === "hills" && pb.myStats.piecesPlaced === 2 && pb.myStats.completedAt === null,
+  JSON.stringify(pb.myStats));
+
+pr = await fetch(PUZZLE + "/api/puzzles/hills", { headers: { Authorization: "Bearer " + tokenB } });
+pb = await pr.json();
+ok("GET /api/puzzles/hills для sputnik (не трогал) — myStats === null", pr.status === 200 && pb.myStats === null, JSON.stringify(pb.myStats));
+
+pr = await fetch(PUZZLE + "/api/puzzles/hills");
+pb = await pr.json();
+ok("GET /api/puzzles/hills без входа — myStats === null (гостя сервер не видит)", pr.status === 200 && pb.myStats === null, JSON.stringify(pb.myStats));
+
 r = await asJson(tokenA, `/puzzles/${hillsPuzzle.id}/progress`, { method: "DELETE" });
 ok("DELETE прогресса hills — 200", r.status === 200 && r.body.ok === true, JSON.stringify(r.body));
 
 r = await asJson(tokenA, "/puzzles/progress");
 ok("после DELETE hills пропал из bulk-списка", r.status === 200 && !r.body.some(x => x.puzzleId === hillsPuzzle.id), JSON.stringify(r.body));
+
+// myStats предпочитает ЗАВЕРШЁННЫЙ вариант среди всех уровней сложности той
+// же группы — даже если запрошен другой (id="hills"), а завершён другой
+// (id="hills-48"), см. server.js. Прогресса на hills сейчас нет вовсе (уже
+// удалён строкой выше) — миксовать с этой веткой нечего. Все детали точно
+// на своих финальных местах (x=c*100, y=r*100, см. CELL в server.js) — один
+// сплошной кластер, isSolved должен засчитать реальное завершение, не
+// просто «состыкованы две детали», как fullPiecesWithOnePair выше.
+function fullySolvedPieces(rows, cols) {
+  const arr = [];
+  for (let rr = 0; rr < rows; rr++) for (let cc = 0; cc < cols; cc++) arr.push({ r: rr, c: cc, x: cc * 100, y: rr * 100 });
+  return arr;
+}
+pr = await fetch(PUZZLE + "/api/puzzles/hills-48");
+const hills48Puzzle = (await pr.json()).puzzle;
+
+r = await asJson(tokenA, "/puzzles/hills-48/progress", {
+  method: "PUT", body: { pieces: fullySolvedPieces(hills48Puzzle.gridRows, hills48Puzzle.gridCols) },
+});
+ok("PUT полностью собранного hills-48 — completedAt проставлен", r.status === 200 && r.body.completedAt !== null, JSON.stringify(r.body));
+
+pr = await fetch(PUZZLE + "/api/puzzles/hills", { headers: { Authorization: "Bearer " + tokenA } });
+pb = await pr.json();
+ok("GET /api/puzzles/hills — myStats подхватывает завершённый hills-48, а не пустой hills",
+  pr.status === 200 && pb.myStats && pb.myStats.puzzleId === "hills-48" && pb.myStats.completedAt !== null,
+  JSON.stringify(pb.myStats));
+
+r = await asJson(tokenA, "/puzzles/hills-48/progress", { method: "DELETE" });
+ok("уборка: прогресс hills-48 удалён", r.status === 200, String(r.status));
 
 // ───────── оценка пазла на окне победы (см. план «Оценка пазла на окне
 // победы») — 5-балльная шкала, upsert, доступна и без входа ─────────
@@ -1447,6 +1495,15 @@ ok("puzzlesCompleted7d — число, не отрицательное", typeof 
 // из более ранних блоков) — не просто нули, значит формула реально сложила
 // что-то ненулевое, а не только совпала по нулям.
 ok("puzzlesStarted > 0 (реальная активность теста уже накопилась)", stats.puzzlesStarted > 0, String(stats.puzzlesStarted));
+
+// ───────── гость/вошедший и загрузки фото — см. план «Метрики для теста в
+// Директе» ─────────
+ok("roomSessionsStarted7dGuest + roomSessionsStarted7dAuth === roomSessionsStarted7d",
+  stats.roomSessionsStarted7dGuest + stats.roomSessionsStarted7dAuth === stats.roomSessionsStarted7d, JSON.stringify(stats));
+// Анонимные комнатные сеансы точно были (см. блоки с anonCall/anonRoom
+// выше) — не просто 0+0=0.
+ok("roomSessionsStarted7dGuest > 0 (анонимные сеансы теста уже накопились)", stats.roomSessionsStarted7dGuest > 0, String(stats.roomSessionsStarted7dGuest));
+ok("photosUploaded7d — число, не отрицательное", typeof stats.photosUploaded7d === "number" && stats.photosUploaded7d >= 0, String(stats.photosUploaded7d));
 
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);

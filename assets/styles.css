@@ -224,7 +224,7 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    заметно пустой промежуток между текстом и заголовком секции. */
 .library-head{margin-bottom:.6rem}
 .library-head h1{font-size:1.6rem;font-weight:650;letter-spacing:-.01em}
-.library-head p{color:var(--md-sys-color-on-surface-variant);margin-top:.3rem;max-width:40rem;
+.library-head p{color:var(--md-sys-color-on-surface-variant);margin-top:.3rem;max-width:56rem;
   text-align:justify;-webkit-hyphens:auto;hyphens:auto}
 
 /* «Продолжить сборку» над библиотекой (см. план, renderInProgressList в
@@ -654,6 +654,14 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 }
 .win-card h2{font-size:1.35rem;margin:.2rem 0 .5rem}
 .win-card p{color:var(--md-sys-color-on-surface-variant);margin-bottom:1.2rem}
+/* Статистика сборки (см. план «Статистика сборки») — на окне победы
+   (buildStatsBlock в app.js, между описанием и рейтингом) и на странице
+   пазла (тот же класс, см. .puzzle-page-mystats ниже) — пара «время
+   сборки / деталей» рядом, тем же приёмом, что .win-rating-label/значение. */
+.win-stats{display:flex;justify-content:center;gap:1.6rem;margin-bottom:1.2rem}
+.win-stat{display:flex;flex-direction:column;align-items:center;gap:.15rem}
+.win-stat-label{font-size:.76rem;color:var(--md-sys-color-on-surface-variant)}
+.win-stat-value{font-size:1.05rem;font-weight:650}
 .win-image{
   width:100%;max-height:14rem;object-fit:contain;border-radius:var(--md-sys-shape-corner-l);
   background:var(--md-sys-color-surface-container-high);
@@ -774,6 +782,21 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .puzzle-page-rate .win-rating-stars{justify-content:flex-start}
 .puzzle-page-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:.2rem 0}
 .puzzle-page-subhead{font-size:1rem;font-weight:650;margin-bottom:-.3rem}
+/* «Своя статистика» (см. план «Статистика сборки») — выделена лёгкой
+   плашкой, не просто ещё одна строка в колонке: это не общая информация о
+   пазле, а обращение конкретно к этому зрителю («вы уже…»), должно
+   считываться сразу. .win-stats/.win-stat* переиспользуются как есть (тот
+   же блок, что и на окне победы) — только выравнивание влево, как у
+   .puzzle-page-rate выше, там та же логика «модалка по центру / колонка по
+   левому краю». */
+.puzzle-page-mystats{
+  background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container);
+  border-radius:var(--md-sys-shape-corner-l);padding:.9rem 1rem;
+  display:flex;flex-direction:column;gap:.5rem;
+}
+.puzzle-page-mystats .puzzle-page-subhead{margin-bottom:0}
+.puzzle-page-mystats .win-stats{justify-content:flex-start;margin-bottom:0}
+.puzzle-page-mystats-date{font-size:.86rem;opacity:.85}
 #puzzlePagePlayBtn{margin-top:.3rem}
 .puzzle-page-related{margin-top:2.6rem}
 .puzzle-page-related h2{font-size:1.2rem;font-weight:650;margin-bottom:1rem}

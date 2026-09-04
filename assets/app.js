@@ -252,6 +252,9 @@ const EN = {
   "Пазлы из своих фото собираются только в комнатах.": "Puzzles from your own photos can only be solved in rooms.",
   "К комнатам": "To rooms",
   "Готово!": "Done!",
+  "меньше минуты": "under a minute",
+  "Время сборки": "Assembly time",
+  "Деталей": "Pieces",
   "Остаться": "Stay",
   "На главную": "To home",
   "В комнату": "To room",
@@ -277,6 +280,9 @@ const EN = {
   "Войдите, чтобы добавить своё фото.": "Sign in to add your own photo.",
   "Ещё ничего не собрано.": "Nothing solved yet.",
   "Собрать ещё раз": "Solve again",
+  "Продолжить": "Continue",
+  "Вы уже собирали этот пазл": "You've already solved this puzzle",
+  "Вы уже начали этот пазл": "You've already started this puzzle",
   "Секунду…": "One second…",
   "Приглашение не найдено или больше не действует.": "This invite wasn't found or is no longer valid.",
   "Не удалось открыть стол — обновите страницу.": "Couldn't open the table — please refresh the page.",
@@ -718,6 +724,9 @@ async function renderPuzzlePage(root, id, signal) {
         <a class="puzzle-card-author" id="puzzlePageAuthor" href="#" hidden></a>
         <p class="puzzle-page-rating-summary" id="puzzlePageRatingSummary" hidden></p>
         <div class="puzzle-page-rate" id="puzzlePageRate"></div>
+        <div class="puzzle-page-mystats" id="puzzlePageMyStats" hidden>
+          <h2 class="puzzle-page-subhead" id="puzzlePageMyStatsHeading"></h2>
+        </div>
         <div class="puzzle-page-sep"></div>
         <h2 class="puzzle-page-subhead">${t("Сложность")}</h2>
         <div class="difficulty-grid" id="puzzlePageDifficultyGrid"></div>
@@ -759,6 +768,56 @@ async function renderPuzzlePage(root, id, signal) {
     authorEl.textContent = `${t("Добавил:")} ${p.uploaderUsername}`;
   } else {
     authorEl.hidden = true;
+  }
+
+  // Своя статистика по этому пазлу (см. план «Статистика сборки») —
+  // показываем, только если для ТЕКУЩЕГО зрителя есть хоть какой-то
+  // прогресс по любому уровню сложности этой группы. У вошедшего — уже
+  // готовый myStats в ответе API (сервер сам выбрал завершённый/самый
+  // свежий вариант среди всех сложностей, см. server.js). У гостя прогресс
+  // живёт в localStorage браузера и серверу не виден вовсе — досчитываем
+  // то же самое тут же, перебором по variants (их разумное число, до
+  // полутора десятков). Строго по auth.isAuthenticated(), не просто
+  // "!data.myStats" — иначе у вошедшего без прогресса эта ветка ошибочно
+  // подхватила бы чужой/устаревший локальный прогресс того же браузера.
+  let myStats = data.myStats;
+  if (!myStats && !auth.isAuthenticated()) {
+    const guestRows = variants
+      .map(v => { const lp = localProgress(v.id); return lp ? { ...lp, puzzleId: v.id } : null; })
+      .filter(Boolean);
+    if (guestRows.length) {
+      const completedRows = guestRows.filter(r => r.completedAt).sort((a, b) => b.completedAt - a.completedAt);
+      myStats = completedRows[0] || [...guestRows].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
+    }
+  }
+  if (myStats) {
+    const block = $(root, "#puzzlePageMyStats");
+    block.hidden = false;
+    const variantIdx = Math.max(0, variants.findIndex(v => v.id === myStats.puzzleId));
+    const variant = variants[variantIdx] || variants[0];
+    const levelLabel = t(DIFFICULTY_LABELS[variantIdx]) || `${t("Уровень")} ${variantIdx + 1}`;
+    if (myStats.completedAt) {
+      $(root, "#puzzlePageMyStatsHeading").textContent = t("Вы уже собирали этот пазл");
+      const stats = buildStatsBlock(myStats.startedAt, myStats.completedAt, myStats.piecesTotal);
+      const dateP = document.createElement("p");
+      dateP.className = "puzzle-page-mystats-date";
+      dateP.textContent = `${fmtDate(myStats.completedAt)} — ${levelLabel}`;
+      const replayBtn = document.createElement("a");
+      replayBtn.className = "btn outlined full";
+      replayBtn.href = `/table/${encodeURIComponent(variant.id)}`;
+      replayBtn.textContent = t("Собрать ещё раз");
+      block.append(stats, dateP, replayBtn);
+    } else {
+      $(root, "#puzzlePageMyStatsHeading").textContent = t("Вы уже начали этот пазл");
+      const progressP = document.createElement("p");
+      progressP.className = "puzzle-page-mystats-date";
+      progressP.textContent = `${myStats.piecesPlaced}/${myStats.piecesTotal} ${tn(myStats.piecesTotal, ["деталь", "детали", "деталей"], ["piece", "pieces"])} — ${levelLabel}`;
+      const continueBtn = document.createElement("a");
+      continueBtn.className = "btn filled full";
+      continueBtn.href = `/table/${encodeURIComponent(variant.id)}`;
+      continueBtn.textContent = t("Продолжить");
+      block.append(progressP, continueBtn);
+    }
   }
 
   const choice = { idx: 0 };
@@ -870,6 +929,7 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
   btn.disabled = true;
   try {
     await publishPuzzle(id, { categoryId, newCategoryName });
+    trackGoal("photo_submitted");
     closeModal("publishModalBackdrop");
     pendingPublishId = null;
     onDone();
@@ -2717,6 +2777,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     return;
   }
   $(root, "#tableTitle").textContent = puzzleDisplayTitle(puzzle);
+  trackGoal("puzzle_started");
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
   const pad = CELL * PAD_FACTOR;
@@ -2751,6 +2812,14 @@ async function renderTable(root, puzzleId, signal, queryString) {
     saved = localProgress(puzzle.id);
   }
   if (signal.aborted) return;
+  // Момент старта — для статистики сборки на окне победы (см. план
+  // «Статистика сборки»). Для вошедшего сервер сам хранит и не сдвигает
+  // started_at при повторных PUT (см. server.js), просто читаем его
+  // обратно; для гостя аналогично храним в самой localStorage-записи (см.
+  // saveProgress ниже) — раз назначенное здесь, при первом сохранении, и
+  // сохраняющееся дальше как есть. Ничего не начато раньше — startedAt
+  // просто "сейчас".
+  const startedAt = (saved && saved.startedAt) || Date.now();
 
   const world = $(root, "#world");
   const progressEl = $(root, "#tableProgress");
@@ -3203,8 +3272,10 @@ async function renderTable(root, puzzleId, signal, queryString) {
       // updatedAt — только у гостя (сервер уже хранит его в puzzle_progress.
       // updated_at) — нужен, чтобы «Продолжить сборку» над библиотекой
       // (см. план, inProgressPuzzles) могла сортировать по свежести и для
-      // гостя тоже, не только для вошедшего.
-      localStorage.setItem(localKey(puzzle.id), JSON.stringify({ ...payload, completedAt, updatedAt: Date.now() }));
+      // гостя тоже, не только для вошедшего. startedAt — тот же захваченный
+      // при загрузке момент (см. выше), просто перезаписываем его же на
+      // каждое сохранение, чтобы он не терялся между сборками.
+      localStorage.setItem(localKey(puzzle.id), JSON.stringify({ ...payload, startedAt, completedAt, updatedAt: Date.now() }));
       if (completedAt && !announced) { announced = true; showWin(); }
     }
   }
@@ -3215,6 +3286,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   }
 
   function showWin() {
+    trackGoal("puzzle_completed");
     const overlay = document.createElement("div");
     overlay.className = "win-overlay";
     const card = document.createElement("div");
@@ -3224,6 +3296,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
     const displayTitle = puzzleDisplayTitle(puzzle);
     const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete.` : `Пазл «${displayTitle}» собран.`;
+    const stats = buildStatsBlock(startedAt, Date.now(), rows * cols);
     const rating = buildRatingWidget(puzzle, signal);
     const actions = document.createElement("div");
     actions.className = "win-actions";
@@ -3244,7 +3317,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("На главную");
     homeBtn.addEventListener("click", () => { navigate("/"); });
     actions.append(shareBtn, stayBtn, homeBtn);
-    card.append(img, h2, p, rating, actions);
+    card.append(img, h2, p, stats, rating, actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
     launchConfetti(overlay);
@@ -3333,6 +3406,50 @@ function throttle(fn, ms) {
 function fmtDate(ts) {
   try { return new Date(ts).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); }
   catch { return ""; }
+}
+
+/** «Собрано за N минут» — на окне победы и на странице пазла (см. план
+ *  «Статистика сборки»). Просто честный wall-clock между стартом
+ *  (puzzle_progress.started_at / room_sessions.startedAt) и завершением —
+ *  если пазл откладывали на несколько дней и потом доделали, так и
+ *  покажет: отделить активное время от простоя нечем, сервер считает
+ *  только сам факт старта/завершения, не сессии активности. */
+function formatDuration(ms) {
+  const totalMin = Math.max(0, Math.round(ms / 60000));
+  if (totalMin < 1) return t("меньше минуты");
+  if (totalMin < 60) return `${totalMin} ${tn(totalMin, ["минута", "минуты", "минут"], ["minute", "minutes"])}`;
+  const totalHours = Math.floor(totalMin / 60);
+  const restMin = totalMin % 60;
+  if (totalHours < 24) {
+    const hPart = `${totalHours} ${tn(totalHours, ["час", "часа", "часов"], ["hour", "hours"])}`;
+    return restMin > 0 ? `${hPart} ${restMin} ${tn(restMin, ["минута", "минуты", "минут"], ["minute", "minutes"])}` : hPart;
+  }
+  const days = Math.floor(totalHours / 24);
+  const restHours = totalHours % 24;
+  const dPart = `${days} ${tn(days, ["день", "дня", "дней"], ["day", "days"])}`;
+  return restHours > 0 ? `${dPart} ${restHours} ${tn(restHours, ["час", "часа", "часов"], ["hour", "hours"])}` : dPart;
+}
+
+/** Блок «Время сборки / Деталей» — общий для обоих showWin (соло/комната,
+ *  см. renderTable/renderRoomTable) и для блока «своя статистика» на
+ *  странице пазла (renderPuzzlePage) — тот же вид везде, тот же
+ *  .win-stat*, что и рядом стоящий .win-rating (см. styles.css). */
+function buildStatsBlock(startedAt, completedAt, piecesTotal) {
+  const wrap = document.createElement("div");
+  wrap.className = "win-stats";
+  const items = [
+    [t("Время сборки"), formatDuration(Math.max(0, completedAt - startedAt))],
+    [t("Деталей"), String(piecesTotal)],
+  ];
+  for (const [label, value] of items) {
+    const row = document.createElement("div");
+    row.className = "win-stat";
+    const l = document.createElement("span"); l.className = "win-stat-label"; l.textContent = label;
+    const v = document.createElement("b"); v.className = "win-stat-value"; v.textContent = value;
+    row.append(l, v);
+    wrap.appendChild(row);
+  }
+  return wrap;
 }
 
 /** Ярлыки участников комнаты для списка/presence — анонимным (id с
@@ -3624,6 +3741,7 @@ document.getElementById("createRoomBtn").addEventListener("click", async () => {
     });
     if (!res.ok) throw new Error("create room failed");
     const room = await res.json();
+    trackGoal("room_created");
     input.value = "";
     closeModal("createRoomModalBackdrop");
     navigate(`/room/${encodeURIComponent(room.id)}`);
@@ -4261,6 +4379,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   }
   const puzzle = session.puzzle;
   $(root, "#tableTitle").textContent = puzzleDisplayTitle(puzzle);
+  trackGoal("puzzle_started");
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
   const pad = CELL * PAD_FACTOR;
@@ -4675,6 +4794,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     });
   }
   function showWin() {
+    trackGoal("puzzle_completed");
     const overlay = document.createElement("div");
     overlay.className = "win-overlay";
     const card = document.createElement("div");
@@ -4684,6 +4804,11 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
     const displayTitle = puzzleDisplayTitle(puzzle);
     const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete — solved together with friends.` : `Пазл «${displayTitle}» собран вместе с друзьями.`;
+    // session.startedAt — момент старта ЭТОГО сеанса (см. sessionSummary в
+    // server.js, уже отдаётся с самого начала) — в отличие от соло, тут не
+    // нужно ничего досчитывать самим: комнатный сеанс общий на всех
+    // участников, отдельного "моего" старта тут просто нет.
+    const stats = buildStatsBlock(session.startedAt, Date.now(), puzzle.gridRows * puzzle.gridCols);
     const rating = buildRatingWidget(puzzle, signal);
     const actions = document.createElement("div");
     actions.className = "win-actions";
@@ -4708,7 +4833,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("В комнату");
     homeBtn.addEventListener("click", () => { navigate(`/room/${encodeURIComponent(roomId)}`); });
     actions.append(stayBtn, homeBtn);
-    card.append(img, h2, p, rating, actions);
+    card.append(img, h2, p, stats, rating, actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
     launchConfetti(overlay);
@@ -4951,6 +5076,21 @@ function trackPageview() {
   if (typeof ym === "function") ym(METRIKA_ID, "hit", location.href, { title: document.title, referer: document.referrer });
 }
 
+/** JS-цели Метрики (см. правку «Метрики для теста в Директе») — до этой
+ *  правки счётчик слал только хиты по переходам, никаких целей, поэтому
+ *  нельзя было спросить «что делали именно те, кто пришёл из рекламы» —
+ *  только «сколько их было». reachGoal сам заводит цель в отчётах при
+ *  первом срабатывании (JS-событие) — оформить её полноценной именованной
+ *  целью в интерфейсе Метрики можно отдельно, необязательно, здесь только
+ *  код. Пять точек: puzzle_started/puzzle_completed (renderTable/
+ *  renderRoomTable — showWin), room_created (createRoomBtn), photo_submitted
+ *  (заявка на публикацию — само одобрение проходит уже в Admin, откуда
+ *  клиент не видит момент), signed_in (init — именно возврат с /authorize,
+ *  не каждая загрузка уже вошедшего). */
+function trackGoal(name) {
+  if (typeof ym === "function") ym(METRIKA_ID, "reachGoal", name);
+}
+
 /* ───────────────────────── роутер ─────────────────────────
  * История переходов — pushState/popstate (см. план «Прямые ссылки вместо
  * #/ + страница категорий»), не hashchange: обычные пути индексируются
@@ -5037,6 +5177,7 @@ async function init() {
   // Принудительного редиректа на вход НЕТ — гостевой режим полноценный
   // (см. README «Идея в двух режимах»).
   const loggedIn = await auth.handleRedirect();
+  if (loggedIn) trackGoal("signed_in");
   renderAuthArea();
   const returnTo = loggedIn && sessionStorage.getItem("puzzle_return_to");
   if (returnTo) {

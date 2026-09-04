@@ -1344,10 +1344,32 @@ const server = http.createServer(async (req, res) => {
       const roomSessions = db.prepare("SELECT COUNT(*) AS n FROM room_sessions").get().n;
       const roomSessionsCompleted = db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE completed_at IS NOT NULL").get().n;
       const roomSessionsCompleted7d = db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE completed_at > ?").get(since7d).n;
+      // Гость/вошедший — только для комнатных сеансов (см. план «Метрики для
+      // теста в Директе»): у соло (puzzle_progress) личность ВСЕГДА реальный
+      // user_id, гость туда просто не попадает (см. комментарий выше) —
+      // делить там нечего, вся таблица и так «вошедшие». started_by у
+      // комнатных сеансов — либо настоящий user.id, либо анонимная личность
+      // вида "anon:<uuid>" (см. getOrCreateAnonIdentity) — тот же признак
+      // гостя, что и везде в этом файле (kickFromRoom, roomMember и т.п.).
+      const roomSessionsStarted7dGuest = db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE started_at > ? AND started_by LIKE 'anon:%'").get(since7d).n;
+      const roomSessionsStarted7dAuth = db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE started_at > ? AND started_by NOT LIKE 'anon:%'").get(since7d).n;
       return json(res, 200, {
         ok: true,
         puzzles: db.prepare("SELECT COUNT(*) AS n FROM puzzles").get().n,
         customPuzzles: db.prepare("SELECT COUNT(*) AS n FROM puzzles WHERE owner_user_id IS NOT NULL").get().n,
+        // Загрузки (не строки puzzles — там ~11 строк на одну загрузку, по
+        // одной на пресет сложности, см. PIECE_PRESETS) — COUNT(DISTINCT
+        // image_file), иначе цифра обманчиво умножена. uploader_user_id, НЕ
+        // owner_user_id — тот обнуляется при одобрении (см. setModeration
+        // Approved), фильтр по нему считал бы только ещё НЕ одобренные
+        // загрузки и терял бы как раз успешные. uploader_user_id переживает
+        // модерацию (см. комментарий у puzzlePayload) — ловит загрузку в
+        // любом статусе: приватная/на модерации/одобренная/отклонённая.
+        // Дата — created_at, момент ЗАГРУЗКИ, не одобрения: отдельного
+        // таймстампа одобрения в схеме нет (moderation_status меняется на
+        // месте, без своей даты) — «опубликовано за 7д» этим запросом не
+        // посчитать, только «загружено за 7д».
+        photosUploaded7d: db.prepare("SELECT COUNT(DISTINCT image_file) AS n FROM puzzles WHERE uploader_user_id IS NOT NULL AND created_at > ?").get(since7d).n,
         puzzlesStarted: progressRows + roomSessions,
         puzzlesCompleted: completed + roomSessionsCompleted,
         puzzlesCompleted7d: completed7d + roomSessionsCompleted7d,
@@ -1359,6 +1381,8 @@ const server = http.createServer(async (req, res) => {
         roomSessions,
         roomSessionsCompleted,
         roomSessionsStarted7d: db.prepare("SELECT COUNT(*) AS n FROM room_sessions WHERE started_at > ?").get(since7d).n,
+        roomSessionsStarted7dGuest,
+        roomSessionsStarted7dAuth,
       });
     }
     if (p === "/internal/logs" && req.method === "GET") {
@@ -2084,6 +2108,12 @@ async function api(req, res, url, user) {
         pieces: JSON.parse(row.pieces),
         piecesPlaced: row.pieces_placed,
         piecesTotal: row.pieces_total,
+        // startedAt — добавлено для статистики сборки на окне победы (см.
+        // план «Статистика сборки») — раньше не отдавался вовсе, хотя в
+        // БД уже хранится (upsertProgress сохраняет started_at первого
+        // сохранения и не даёт ему сдвинуться, см. PUT ниже): клиенту
+        // нужно знать момент старта, чтобы посчитать «собрано за N минут».
+        startedAt: row.started_at,
         completedAt: row.completed_at,
       });
     }
@@ -2188,7 +2218,30 @@ async function api(req, res, url, user) {
       if (!user || user.id !== puzzle.owner_user_id) return json(res, 404, { error: "not found" });
       variants = stmt.puzzlesByImage.all(puzzle.image_file, puzzle.owner_user_id);
     }
-    return json(res, 200, { puzzle: puzzlePayload(puzzle), variants: variants.map(puzzlePayload) });
+    // Статистика сборки для страницы пазла (см. план «Статистика сборки»,
+    // блок «если она есть для этого пользователя») — среди ВСЕХ уровней
+    // сложности этой группы (человек мог собирать не тот вариант, с
+    // которого зашли на страницу). Только для вошедшего — прогресс гостя
+    // живёт в localStorage браузера, сюда не долетает вовсе (см. renderTable/
+    // localProgress в app.js), клиент для гостя досчитывает то же самое
+    // сам, перебирая localStorage по variants. Предпочитаем завершённый
+    // вариант (самый недавний из завершённых) — «собрано» интереснее, чем
+    // «где-то на середине»; если завершённых нет — самый недавно
+    // обновлённый незавершённый.
+    let myStats = null;
+    if (user) {
+      const rows = variants.map(v => stmt.progress.get(user.id, v.id)).filter(Boolean);
+      if (rows.length) {
+        const completedRows = rows.filter(r => r.completed_at).sort((a, b) => b.completed_at - a.completed_at);
+        const best = completedRows[0] || [...rows].sort((a, b) => b.updated_at - a.updated_at)[0];
+        myStats = {
+          puzzleId: best.puzzle_id,
+          piecesPlaced: best.pieces_placed, piecesTotal: best.pieces_total,
+          startedAt: best.started_at, updatedAt: best.updated_at, completedAt: best.completed_at,
+        };
+      }
+    }
+    return json(res, 200, { puzzle: puzzlePayload(puzzle), variants: variants.map(puzzlePayload), myStats });
   }
 
   if (seg[1] === "rooms") {
