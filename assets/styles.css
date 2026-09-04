@@ -663,7 +663,27 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   background:var(--md-sys-color-surface-container-lowest);border-radius:var(--md-sys-shape-corner-xl);
   padding:2rem 2.2rem;text-align:center;box-shadow:var(--e2);max-width:22rem;
 }
-.win-card h2{font-size:1.35rem;margin:.2rem 0 .5rem}
+/* Картинка на всю ширину карточки, вровень с краями (см. правку «Окно
+   победы — превью и результат») — тот же приём, что у .puzzle-preview-image
+   (превью пазла/выбор сложности): отрицательный margin компенсирует padding
+   .win-card, скругление верхних углов теперь на самой картинке (не через
+   overflow:hidden на карточке — так безопаснее, не рискует незаметно
+   обрезать что-то ещё внутри .win-card). Раньше картинка была врезана
+   внутрь паддинга (max-height:14rem, object-fit:contain) — с портретным
+   фото получались пустые поля по бокам, теперь cover — без полей, как
+   раньше было в модалке превью. */
+.win-image-wrap{position:relative;margin:-2rem -2.2rem 0}
+.win-image{
+  width:100%;aspect-ratio:4/3;object-fit:cover;display:block;
+  border-radius:var(--md-sys-shape-corner-xl) var(--md-sys-shape-corner-xl) 0 0;
+  background:var(--md-sys-color-surface-container-high);
+}
+/* Кнопка «поделиться результатом» плавает поверх картинки, тем же приёмом,
+   что и шапка #puzzlePreviewModalBackdrop .modal-head — полупрозрачная
+   тёмная подложка, иначе теряется на светлом фото. */
+.win-image-actions{position:absolute;top:.6rem;right:.6rem}
+.win-image-actions .icon-btn{background:rgba(0,0,0,.45);color:#fff}
+.win-card h2{font-size:1.35rem;margin:1.2rem 0 .5rem}
 .win-card p{color:var(--md-sys-color-on-surface-variant);margin-bottom:1.2rem}
 /* Статистика сборки (см. план «Статистика сборки») — на окне победы
    (buildStatsBlock в app.js, между описанием и рейтингом) и на странице
@@ -673,11 +693,13 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .win-stat{display:flex;flex-direction:column;align-items:center;gap:.15rem}
 .win-stat-label{font-size:.76rem;color:var(--md-sys-color-on-surface-variant)}
 .win-stat-value{font-size:1.05rem;font-weight:650}
-.win-image{
-  width:100%;max-height:14rem;object-fit:contain;border-radius:var(--md-sys-shape-corner-l);
-  background:var(--md-sys-color-surface-container-high);
-}
-.win-actions{display:flex;gap:.6rem;justify-content:center;flex-wrap:wrap}
+/* Было три кнопки вперемешку — маленькая круглая «скопировать ссылку» и
+   два разноразмерных пилла (см. правку «Окно победы — превью и
+   результат») — ссылка-иконка переехала на картинку выше (её сменила
+   «поделиться результатом»), тут остались только два одинаковых полных
+   пилла, выровненных поровну. */
+.win-actions{display:flex;gap:.6rem}
+.win-actions .btn{flex:1}
 /* Превью пазла (см. план «Карточка — по образцу Movies») — картинка на всю
    ширину модалки, вровень с краями (отрицательные margin компенсируют
    padding .modal:1.1rem 1.3rem 1.3rem — см. .movie-info-poster в Movies,
@@ -800,6 +822,39 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .puzzle-page-rate .win-rating-stars{justify-content:flex-start}
 .puzzle-page-sep{height:1px;background:var(--md-sys-color-outline-variant);margin:.2rem 0}
 .puzzle-page-subhead{font-size:1rem;font-weight:650;margin-bottom:-.3rem}
+/* Свёрнутый по умолчанию выбор сложности (см. правку «Картинка и «За стол»
+   на одном уровне») — тоггл показывает только выбранный уровень, полная
+   сетка difficulty-grid и чекбоксы — в раскрывающейся панели ниже. Раньше
+   вся сетка (11 плиток) была видна всегда — это и было главной причиной,
+   почему правая колонка почти всегда выходила заметно длиннее картинки
+   слева. */
+.puzzle-page-diffbox{
+  border:1px solid var(--md-sys-color-outline-variant);border-radius:var(--md-sys-shape-corner-l);
+  overflow:hidden;
+}
+.puzzle-page-diffbox-toggle{
+  width:100%;display:flex;align-items:center;justify-content:space-between;gap:.8rem;
+  padding:.65em .9em;background:var(--md-sys-color-surface-container-low);border:0;cursor:pointer;
+  text-align:left;color:inherit;font:inherit;
+}
+.puzzle-page-diffbox-toggle:hover{background:var(--md-sys-color-surface-container)}
+.puzzle-page-diffbox-label{display:block;font-size:.76rem;color:var(--md-sys-color-on-surface-variant)}
+.puzzle-page-diffbox-toggle b{font-size:.96rem;font-weight:650}
+.puzzle-page-diffbox-toggle .icon{width:20px;height:20px;flex:none;transition:transform .2s var(--ease-std)}
+.puzzle-page-diffbox-toggle[aria-expanded="true"] .icon{transform:rotate(180deg)}
+.puzzle-page-diffbox-panel{
+  padding:.9rem;border-top:1px solid var(--md-sys-color-outline-variant);
+  display:flex;flex-direction:column;gap:.8rem;
+}
+/* display:flex у автора-стиля перебивает встроенное [hidden]{display:none}
+   (та же специфичность — выигрывает тот, кто загружен позже, см. уже
+   существующий .btn[hidden] выше) — без этой строки панель оставалась
+   видна, даже когда JS ставил hidden. */
+.puzzle-page-diffbox-panel[hidden]{display:none}
+/* .difficulty-grid несёt свой margin-top (см. правило выше) — рассчитан на
+   контекст модалки (отступ от подписи над сеткой), тут сетка первым
+   ребёнком в панели с собственным padding/gap — свой отступ сверху лишний. */
+.puzzle-page-diffbox-panel .difficulty-grid{margin-top:0}
 /* «Своя статистика» (см. план «Статистика сборки») — выделена лёгкой
    плашкой под картинкой (см. .puzzle-page-media выше), не просто ещё одна
    строка в правой колонке: это не общая информация о пазле, а обращение
@@ -812,6 +867,11 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   border-radius:var(--md-sys-shape-corner-l);padding:.9rem 1rem;
   display:flex;flex-direction:column;gap:.5rem;
 }
+/* Тот же [hidden]-перебой, что у .puzzle-page-diffbox-panel/.btn выше — это
+   и была настоящая причина «пустого фиолетового блока» в баг-репорте: JS
+   честно ставил hidden, когда статистики нет, но display:flex всё равно
+   рисовал пустую плашку с одним заголовком без текста. */
+.puzzle-page-mystats[hidden]{display:none}
 .puzzle-page-mystats .puzzle-page-subhead{margin-bottom:0}
 .puzzle-page-mystats .win-stats{justify-content:flex-start;margin-bottom:0}
 .puzzle-page-mystats-date{font-size:.86rem;opacity:.85}

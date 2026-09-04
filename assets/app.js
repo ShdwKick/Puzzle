@@ -323,6 +323,7 @@ const EN = {
   "Сообщение…": "Message…",
   "Отправить": "Send",
   "Скопировать ссылку на пазл": "Copy puzzle link",
+  "Поделиться результатом": "Share your result",
   "Оцените пазл:": "Rate this puzzle:",
   "Оценка": "Rating",
   "Спасибо за оценку!": "Thanks for rating!",
@@ -746,16 +747,35 @@ async function renderPuzzlePage(root, id, signal) {
         <p class="puzzle-page-rating-summary" id="puzzlePageRatingSummary" hidden></p>
         <div class="puzzle-page-rate" id="puzzlePageRate"></div>
         <div class="puzzle-page-sep"></div>
-        <h2 class="puzzle-page-subhead">${t("Сложность")}</h2>
-        <div class="difficulty-grid" id="puzzlePageDifficultyGrid"></div>
-        <label class="checkbox-row">
-          <input type="checkbox" id="puzzlePageAsymmetric">
-          <span>${t("Ассиметричная форма деталей — сложнее, детали неровные")}</span>
-        </label>
-        <label class="checkbox-row">
-          <input type="checkbox" id="puzzlePageRotate">
-          <span>${t("Повороты деталей — детали нужно ещё повернуть, не только сложить")}</span>
-        </label>
+        <!-- Сложность+чекбоксы — свёрнуты по умолчанию в один компактный
+             тоггл (см. правку «Картинка и «За стол» на одном уровне»):
+             раньше это была полноразмерная сетка 11 плиток + два чекбокса с
+             двухстрочными подписями прямо в колонке — вместе с остальным
+             содержимым правая колонка почти всегда выходила заметно длиннее
+             картинки слева. renderDifficultyGrid — тот же переиспользуемый
+             рендер, что и в openDifficultyModal (карточка библиотеки), сама
+             функция не менялась — сворачивание/подпись выбранного уровня
+             живут вокруг неё, тут же, ниже. -->
+        <div class="puzzle-page-diffbox">
+          <button class="puzzle-page-diffbox-toggle" id="puzzlePageDifficultyToggle" type="button" aria-expanded="false" aria-controls="puzzlePageDifficultyPanel">
+            <span>
+              <span class="puzzle-page-diffbox-label">${t("Сложность")}</span>
+              <b id="puzzlePageDifficultySelected"></b>
+            </span>
+            <svg class="icon" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
+          </button>
+          <div class="puzzle-page-diffbox-panel" id="puzzlePageDifficultyPanel" hidden>
+            <div class="difficulty-grid" id="puzzlePageDifficultyGrid"></div>
+            <label class="checkbox-row">
+              <input type="checkbox" id="puzzlePageAsymmetric">
+              <span>${t("Ассиметричная форма деталей — сложнее, детали неровные")}</span>
+            </label>
+            <label class="checkbox-row">
+              <input type="checkbox" id="puzzlePageRotate">
+              <span>${t("Повороты деталей — детали нужно ещё повернуть, не только сложить")}</span>
+            </label>
+          </div>
+        </div>
         <button class="btn filled full" id="puzzlePagePlayBtn" type="button">${t("За стол")}</button>
       </div>
     </div>
@@ -790,14 +810,19 @@ async function renderPuzzlePage(root, id, signal) {
 
   // Своя статистика по этому пазлу (см. план «Статистика сборки») —
   // показываем, только если для ТЕКУЩЕГО зрителя есть хоть какой-то
-  // прогресс по любому уровню сложности этой группы. У вошедшего — уже
-  // готовый myStats в ответе API (сервер сам выбрал завершённый/самый
-  // свежий вариант среди всех сложностей, см. server.js). У гостя прогресс
-  // живёт в localStorage браузера и серверу не виден вовсе — досчитываем
-  // то же самое тут же, перебором по variants (их разумное число, до
-  // полутора десятков). Строго по auth.isAuthenticated(), не просто
-  // "!data.myStats" — иначе у вошедшего без прогресса эта ветка ошибочно
-  // подхватила бы чужой/устаревший локальный прогресс того же браузера.
+  // РЕАЛЬНЫЙ прогресс (собран, или собрано хоть сколько-то деталей) по
+  // любому уровню сложности этой группы — пустая запись (0 деталей, не
+  // завершено — например, просто заходили на стол и сразу ушли) не в счёт,
+  // блок в этом случае молча остаётся hidden, а не показывается пустым
+  // (см. правку «Скрывать блок статистики, если там ничего нет»). У
+  // вошедшего — уже готовый myStats в ответе API (сервер сам выбрал
+  // завершённый/самый свежий вариант среди всех сложностей, см. server.js).
+  // У гостя прогресс живёт в localStorage браузера и серверу не виден
+  // вовсе — досчитываем то же самое тут же, перебором по variants (их
+  // разумное число, до полутора десятков). Строго по auth.isAuthenticated(),
+  // не просто "!data.myStats" — иначе у вошедшего без прогресса эта ветка
+  // ошибочно подхватила бы чужой/устаревший локальный прогресс того же
+  // браузера.
   let myStats = data.myStats;
   if (!myStats && !auth.isAuthenticated()) {
     const guestRows = variants
@@ -808,14 +833,19 @@ async function renderPuzzlePage(root, id, signal) {
       myStats = completedRows[0] || [...guestRows].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0];
     }
   }
-  if (myStats) {
-    const block = $(root, "#puzzlePageMyStats");
-    block.hidden = false;
+  const hasRealProgress = myStats && (myStats.completedAt || myStats.piecesPlaced > 0);
+  if (hasRealProgress) {
+    // Собираем всё содержимое ДО того, как показать блок (heading
+    // включительно, хоть он и статичный элемент в разметке) — вместо
+    // "снять hidden, потом заполнить" в несколько шагов: так по построению
+    // не может получиться показанный, но пустой блок, даже если что-то
+    // из промежуточных вычислений вдруг бросит исключение.
     const variantIdx = Math.max(0, variants.findIndex(v => v.id === myStats.puzzleId));
     const variant = variants[variantIdx] || variants[0];
     const levelLabel = t(DIFFICULTY_LABELS[variantIdx]) || `${t("Уровень")} ${variantIdx + 1}`;
+    let heading, extraNodes;
     if (myStats.completedAt) {
-      $(root, "#puzzlePageMyStatsHeading").textContent = t("Вы уже собирали этот пазл");
+      heading = t("Вы уже собирали этот пазл");
       const stats = buildStatsBlock(myStats.startedAt, myStats.completedAt, myStats.piecesTotal);
       const dateP = document.createElement("p");
       dateP.className = "puzzle-page-mystats-date";
@@ -824,9 +854,9 @@ async function renderPuzzlePage(root, id, signal) {
       replayBtn.className = "btn outlined full";
       replayBtn.href = `/table/${encodeURIComponent(variant.id)}`;
       replayBtn.textContent = t("Собрать ещё раз");
-      block.append(stats, dateP, replayBtn);
+      extraNodes = [stats, dateP, replayBtn];
     } else {
-      $(root, "#puzzlePageMyStatsHeading").textContent = t("Вы уже начали этот пазл");
+      heading = t("Вы уже начали этот пазл");
       const progressP = document.createElement("p");
       progressP.className = "puzzle-page-mystats-date";
       progressP.textContent = `${myStats.piecesPlaced}/${myStats.piecesTotal} ${tn(myStats.piecesTotal, ["деталь", "детали", "деталей"], ["piece", "pieces"])} — ${levelLabel}`;
@@ -834,12 +864,43 @@ async function renderPuzzlePage(root, id, signal) {
       continueBtn.className = "btn filled full";
       continueBtn.href = `/table/${encodeURIComponent(variant.id)}`;
       continueBtn.textContent = t("Продолжить");
-      block.append(progressP, continueBtn);
+      extraNodes = [progressP, continueBtn];
     }
+    const block = $(root, "#puzzlePageMyStats");
+    $(root, "#puzzlePageMyStatsHeading").textContent = heading;
+    block.append(...extraNodes);
+    block.hidden = false;
   }
 
   const choice = { idx: 0 };
+  const diffToggle = $(root, "#puzzlePageDifficultyToggle");
+  const diffPanel = $(root, "#puzzlePageDifficultyPanel");
+  const diffSelected = $(root, "#puzzlePageDifficultySelected");
+  function updateDifficultySelected() {
+    const v = variants[choice.idx] || variants[0];
+    const total = v.gridRows * v.gridCols;
+    const label = t(DIFFICULTY_LABELS[choice.idx]) || `${t("Уровень")} ${choice.idx + 1}`;
+    diffSelected.textContent = `${label} · ${total} ${tn(total, ["деталь", "детали", "деталей"], ["piece", "pieces"])}`;
+  }
   renderDifficultyGrid($(root, "#puzzlePageDifficultyGrid"), variants, choice);
+  updateDifficultySelected();
+  diffToggle.addEventListener("click", () => {
+    const expanded = diffToggle.getAttribute("aria-expanded") === "true";
+    diffToggle.setAttribute("aria-expanded", String(!expanded));
+    diffPanel.hidden = expanded;
+  }, { signal });
+  // Клик по плитке сложности — тот же самый обработчик renderDifficultyGrid
+  // (меняет choice.idx и перерисовывает плитки сам, см. renderDifficultyGrid
+  // выше) успевает отработать первым (он на самой кнопке, всплытие идёт
+  // снизу вверх) — к моменту, когда событие дойдёт досюда, choice.idx уже
+  // обновлён. Сворачиваем панель обратно — тот же приём, что у обычного
+  // <select>: выбрал — свернулось, второй клик по тому же тоглу не нужен.
+  $(root, "#puzzlePageDifficultyGrid").addEventListener("click", e => {
+    if (!e.target.closest(".difficulty-pill")) return;
+    updateDifficultySelected();
+    diffToggle.setAttribute("aria-expanded", "false");
+    diffPanel.hidden = true;
+  }, { signal });
 
   // Поделиться — только у ПУБЛИЧНОГО пазла (ownerUserId===null, см.
   // openPuzzlePreviewModal): своё ещё не опубликованное фото сюда обычно и
@@ -2564,6 +2625,21 @@ function createPieceEl(puzzleId, r, c, rows, cols, cell, pad, edges, imageUrl, b
   wrap.style.height = size + "px";
   wrap.dataset.r = String(r);
   wrap.dataset.c = String(c);
+  // Хит-тест — по настоящему контуру детали (тот же d, что уже клипает
+  // <image> внутри), а не по квадратному боксу size×size (см. правку
+  // «Хит-тест по контуру детали»): PAD = cell*0.4 с каждой стороны (см.
+  // puzzle-shapes.js), у соседних деталей эти квадраты сильно перекрываются
+  // там, где выступает бленд/паз — раньше клик в такой зоне перекрытия
+  // всегда доставался тому, кто позже в DOM (см. bindPieceDrag ниже —
+  // слушатель висит на wrap, нативный hit-test браузера иначе не знает про
+  // фигурный контур вовсе), даже если под курсором визуально была другая,
+  // маленькая деталь. clip-path тут — тот же путь в тех же локальных
+  // координатах size×size, что и viewBox svg выше, координаты 1-в-1
+  // совпадают, пересчитывать не нужно. Тень (.piece{filter:drop-shadow})
+  // не страдает — она и так уже была ограничена этим же контуром через
+  // clip-path самой <image> внутри, тут просто закрываем ту же дыру для
+  // pointer-events, а не меняем что-то новое визуально.
+  wrap.style.clipPath = `path("${d}")`;
   wrap.appendChild(svg);
   // <image> внутри — по умолчанию нативно перетаскиваемый браузером элемент
   // (как обычная картинка): при достаточно долгом/дальнем драге (особенно
@@ -3309,33 +3385,49 @@ async function renderTable(root, puzzleId, signal, queryString) {
     overlay.className = "win-overlay";
     const card = document.createElement("div");
     card.className = "win-card";
+    // Картинка на всю ширину карточки (см. правку «Окно победы — превью и
+    // результат», .win-image-wrap/.win-image в styles.css) — тот же приём,
+    // что раньше был у превью-модалки пазла. Кнопка «поделиться» теперь тут
+    // же, поверх картинки, а не в общем ряду действий внизу (см. actions
+    // ниже — там остались только «Остаться»/«На главную», ровно два
+    // одинаковых пилла).
+    const imgWrap = document.createElement("div");
+    imgWrap.className = "win-image-wrap";
     const img = document.createElement("img");
     img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzleDisplayTitle(puzzle);
-    const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
     const displayTitle = puzzleDisplayTitle(puzzle);
+    const durationMs = Date.now() - startedAt;
+    // Соло-стол показывает только ПУБЛИЧНЫЕ библиотечные пазлы (своё фото
+    // отбивается раньше, см. начало renderTable, «только в комнатах») —
+    // ownerUserId тут всегда null, кнопка нужна без условия.
+    const shareActions = document.createElement("div");
+    shareActions.className = "win-image-actions";
+    const shareBtn = document.createElement("button");
+    shareBtn.className = "icon-btn"; shareBtn.type = "button";
+    shareBtn.title = t("Поделиться результатом"); shareBtn.setAttribute("aria-label", shareBtn.title);
+    shareBtn.innerHTML = SHARE_RESULT_ICON;
+    // /puzzle/:id, не /table/:id — ссылка ведёт на страницу пазла, не на
+    // прямой стол (см. план «Страница пазла вместо превью-модалки»).
+    bindResultShareButton(shareBtn, () => ({
+      text: buildResultShareText(displayTitle, durationMs),
+      url: `${location.origin}/puzzle/${encodeURIComponent(puzzle.id)}`,
+    }));
+    shareActions.appendChild(shareBtn);
+    imgWrap.append(img, shareActions);
+    const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
     const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete.` : `Пазл «${displayTitle}» собран.`;
     const stats = buildStatsBlock(startedAt, Date.now(), rows * cols);
     const rating = buildRatingWidget(puzzle, signal);
     const actions = document.createElement("div");
     actions.className = "win-actions";
-    // Соло-стол показывает только ПУБЛИЧНЫЕ библиотечные пазлы (своё фото
-    // отбивается раньше, см. начало renderTable, «только в комнатах») —
-    // ownerUserId тут всегда null, кнопка нужна без условия.
-    const shareBtn = document.createElement("button");
-    shareBtn.className = "btn outlined icon"; shareBtn.type = "button";
-    shareBtn.title = t("Скопировать ссылку на пазл"); shareBtn.setAttribute("aria-label", shareBtn.title);
-    shareBtn.innerHTML = SHARE_ICON;
-    // /puzzle/:id, не /table/:id — ссылка ведёт на страницу пазла, не на
-    // прямой стол (см. план «Страница пазла вместо превью-модалки»).
-    bindShareButton(shareBtn, () => `${location.origin}/puzzle/${encodeURIComponent(puzzle.id)}`);
     const stayBtn = document.createElement("button");
     stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = t("Остаться");
     stayBtn.addEventListener("click", () => overlay.remove());
     const homeBtn = document.createElement("button");
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("На главную");
     homeBtn.addEventListener("click", () => { navigate("/"); });
-    actions.append(shareBtn, stayBtn, homeBtn);
-    card.append(img, h2, p, stats, rating, actions);
+    actions.append(stayBtn, homeBtn);
+    card.append(imgWrap, h2, p, stats, rating, actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
     launchConfetti(overlay);
@@ -3529,6 +3621,48 @@ function bindShareButton(btn, getUrl) {
       btn.setAttribute("aria-label", btn.title);
       btn.innerHTML = SHARE_ICON;
     }, 1800);
+  };
+}
+
+// Отдельная от SHARE_ICON выше иконка — та (цепочка) читается как «скопировать
+// ссылку», эта (три точки, соединённые линиями) — как «поделиться» в более
+// широком смысле, тот же значок, что и в системных шер-меню — уместнее для
+// кнопки, которая теперь открывает именно системный диалог «Поделиться».
+const SHARE_RESULT_ICON = '<svg class="icon" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>';
+
+/** Текст для «поделиться результатом» (см. правку «Окно победы — превью и
+ *  результат») — время сборки тем же formatDuration, что и на самой
+ *  статистике рядом (см. buildStatsBlock выше), чтобы число не разошлось. */
+function buildResultShareText(title, durationMs) {
+  const duration = formatDuration(Math.max(0, durationMs));
+  return getLang() === "en" ? `I solved the puzzle "${title}" in ${duration}!` : `Я собрал пазл «${title}» за ${duration}!`;
+}
+
+/** Поделиться РЕЗУЛЬТАТОМ, не просто ссылкой на пазл (см. правку «Окно
+ *  победы — превью и результат», отличие от bindShareButton выше — тот
+ *  копирует голый URL). Первым делом — navigator.share: системный диалог
+ *  «Поделиться», который на телефоне открывает ЛЮБое установленное
+ *  приложение (соцсеть, мессенджер) — специально не хардкодим кнопки под
+ *  конкретные сети, пользователь сам решает, куда. Поддержки на десктопе
+ *  почти нигде нет — тогда тот же приём, что у bindShareButton: копируем
+ *  текст+ссылку в буфер, с тем же подтверждением иконкой на секунду-другую.
+ *  AbortError — пользователь сам закрыл системный диалог, не ошибка, просто
+ *  выходим; любая другая ошибка — тоже уходим в буфер, а не молчим совсем. */
+function bindResultShareButton(btn, getShareData) {
+  let flashTimer = null;
+  const icon = btn.innerHTML;
+  btn.onclick = async () => {
+    const data = getShareData();
+    if (!data) return;
+    if (navigator.share) {
+      try { await navigator.share({ title: t("Что собираем?"), text: data.text, url: data.url }); return; }
+      catch (e) { if (e.name === "AbortError") return; }
+    }
+    try { await navigator.clipboard.writeText(`${data.text} ${data.url}`); }
+    catch { return; }
+    clearTimeout(flashTimer);
+    btn.innerHTML = SHARE_ICON_DONE;
+    flashTimer = setTimeout(() => { btn.innerHTML = icon; }, 1800);
   };
 }
 
@@ -4817,33 +4951,46 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     overlay.className = "win-overlay";
     const card = document.createElement("div");
     card.className = "win-card";
+    // Картинка на всю ширину карточки (см. правку «Окно победы — превью и
+    // результат», .win-image-wrap/.win-image в styles.css) — тот же приём,
+    // что раньше был у превью-модалки пазла.
+    const imgWrap = document.createElement("div");
+    imgWrap.className = "win-image-wrap";
     const img = document.createElement("img");
     img.className = "win-image"; img.src = puzzle.imageUrl; img.alt = puzzleDisplayTitle(puzzle);
-    const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
+    imgWrap.appendChild(img);
     const displayTitle = puzzleDisplayTitle(puzzle);
-    const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete — solved together with friends.` : `Пазл «${displayTitle}» собран вместе с друзьями.`;
     // session.startedAt — момент старта ЭТОГО сеанса (см. sessionSummary в
     // server.js, уже отдаётся с самого начала) — в отличие от соло, тут не
     // нужно ничего досчитывать самим: комнатный сеанс общий на всех
     // участников, отдельного "моего" старта тут просто нет.
-    const stats = buildStatsBlock(session.startedAt, Date.now(), puzzle.gridRows * puzzle.gridCols);
-    const rating = buildRatingWidget(puzzle, signal);
-    const actions = document.createElement("div");
-    actions.className = "win-actions";
+    const durationMs = Date.now() - session.startedAt;
     // В комнате пазл может оказаться и чужим/своим НЕопубликованным фото
     // (ownerUserId не null) — публичной страницы пазла у него ещё нет
     // (см. server.js, api() GET /api/puzzles/:id отдаёт 404 не-автору),
     // кнопку в этом случае просто не показываем, а не ведём на 404.
     if (!puzzle.ownerUserId) {
+      const shareActions = document.createElement("div");
+      shareActions.className = "win-image-actions";
       const shareBtn = document.createElement("button");
-      shareBtn.className = "btn outlined icon"; shareBtn.type = "button";
-      shareBtn.title = t("Скопировать ссылку на пазл"); shareBtn.setAttribute("aria-label", shareBtn.title);
-      shareBtn.innerHTML = SHARE_ICON;
+      shareBtn.className = "icon-btn"; shareBtn.type = "button";
+      shareBtn.title = t("Поделиться результатом"); shareBtn.setAttribute("aria-label", shareBtn.title);
+      shareBtn.innerHTML = SHARE_RESULT_ICON;
       // /puzzle/:id, не /table/:id (см. план «Страница пазла вместо
       // превью-модалки»).
-      bindShareButton(shareBtn, () => `${location.origin}/puzzle/${encodeURIComponent(puzzle.id)}`);
-      actions.appendChild(shareBtn);
+      bindResultShareButton(shareBtn, () => ({
+        text: buildResultShareText(displayTitle, durationMs),
+        url: `${location.origin}/puzzle/${encodeURIComponent(puzzle.id)}`,
+      }));
+      shareActions.appendChild(shareBtn);
+      imgWrap.appendChild(shareActions);
     }
+    const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
+    const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete — solved together with friends.` : `Пазл «${displayTitle}» собран вместе с друзьями.`;
+    const stats = buildStatsBlock(session.startedAt, Date.now(), puzzle.gridRows * puzzle.gridCols);
+    const rating = buildRatingWidget(puzzle, signal);
+    const actions = document.createElement("div");
+    actions.className = "win-actions";
     const stayBtn = document.createElement("button");
     stayBtn.className = "btn outlined"; stayBtn.type = "button"; stayBtn.textContent = t("Остаться");
     stayBtn.addEventListener("click", () => overlay.remove());
@@ -4851,7 +4998,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("В комнату");
     homeBtn.addEventListener("click", () => { navigate(`/room/${encodeURIComponent(roomId)}`); });
     actions.append(stayBtn, homeBtn);
-    card.append(img, h2, p, stats, rating, actions);
+    card.append(imgWrap, h2, p, stats, rating, actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
     launchConfetti(overlay);
