@@ -661,7 +661,15 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .confetti-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .win-card{
   background:var(--md-sys-color-surface-container-lowest);border-radius:var(--md-sys-shape-corner-xl);
-  padding:2rem 2.2rem;text-align:center;box-shadow:var(--e2);max-width:22rem;
+  padding:2rem 2.2rem;text-align:center;box-shadow:var(--e2);
+  /* Было 22rem без width — flex-item без явного width считает себя по
+     содержимому (самая длинная строка текста, ~300px), на широком столе
+     терялась мелкой посреди пустоты. width:100% + max-width:30rem — та же
+     формула, что у .modal (тоже 30rem): width:100% просит всю ширину
+     .win-overlay, max-width её же и обрезает потолком — на узком экране
+     сама сожмётся вместе с контейнером, на широком — реально дорастёт до
+     потолка, а не только до текста внутри. */
+  width:100%;max-width:30rem;
 }
 /* Картинка на всю ширину карточки, вровень с краями (см. правку «Окно
    победы — превью и результат») — тот же приём, что у .puzzle-preview-image
