@@ -257,7 +257,7 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    заметно пустой промежуток между текстом и заголовком секции. */
 .library-head{margin-bottom:.6rem}
 .library-head h1{font-size:1.6rem;font-weight:650;letter-spacing:-.01em}
-.library-head p{color:var(--md-sys-color-on-surface-variant);margin-top:.3rem;max-width:56rem;
+.library-head p{color:var(--md-sys-color-on-surface-variant);margin-top:.3rem;
   text-align:justify;-webkit-hyphens:auto;hyphens:auto}
 
 /* «Продолжить сборку» над библиотекой (см. план, renderInProgressList в
@@ -1001,6 +1001,13 @@ select.text-input{
   background:linear-gradient(180deg, color-mix(in srgb, var(--flame-tip) 8%, var(--md-sys-color-surface-container-low)), var(--md-sys-color-surface-container-low) 55%);
   border:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
 }
+/* .own-photo-suggest сидит МЕЖДУ баннером гостя и сеткой/каруселью
+   категорий (см. renderOwnPhotoCta), а не последним элементом страницы,
+   как исходный .category-suggest («Не нашли нужные пазлы?») перед
+   футером — там отступ снизу давал футер, здесь после блока не было
+   вообще ничего до наступление вплотную (см. правку «Обозначить на
+   главной, что для своих фото нужна комната»). */
+.own-photo-suggest{margin-bottom:2.4rem}
 .category-suggest-icon{
   width:3rem;height:3rem;border-radius:50%;display:flex;align-items:center;justify-content:center;
   background:linear-gradient(135deg, var(--flame-base), var(--flame-tip));color:#fff;

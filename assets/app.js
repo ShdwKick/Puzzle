@@ -206,6 +206,8 @@ const EN = {
   "Не удалось загрузить пазлы — обновите страницу.": "Couldn't load puzzles — please refresh the page.",
   "Все": "All",
   "Не нашли нужные пазлы?": "Didn't find the puzzles you wanted?",
+  "Есть своя фотография?": "Have your own photo?",
+  "Соберите пазл прямо из неё — создайте комнату и загрузите фото, сервис сам нарежет её на фигурные детали.": "Turn it into a puzzle — create a room and upload the photo, the service cuts it into jigsaw pieces automatically.",
   "Предложите категорию, которой не хватает — рассмотрим и добавим.": "Suggest a category that's missing — we'll take a look and add it.",
   "Войти, чтобы предложить категорию": "Log in to suggest a category",
   "Например: Космос": "e.g. Space",
@@ -2021,6 +2023,29 @@ function mountPuzzleGridPager(gridEl, pagerEl, signal) {
   return newItems => { items = newItems; page = 0; renderPage(); };
 }
 
+/** «Есть своя фотография?» — только на главной (см. правку «Обозначить на
+ *  главной, что для своих фото нужна комната»), не на страницах категорий —
+ *  там уже сфокусированный контекст «выбираю готовый пазл по теме», а не
+ *  «пришёл разобраться, что тут вообще можно». Тот же визуальный приём, что
+ *  у .category-suggest ниже (единственное яркое пятно — иконка в градиенте),
+ *  camera-иконка вместо лампочки. Кнопка — не ссылка на /rooms, а сразу
+ *  openModal той же модалки создания комнаты, что и на самой странице
+ *  /rooms (см. её глобальный биндинг, createRoomModalBackdrop) — экономит
+ *  один переход. */
+function renderOwnPhotoCta(signal) {
+  const section = document.createElement("section");
+  section.className = "category-suggest own-photo-suggest";
+  section.innerHTML = `
+    <div class="category-suggest-icon">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    </div>
+    <h2>${t("Есть своя фотография?")}</h2>
+    <p>${t("Соберите пазл прямо из неё — создайте комнату и загрузите фото, сервис сам нарежет её на фигурные детали.")}</p>
+    <button class="btn filled sm" type="button">${t("Создать комнату")}</button>`;
+  $(section, "button").addEventListener("click", () => openModal("createRoomModalBackdrop"), { signal });
+  return section;
+}
+
 /** «Не нашли нужные пазлы?» — подвал библиотеки/категорий (см. план),
  *  ведёт в уже существующий POST /api/categories — пользовательскую
  *  заявку на новую категорию (см. server.js, api()): уходит в pending,
@@ -2106,6 +2131,7 @@ async function renderLibrary(root, signal) {
       <p>${t("Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.")}</p>
     </div>
     <div id="guestNoteWrap"></div>
+    <div id="ownPhotoCtaWrap"></div>
     <div id="inProgressWrap"></div>
     <div id="categoryCarouselWrap"></div>
     <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">${t("Загружаем…")}</p></div>
@@ -2123,6 +2149,18 @@ async function renderLibrary(root, signal) {
     note.append(span, btn);
     $(root, "#guestNoteWrap").appendChild(note);
   }
+
+  // Подсказка «сделай пазл из своего фото» (см. правку «Обозначить на
+  // главной, что для своих фото нужна комната») — своя фотография доступна
+  // ТОЛЬКО внутри комнаты (см. mountUploadForm, README «Свои фото»), но на
+  // главной об этом раньше ни слова — только строчка в FAQ в футере, легко
+  // упустить. По живой аналитике (см. правку «Метрики для теста в
+  // Директе») люди приходят по рекламе, а своих пазлов никто не создаёт —
+  // похоже, просто не находят, куда для этого нажать. Кнопка не ведёт на
+  // /rooms — сразу открывает ту же модалку создания комнаты, что и там
+  // (createRoomModalBackdrop, см. её глобальный биндинг ниже по файлу) —
+  // на шаг короче, чем «перейти на /rooms → нажать «Создать комнату» там».
+  $(root, "#ownPhotoCtaWrap").appendChild(renderOwnPhotoCta(signal));
 
   let puzzles, categories;
   try {
