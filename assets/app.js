@@ -2713,7 +2713,40 @@ function createPieceEl(puzzleId, r, c, rows, cols, cell, pad, edges, imageUrl, b
   // означает именно это, а не что-то в bindPieceDrag. dragstart тут не
   // связан с Pointer Events вообще, глушим его отдельно.
   wrap.addEventListener("dragstart", e => e.preventDefault());
-  return wrap;
+
+  // Обводка для подсказки (см. правки «Подсказку обводкой» и «Отступ от
+  // контура») — СВОЙ, отдельный от wrap svg-элемент, а не ещё один <path>
+  // внутри svg выше: wrap несёт clip-path:path(d) для хит-теста (см.
+  // комментарий про wrap.style.clipPath) — а он обрезает ЛЮБОЕ рисование
+  // внутри wrap ровно по контуру детали, никакого способа исключить из
+  // этого один конкретный дочерний элемент в CSS нет (проверено вживую —
+  // drop-shadow/box-shadow/outline с любым отступом наружу пропадали
+  // напрочь). Раз отступ должен быть НАРУЖУ от контура, обводке нужен
+  // элемент, которого этот clip-path вообще не касается — соседний, а не
+  // потомок wrap. Позиция/поворот держатся в шаге с деталью через
+  // applyPieceTransform (тот же transform, что у wrap, см. ниже) —
+  // отдельного слежения тут не нужно, деталь и её обводка просто два
+  // элемента с одинаковым transform.
+  const outlineSvg = document.createElementNS(NS, "svg");
+  outlineSvg.setAttribute("viewBox", `0 0 ${size} ${size}`);
+  outlineSvg.setAttribute("width", String(size));
+  outlineSvg.setAttribute("height", String(size));
+  outlineSvg.setAttribute("class", "piece-outline-overlay");
+  // overflow:visible — SVG по умолчанию обрезает содержимое по viewBox,
+  // а увеличенный (см. transform:scale в CSS) контур местами выходит за
+  // его границы.
+  outlineSvg.style.overflow = "visible";
+  outlineSvg.style.pointerEvents = "none";
+  const outlineHalo = document.createElementNS(NS, "path");
+  outlineHalo.setAttribute("d", d);
+  outlineHalo.setAttribute("class", "piece-outline-halo");
+  outlineSvg.appendChild(outlineHalo);
+  const outlineAccent = document.createElementNS(NS, "path");
+  outlineAccent.setAttribute("d", d);
+  outlineAccent.setAttribute("class", "piece-outline-accent");
+  outlineSvg.appendChild(outlineAccent);
+
+  return { el: wrap, outlineEl: outlineSvg };
 }
 
 function applyPieceTransform(piece) {
@@ -2721,7 +2754,11 @@ function applyPieceTransform(piece) {
   // transform-origin) — см. план «Повороты деталей»/puzzle-clusters.js
   // (buildClusters требует rot%360===0 для стыковки). ||0 — деталь без
   // включённого режима поворотов просто не несёт этого поля.
-  piece.el.style.transform = `translate(${piece.x}px, ${piece.y}px) rotate(${piece.rot || 0}deg)`;
+  const t = `translate(${piece.x}px, ${piece.y}px) rotate(${piece.rot || 0}deg)`;
+  piece.el.style.transform = t;
+  // outlineEl — отдельный от el элемент (см. createPieceEl), держится в
+  // шаге с деталью тем же transform, а не своим слежением.
+  piece.outlineEl.style.transform = t;
 }
 
 /** Превью-картинка «как должно получиться» на столе — раньше была чисто
@@ -3026,10 +3063,12 @@ async function renderTable(root, puzzleId, signal, queryString) {
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       const piece = pieces.get(`${r},${c}`);
-      const el = createPieceEl(puzzle.id, r, c, rows, cols, CELL, pad, edges, puzzle.imageUrl, boardW, boardH);
+      const { el, outlineEl } = createPieceEl(puzzle.id, r, c, rows, cols, CELL, pad, edges, puzzle.imageUrl, boardW, boardH);
       piece.el = el;
+      piece.outlineEl = outlineEl;
       applyPieceTransform(piece);
       world.appendChild(el);
+      world.appendChild(outlineEl);
       bindPieceDrag(el, piece);
     }
   }
@@ -5257,10 +5296,12 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
         const piece = pieces.get(`${r},${c}`);
-        const el = createPieceEl(puzzle.id, r, c, rows, cols, CELL, pad, edges, puzzle.imageUrl, boardW, boardH);
+        const { el, outlineEl } = createPieceEl(puzzle.id, r, c, rows, cols, CELL, pad, edges, puzzle.imageUrl, boardW, boardH);
         piece.el = el;
+        piece.outlineEl = outlineEl;
         applyPieceTransform(piece);
         world.appendChild(el);
+        world.appendChild(outlineEl);
         bindRoomPieceDrag(el, piece, sendMove, sendGroup);
       }
     }

@@ -559,15 +559,58 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 4px var(--flame-tip)) drop-shadow(0 0 4px var(--flame-tip));
 }
 /* Подсказка (см. план «Повороты деталей + звук + подсказка», pickHintPair
-   в app.js) — та же drop-shadow-обводка по форме детали, что .just-snapped/
-   .selected выше, только пульсирующая и заметно дольше (снимается JS-
-   таймером через ~3с, длительность самой анимации тут не обязана с ним
-   совпадать — просто зацикленная пульсация на всё время, пока класс висит). */
-@keyframes piece-hint-pulse{
-  0%, 100% { filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 3px var(--flame-tip)) }
-  50%      { filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 14px var(--flame-tip)) drop-shadow(0 0 14px var(--flame-tip)) }
+   в app.js) — прошла три захода: drop-shadow-обводка как у .selected выше
+   (невидима — wrap несёт clip-path:path(...) для хит-теста, см.
+   createPieceEl в app.js, и он обрезает ЛЮБОЕ размытие ровно по контуру,
+   живой тест подтвердил — drop-shadow(0 0 40px red) не проявлялся вообще);
+   затем заливка через ::after (видна, но терялась на пазлах, где и так
+   много зелёного — заливка меняет тон всей детали, а не создаёт границу);
+   потом обводка-<path> ВНУТРИ svg детали (видна и контрастна, но прямо по
+   контуру — тот же clip-path у wrap обрезает внешнюю половину stroke,
+   отступа наружу добиться нельзя, пока путь рисуется потомком wrap).
+   Текущая версия (см. правку «Отступ от контура») — outlineEl,
+   ОТДЕЛЬНЫЙ от wrap svg-элемент (см. createPieceEl, applyPieceTransform:
+   держится в шаге с деталью тем же transform, но clip-path wrap на него
+   вообще не действует, раз он не потомок) — это и даёт свободу увеличить
+   контур (transform:scale ниже) на равный отступ по всему периметру, а не
+   упираться в границу clip-path. Два слоя стиля прежние: тёмный
+   полупрозрачный "нимб" пошире снизу — контраст на ЛЮБОМ фоне, включая
+   зелёный пазл (тёмный цвет не зависит от тона под ним), яркий акцентный
+   цвет пламени поверх — тоньше, для узнаваемости. */
+@keyframes piece-hint-outline{
+  0%, 100% { opacity:.55 }
+  50%      { opacity:1 }
 }
-.piece.hint-glow{animation:piece-hint-pulse .9s ease-in-out infinite}
+/* Та же схема позиционирования, что у .piece (position:absolute;left:0;
+   top:0 + свой transform) — outlineEl держится вровень с деталью только
+   потому, что несёт тот же transform (см. applyPieceTransform), сама по
+   себе никак не привязана к разметке детали. */
+.piece-outline-overlay{position:absolute;left:0;top:0}
+.piece-outline-halo,.piece-outline-accent{
+  fill:none;opacity:0;pointer-events:none;vector-effect:non-scaling-stroke;
+  /* fill-box — растёт от центра СОБСТВЕННОГО контура детали, включая
+     выступы/пазы, а не от угла viewBox — иначе отступ был бы неравномерным
+     по сторонам. */
+  transform-box:fill-box;transform-origin:center;transform:scale(1.07);
+}
+.piece-outline-halo{stroke:#000;stroke-opacity:.6;stroke-width:6}
+/* Пунктир + бегущий stroke-dashoffset — «муравьиная дорожка» по контуру
+   (см. правку «Ещё анимация»): подсказка ведь как раз про «обойди рамку
+   по кругу», бегущая линия читается как намёк именно на это, не просто
+   украшение. 8+6=14 — сдвиг offset ровно на один период (см. keyframes
+   ниже) даёт идеально бесшовный цикл, дробный сдвиг оставил бы видимый
+   "скачок" на стыке итераций. */
+.piece-outline-accent{stroke:var(--flame-tip);stroke-width:2.6;stroke-dasharray:8 6}
+@keyframes piece-hint-march{ to { stroke-dashoffset:-14 } }
+/* outlineEl — сосед wrap в DOM (см. world.appendChild порядок в app.js),
+   не потомок, поэтому класс .hint-glow (висит на wrap/.piece) достаётся
+   через соседний селектор, а не обычную вложенность. */
+.piece.hint-glow + .piece-outline-overlay .piece-outline-halo{
+  animation:piece-hint-outline .9s ease-in-out infinite;
+}
+.piece.hint-glow + .piece-outline-overlay .piece-outline-accent{
+  animation:piece-hint-outline .9s ease-in-out infinite, piece-hint-march 1s linear infinite;
+}
 /* Во время самого драга — БЕЗ огонькового ободка выделения (только тень
    "приподнятости", как у .piece.dragging): ободок вокруг каждой детали
    группы во время движения читался как лишний шум, а не как полезная
