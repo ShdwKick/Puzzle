@@ -5329,6 +5329,7 @@ function trackGoal(name) {
 function navigate(path) {
   history.pushState(null, "", path);
   route();
+  window.scrollTo(0, 0);
   trackPageview();
 }
 window.addEventListener("popstate", () => { route(); trackPageview(); });
