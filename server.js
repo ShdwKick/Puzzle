@@ -375,6 +375,27 @@ db.exec(`
   );
 `);
 
+// Обратная связь с кнопки в футере (см. правку «Форма обратной связи») —
+// доступна и без входа (та же логика, что у оценок/комнат, см.
+// getOrCreateAnonIdentity: гость тоже может написать), поэтому user_id
+// может быть NULL. username — денормализован на момент отправки (как
+// puzzles.uploader_username у своих фото) — это то, каким пользователя
+// звали ТОГДА, ник могли сменить позже. Admin читает эту таблицу только на
+// чтение через /internal/feedback (см. ниже) — своего UI для ответа тут
+// нет, работа с обращением идёт вне сервиса (contact — просто то, что сам
+// человек оставил для связи, не проверяется).
+db.exec(`
+  CREATE TABLE IF NOT EXISTS feedback (
+    id         TEXT PRIMARY KEY,
+    message    TEXT NOT NULL,
+    contact    TEXT,
+    user_id    TEXT,
+    username   TEXT,
+    page_url   TEXT,
+    created_at INTEGER NOT NULL
+  );
+`);
+
 // Лог для Admin (см. admin-internal.js) — своя таблица поверх той же базы.
 const adminLog = createAdminLog(db);
 
@@ -522,6 +543,11 @@ const stmt = {
   // то, что уже проставлено через новый одиночный API.
   backfillPuzzleCategory: db.prepare("UPDATE puzzles SET category_id = ? WHERE image_file = ? AND category_id IS NULL"),
   approvedByUploader: db.prepare("SELECT * FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'approved' ORDER BY created_at DESC"),
+
+  insertFeedback: db.prepare(`INSERT INTO feedback (id,message,contact,user_id,username,page_url,created_at) VALUES (?,?,?,?,?,?,?)`),
+  // LIMIT 200 — тот же приём, что у /internal/rooms ниже: Admin показывает
+  // недавние, а не архив целиком.
+  feedbackList: db.prepare("SELECT * FROM feedback ORDER BY created_at DESC LIMIT 200"),
   // Группа встроенных пазлов, добавленных Admin (owner_user_id IS NULL —
   // "= ?" тут не сработал бы, NULL с ним никогда не совпадает). Отличаем от
   // трёх стартовых картинок (BUILTIN_IMAGES, всегда .svg) расширением файла
@@ -1429,6 +1455,19 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // Вкладка «Обратная связь» в Admin (см. правку «Форма обратной связи») —
+    // только на чтение, без approve/reject/ответа (это не модерация — прочли
+    // и разобрались вне сервиса). Тот же LIMIT 200, что у /internal/rooms.
+    if (p === "/internal/feedback" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, {
+        feedback: stmt.feedbackList.all().map(f => ({
+          id: f.id, message: f.message, contact: f.contact,
+          userId: f.user_id, username: f.username, pageUrl: f.page_url, createdAt: f.created_at,
+        })),
+      });
+    }
+
     // Загрузка картинок в библиотеку через Admin (см. README «Загрузка через
     // Admin») — новые дефолтные пазлы, доступные без входа, наравне с тремя
     // стартовыми (BUILTIN_IMAGES). Тот же приём, что у своих фото (POST
@@ -1955,6 +1994,23 @@ async function api(req, res, url, user) {
     stmt.insertCategory.run(id, name, makeUniqueSlug(name), "pending", user.id, 0, now());
     adminLog.info("Пользователь предложил категорию", { userId: user.id, categoryId: id, name });
     return json(res, 200, { id, name, status: "pending" });
+  }
+
+  // Форма обратной связи в футере (см. правку «Форма обратной связи») —
+  // БЕЗ входа тоже можно (в отличие от предложения категории выше) —
+  // гость, у которого что-то не заработало, не обязан сперва логиниться,
+  // чтобы пожаловаться на это. user — null для гостя, insertFeedback уже
+  // на это рассчитан (колонка user_id/username допускают NULL).
+  if (seg[1] === "feedback" && seg.length === 2 && m === "POST") {
+    const body = await readJson(req);
+    const message = str(body.message, 4000);
+    if (!message) return json(res, 400, { error: "bad message" });
+    const contact = str(body.contact, 200); // необязательное — как со мной связаться, не проверяем
+    const pageUrl = str(body.pageUrl, 300);
+    const id = crypto.randomUUID();
+    stmt.insertFeedback.run(id, message, contact, user ? user.id : null, user ? (user.username || user.name || null) : null, pageUrl, now());
+    adminLog.info("Новое обращение в обратную связь", { feedbackId: id, userId: user ? user.id : null });
+    return json(res, 200, { ok: true });
   }
 
   // Профиль: все ОДОБРЕННЫЕ публикации конкретного пользователя (см. план)

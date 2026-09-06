@@ -215,6 +215,11 @@ const EN = {
   "Предложить": "Suggest",
   "Спасибо! Категория отправлена на рассмотрение.": "Thanks! The category has been sent for review.",
   "Не удалось отправить — попробуйте ещё раз.": "Couldn't submit — please try again.",
+  "Обратная связь": "Feedback",
+  "Нашли баг или есть идея? Напишите — мы читаем все обращения.": "Found a bug or have an idea? Write to us — we read every message.",
+  "Что случилось или что предложить?": "What happened, or what would you like to suggest?",
+  "Как с вами связаться (необязательно)": "How to reach you (optional)",
+  "Спасибо! Обращение отправлено.": "Thanks! Your message has been sent.",
   "Пазлы, опубликованные": "Puzzles published by",
   "Профиль": "Profile",
   "Пользователь ничего не опубликовал.": "This user hasn't published anything.",
@@ -419,6 +424,9 @@ function applyStaticTranslations() {
   byId("accountModalTourBtnText", el => { el.textContent = t("Начать обучение"); });
   byId("createRoomModalTitle", el => { el.textContent = t("Создать комнату"); });
   byId("newRoomTitle", el => { el.placeholder = t("Название комнаты"); });
+  byId("feedbackMessage", el => { el.placeholder = t("Что случилось или что предложить?"); });
+  byId("feedbackContact", el => { el.placeholder = t("Как с вами связаться (необязательно)"); });
+  byId("feedbackSubmitBtn", el => { el.textContent = t("Отправить"); });
   byId("createRoomBtn", el => { el.textContent = t("Создать"); });
   byId("joinRoomModalTitle", el => { el.textContent = t("Присоединиться к комнате"); });
   byId("joinCodeInput", el => { el.placeholder = t("Код комнаты"); });
@@ -442,6 +450,9 @@ function applyStaticTranslations() {
   byId("footerLinkLibrary", el => { el.textContent = t("Библиотека пазлов"); });
   byId("footerLinkCategories", el => { el.textContent = t("Категории"); });
   byId("footerLinkRooms", el => { el.textContent = t("Комнаты"); });
+  byId("feedbackFooterBtn", el => { el.textContent = t("Обратная связь"); });
+  byId("feedbackModalTitle", el => { el.textContent = t("Обратная связь"); });
+  byId("feedbackModalHint", el => { el.textContent = t("Нашли баг или есть идея? Напишите — мы читаем все обращения."); });
   byId("footerLinkAllServices", el => { el.textContent = t("Все сервисы"); });
   byId("footerCopy", el => { el.textContent = t("© BurningHouse"); });
   byId("faqHeading", el => { el.textContent = t("Частые вопросы о сборке пазлов онлайн"); });
@@ -1623,6 +1634,41 @@ document.getElementById("accountNotificationsToggle").addEventListener("click", 
   const expanded = btn.getAttribute("aria-expanded") === "true";
   btn.setAttribute("aria-expanded", String(!expanded));
   list.hidden = expanded;
+});
+
+// Обратная связь в футере (см. правку «Форма обратной связи в футере») —
+// кнопка живёт в статичной разметке футера (index.html), не привязана к
+// конкретному route, поэтому биндится один раз здесь же, как и остальные
+// такие модалки (createRoom/joinRoom и т.п.). roomFetch — тот же приём, что
+// у оценок/комнат: Bearer, если вошёл, иначе просто fetch с анонимной
+// cookie — обратная связь доступна и без входа, гостю не нужно логиниться,
+// чтобы пожаловаться на баг. Admin читает эти обращения через свою
+// вкладку «Обратная связь» (см. /internal/feedback в server.js) — ответ
+// автору отсюда не отправляется, только просмотр.
+bindModal("feedbackModalBackdrop", "feedbackFooterBtn", "feedbackModalClose");
+document.getElementById("feedbackForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const messageEl = document.getElementById("feedbackMessage");
+  const contactEl = document.getElementById("feedbackContact");
+  const note = document.getElementById("feedbackNote");
+  const btn = document.getElementById("feedbackSubmitBtn");
+  const message = messageEl.value.trim();
+  if (!message) return;
+  btn.disabled = true;
+  note.hidden = true;
+  try {
+    const res = await roomFetch("/api/feedback", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message, contact: contactEl.value.trim() || undefined, pageUrl: location.href }),
+    });
+    if (!res.ok) throw new Error("failed");
+    messageEl.value = ""; contactEl.value = "";
+    note.textContent = t("Спасибо! Обращение отправлено.");
+  } catch {
+    note.textContent = t("Не удалось отправить — попробуйте ещё раз.");
+  }
+  note.hidden = false;
+  btn.disabled = false;
 });
 
 /** Системные уведомления Auth (см. план «Системные уведомления Auth →

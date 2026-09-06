@@ -1,0 +1,5 @@
+(node:23480) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Что собираем? слушает http://127.0.0.1:9026
+Авторизация: http://127.0.0.1:9999 (клиент «puzzle»)
+auth-client: не удалось загрузить JWKS — fetch failed

@@ -178,6 +178,13 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   transition:background .15s var(--ease-std),color .15s var(--ease-std);
 }
 .modal-tabs .btn.active{background:var(--md-sys-color-surface-container-lowest);color:var(--md-sys-color-on-surface);box-shadow:var(--e1)}
+/* Модалка обратной связи (см. правку «Форма обратной связи») — короткое
+   пояснение над формой, тем же приглушённым тоном, что и остальные
+   вспомогательные подписи в модалках. */
+.modal-hint{color:var(--md-sys-color-on-surface-variant);font-size:.88rem;margin:.6rem 0 1rem}
+.feedback-form{display:flex;flex-direction:column;gap:.7rem}
+.feedback-form textarea.text-input{width:100%;box-sizing:border-box;resize:vertical;min-height:6rem;font-family:inherit}
+.feedback-form .state-note{margin:0}
 .add-puzzle-category-row{display:flex;align-items:center;gap:.6rem;margin-bottom:.9rem}
 .add-puzzle-category-row select{min-width:12rem}
 .add-puzzle-grid{display:grid;gap:.8rem;grid-template-columns:repeat(auto-fill,minmax(11rem,1fr))}
@@ -244,6 +251,15 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   color:var(--md-sys-color-on-surface-variant);margin-bottom:.2rem}
 .bh-footer-links a{color:var(--md-sys-color-on-surface);text-decoration:none;font-size:.92rem;width:fit-content}
 .bh-footer-links a:hover{color:var(--md-sys-color-primary);text-decoration:underline}
+/* Кнопка «Обратная связь» (см. правку «Форма обратной связи») сидит в том
+   же списке, что и обычные ссылки-<a> выше — открывает модалку, а не
+   ведёт на URL, поэтому это <button>, но должна выглядеть неотличимо:
+   сброс браузерных стилей кнопки + повтор правил .bh-footer-links a. */
+.bh-footer-links button{
+  background:none;border:0;padding:0;font:inherit;cursor:pointer;text-align:left;
+  color:var(--md-sys-color-on-surface);width:fit-content;
+}
+.bh-footer-links button:hover{color:var(--md-sys-color-primary);text-decoration:underline}
 .bh-footer .faq{margin-top:0;padding-top:1.8rem;border-top:1px solid var(--md-sys-color-outline-variant)}
 /* Переключатель языка переехал сюда из шапки (см. план «Выдвигающиеся
    кнопки») — не первоочередная настройка, рядом с копирайтом ему самое

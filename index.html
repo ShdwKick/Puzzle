@@ -227,6 +227,7 @@
         <a href="/" id="footerLinkLibrary">Библиотека пазлов</a>
         <a href="/categories" id="footerLinkCategories">Категории</a>
         <a href="/rooms" id="footerLinkRooms">Комнаты</a>
+        <button type="button" id="feedbackFooterBtn">Обратная связь</button>
       </nav>
       <nav class="bh-footer-links" aria-label="Семья BurningHouse">
         <h3 id="footerFamilyHeading">Семья BurningHouse</h3>
@@ -395,6 +396,25 @@
       <input class="text-input" type="text" id="newRoomTitle" placeholder="Название комнаты" maxlength="120">
       <button class="btn filled" id="createRoomBtn" type="button">Создать</button>
     </div>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: ОБРАТНАЯ СВЯЗЬ ===================== -->
+<div class="modal-backdrop hidden" id="feedbackModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="feedbackModalTitle">
+    <div class="modal-head">
+      <h2 id="feedbackModalTitle">Обратная связь</h2>
+      <button class="icon-btn" id="feedbackModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <p class="modal-hint" id="feedbackModalHint">Нашли баг или есть идея? Напишите — мы читаем все обращения.</p>
+    <form class="feedback-form" id="feedbackForm">
+      <textarea class="text-input" id="feedbackMessage" maxlength="4000" rows="5" placeholder="Что случилось или что предложить?" required></textarea>
+      <input class="text-input" type="text" id="feedbackContact" maxlength="200" placeholder="Как с вами связаться (необязательно)">
+      <button class="btn filled full" type="submit" id="feedbackSubmitBtn">Отправить</button>
+      <p class="state-note" id="feedbackNote" hidden></p>
+    </form>
   </div>
 </div>
 
