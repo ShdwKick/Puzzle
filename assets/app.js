@@ -123,6 +123,7 @@ const EN = {
   "Аккаунт BurningHouse": "BurningHouse account",
   "Оформление": "Appearance",
   "Начать обучение": "Start the tour",
+  "Не знаете, с чего начать? Нажмите «?» — покажем, как тут всё устроено.": "Not sure where to start? Tap “?” — we’ll show you around.",
   "Управление аккаунтом →": "Manage account →",
   "Выйти": "Log out",
   "Создать комнату": "Create room",
@@ -2924,6 +2925,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   // любой момент; сам тур один на оба стола (соло/комната), шаги про
   // отсутствующие тут элементы (чат/присутствие) молча пропускаются.
   $(root, "#tableHelpBtn").addEventListener("click", () => openTour(), { signal });
+  maybeShowTableHint(signal);
 
   let puzzles;
   try { [puzzles] = await Promise.all([getPuzzles(), ensureDisplayTitleCache()]); } catch { stage.innerHTML = `<p class="state-note">${t("Не удалось загрузить пазл — обновите страницу.")}</p>`; return; }
@@ -3275,8 +3277,23 @@ async function renderTable(root, puzzleId, signal, queryString) {
 
   // Подсказка (см. план) — случайная ещё не состыкованная пара соседних
   // деталей: подводим камеру и подсвечиваем обе на пару секунд. Ничего не
-  // двигает и не сохраняет — чисто визуальная наводка.
+  // двигает и не сохраняет — чисто визуальная наводка. Пока не состыкована
+  // ХОТЬ ОДНА пара (см. правку «Подсказка про край») — вместо случайной
+  // пары подсвечиваем все крайние/угловые детали разом: это и есть
+  // стандартная стратегия сборки («начни с рамки»), больше подходит
+  // человеку, который вообще не понимает, с чего начать, чем случайная
+  // пара где-то в куче. Как только что-то состыковано — снова обычная
+  // подсказка-пара, она полезнее посреди сборки.
   $(root, "#hintBtn").addEventListener("click", () => {
+    if (computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === 0) {
+      fitView();
+      for (const p of pieces.values()) {
+        if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
+        p.el.classList.add("hint-glow");
+        setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
+      }
+      return;
+    }
     const pair = pickHintPair(pieces);
     if (!pair) return;
     const [a, b] = pair;
@@ -4555,6 +4572,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   // любой момент; сам тур один на оба стола (соло/комната), шаги про
   // отсутствующие тут элементы (чат/присутствие) молча пропускаются.
   $(root, "#tableHelpBtn").addEventListener("click", () => openTour(), { signal });
+  maybeShowTableHint(signal);
 
   let session;
   try {
@@ -4970,9 +4988,19 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     socket.send({ type: "shuffle", pieces: arr });
   }, { signal });
 
-  // Подсказка + звук — см. солo-версию выше, тот же приём.
+  // Подсказка + звук — см. солo-версию выше, тот же приём (включая
+  // подсветку всей рамки, пока не состыкована ни одна пара).
   $(root, "#hintBtn").addEventListener("click", () => {
     if (!pieces) return;
+    if (computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === 0) {
+      fitView();
+      for (const p of pieces.values()) {
+        if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
+        p.el.classList.add("hint-glow");
+        setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
+      }
+      return;
+    }
     const pair = pickHintPair(pieces);
     if (!pair) return;
     const [a, b] = pair;

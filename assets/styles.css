@@ -794,7 +794,7 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   display:flex;flex-direction:column;align-items:center;gap:.15rem;
   padding:.65rem .4rem;border-radius:var(--md-sys-shape-corner-l);
   border:1px solid var(--md-sys-color-outline-variant);background:var(--md-sys-color-surface-container-low);
-  cursor:pointer;transition:transform .15s var(--ease-std),border-color .15s var(--ease-std),background .15s var(--ease-std);
+  color:inherit;cursor:pointer;transition:transform .15s var(--ease-std),border-color .15s var(--ease-std),background .15s var(--ease-std);
 }
 .difficulty-pill:hover{transform:translateY(-1px);border-color:var(--md-sys-color-primary)}
 .difficulty-pill.is-selected{background:var(--md-sys-color-primary);border-color:var(--md-sys-color-primary)}
@@ -1261,6 +1261,35 @@ select.text-input{
    проявляется только по наведению (например, меню «…» карточки). */
 .onb-target{opacity:1 !important}
 @media(max-width:520px){.onb-card{max-width:calc(100vw - 32px)}}
+
+/* Разовая подсказка на «?» стола (см. assets/onboarding.js,
+   maybeShowTableHint) — в отличие от .onb-* тура НЕ гасит экран (своего
+   scrim тут нет вовсе): часть пришедших по рекламе доходят до стола, но не
+   трогают детали (см. правку «Подсказка про тур», данные Метрики) — им
+   нужен маленький намёк сбоку, а не блокирующий тур на весь экран. */
+.table-hint{
+  position:fixed;z-index:80;max-width:15rem;padding:.65rem 1.7rem .65rem .8rem;
+  background:var(--md-sys-color-surface-container-lowest);
+  border:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
+  border-radius:var(--md-sys-shape-corner-l);box-shadow:var(--e2);
+  animation:rise .25s var(--ease-emph-dec);
+}
+.table-hint p{font-size:.82rem;line-height:1.4;margin:0}
+/* Треугольный «хвостик», указывающий вверх на кнопку — тот же приём, что у
+   обычных чат-пузырей: квадрат с двумя видимыми гранями, повёрнутый на 45°. */
+.table-hint::before{
+  content:"";position:absolute;top:-6px;right:14px;width:11px;height:11px;
+  background:var(--md-sys-color-surface-container-lowest);
+  border-top:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
+  border-left:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
+  transform:rotate(45deg);
+}
+.table-hint-close{
+  position:absolute;top:2px;right:2px;width:1.6rem;height:1.6rem;border:0;background:transparent;
+  color:var(--md-sys-color-on-surface-variant);cursor:pointer;font-size:1rem;line-height:1;border-radius:50%;
+}
+.table-hint-close:hover{background:color-mix(in srgb, currentColor 10%, transparent)}
+@media(max-width:420px){.table-hint{max-width:calc(100vw - 24px)}}
 
 /* ===================== СОСТОЯНИЯ ЗАГРУЗКИ/ОШИБКИ ===================== */
 .state-note{padding:2.4rem 1rem;text-align:center;color:var(--md-sys-color-on-surface-variant)}

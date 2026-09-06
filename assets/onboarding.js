@@ -253,3 +253,62 @@ byId("onbScrim").addEventListener("click", e => {
 function openTour(name = "table") {
   startTour(name);
 }
+
+/**
+ * Разовая ненавязчивая подсказка на «?» стола (см. правку «Подсказка про
+ * тур») — по живой Метрике часть пришедших по рекламе доходят до стола, но
+ * не трогают детали: сам тур открывается только по клику на кнопку (см.
+ * шапку файла), а кнопку, судя по всему, просто не замечают. В отличие от
+ * тура — без .onb-scrim (экран не гаснет) и не по центру, а пузырём прямо
+ * у самой кнопки, сбоку. Показывается один раз за браузер (localStorage) —
+ * не при каждом заходе на стол, иначе быстро надоест тем, кто уже видел.
+ */
+const TABLE_HINT_KEY = "puzzle.tableHintSeen";
+
+function maybeShowTableHint(signal) {
+  if (localStorage.getItem(TABLE_HINT_KEY)) return;
+  const btn = byId("tableHelpBtn");
+  if (!shown(btn)) return;
+  // Задержка — чтобы не выскакивало поверх ещё не отрисованного стола;
+  // signal.abort (ушли со страницы раньше) отменяет показ, флаг «видел» при
+  // этом не проставляется — успеет показаться в следующий раз.
+  const timer = setTimeout(() => showTableHint(btn), 2200);
+  signal.addEventListener("abort", () => clearTimeout(timer));
+}
+
+function showTableHint(btn) {
+  if (!shown(btn) || tourActive) return;
+  localStorage.setItem(TABLE_HINT_KEY, "1");
+  const hint = document.createElement("div");
+  hint.className = "table-hint";
+  hint.setAttribute("role", "status");
+  hint.innerHTML =
+    `<button class="table-hint-close" type="button" aria-label="${t("Закрыть")}">&times;</button>` +
+    `<p>${t("Не знаете, с чего начать? Нажмите «?» — покажем, как тут всё устроено.")}</p>`;
+  document.body.appendChild(hint);
+  positionTableHint(hint, btn);
+
+  const close = () => {
+    hint.remove();
+    document.removeEventListener("pointerdown", onOutside, true);
+    removeEventListener("resize", onResize);
+    clearTimeout(autoTimer);
+  };
+  const onOutside = e => { if (!hint.contains(e.target) && e.target !== btn) close(); };
+  const onResize = () => positionTableHint(hint, btn);
+  document.addEventListener("pointerdown", onOutside, true);
+  addEventListener("resize", onResize);
+  hint.querySelector(".table-hint-close").addEventListener("click", close);
+  btn.addEventListener("click", close, { once: true });
+  const autoTimer = setTimeout(close, 8000);
+}
+
+/** Пузырь под кнопкой, прижат к правому краю — сама кнопка последняя
+ *  справа в тулбаре стола (см. .table-toolbar), поэтому по центру или
+ *  слева от неё пузырь вылезал бы за край экрана. */
+function positionTableHint(hint, btn) {
+  const r = btn.getBoundingClientRect();
+  const margin = 8;
+  hint.style.top = (r.bottom + margin) + "px";
+  hint.style.right = Math.max(margin, innerWidth - r.right) + "px";
+}
