@@ -1906,10 +1906,12 @@ const server = http.createServer(async (req, res) => {
     // пишет в puzzles; применение — отдельный вызов POST .../title выше,
     // тем же путём, что и ручное переименование. Разделены нарочно: Admin
     // должен показать предложение и подождать подтверждения, а не менять
-    // название по одному клику. Всегда titleFromText (не по фото) — у
-    // существующего в библиотеке пазла название уже есть, каким бы оно ни
-    // было, пересказать его дешевле и точнее, чем смотреть на картинку
-    // заново (см. правку «Короткие названия пазлов», сравнение в ней же).
+    // название по одному клику. Два режима (см. правку «Кнопка GigaChat по
+    // фото + тексту в модалке пазла»): по умолчанию titleFromText — у
+    // существующего в библиотеке пазла название уже есть, пересказать его
+    // дешевле и точнее, чем смотреть на картинку (см. правку «Короткие
+    // названия пазлов»); body.mode==="image" — titleFromImageAndText, когда
+    // старое название болванка и по фото точнее.
     const puzzleSuggestMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/title\/suggest$/);
     if (puzzleSuggestMatch && req.method === "POST") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
@@ -1921,9 +1923,17 @@ const server = http.createServer(async (req, res) => {
       if (puzzle.owner_user_id !== null || puzzle.image_file.endsWith(".svg")) {
         return json(res, 400, { error: "not an admin-uploaded puzzle" });
       }
+      const body = await readJson(req);
       const categoryName = puzzle.category_id ? (stmt.categoryById.get(puzzle.category_id)?.name || null) : null;
       try {
-        const { ru, en } = await gigachat.titleFromText(puzzle.title, categoryName);
+        let ru, en;
+        if (body.mode === "image") {
+          const mime = MIME[path.extname(puzzle.image_file).toLowerCase()] || "image/jpeg";
+          const buf = fs.readFileSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file));
+          ({ ru, en } = await gigachat.titleFromImageAndText(buf, mime, puzzle.title, categoryName));
+        } else {
+          ({ ru, en } = await gigachat.titleFromText(puzzle.title, categoryName));
+        }
         return json(res, 200, { ok: true, title: ru, titleEn: en });
       } catch (e) {
         return json(res, 502, { error: "gigachat_failed", message: e.message });

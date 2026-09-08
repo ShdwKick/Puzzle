@@ -627,15 +627,33 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
      по сторонам. */
   transform-box:fill-box;transform-origin:center;transform:scale(1.07);
 }
-.piece-outline-halo{stroke:#000;stroke-opacity:.6;stroke-width:6}
+/* Ширина ниже — в локальных SVG-юнитах детали, non-scaling-stroke спасает
+   только от transform:scale(1.07) на самой этой paths (см. выше), а не от
+   зума камеры: .table-world выше по DOM в app.js, её CSS transform:scale()
+   снаружи этой svg — non-scaling-stroke его не видит и не компенсирует, и
+   ЛЮБОЕ фиксированное число тут при zoom≈0.12 (fitView на большом пазле,
+   ZOOM_MIN) превращалось на экране в еле заметную нитку, сколько её ни
+   поднимай (живая проверка на 999 деталях подтвердила — просто «жирнее в
+   локальных юнитах» не помогает, если камера потом делит на восемь). Вместо
+   этого — applyWorldTransform в app.js пишет --cam-scale на .table-world (=
+   текущий zoom), а тут делим на неё: итоговая толщина на ЭКРАНЕ остаётся
+   постоянной независимо от отдаления камеры (см. правку «Подсказка про
+   пазл: жирнее, теперь по-настоящему»). Фолбэк /1 — на случай, если
+   applyWorldTransform ещё не успел выставить переменную. */
+.piece-outline-halo{stroke:#000;stroke-opacity:.6;stroke-width:calc(11 / var(--cam-scale, 1))}
 /* Пунктир + бегущий stroke-dashoffset — «муравьиная дорожка» по контуру
    (см. правку «Ещё анимация»): подсказка ведь как раз про «обойди рамку
    по кругу», бегущая линия читается как намёк именно на это, не просто
-   украшение. 8+6=14 — сдвиг offset ровно на один период (см. keyframes
-   ниже) даёт идеально бесшовный цикл, дробный сдвиг оставил бы видимый
-   "скачок" на стыке итераций. */
-.piece-outline-accent{stroke:var(--flame-tip);stroke-width:2.6;stroke-dasharray:8 6}
-@keyframes piece-hint-march{ to { stroke-dashoffset:-14 } }
+   украшение. Дэши тоже делятся на --cam-scale — иначе при сильном
+   отдалении толстая линия (см. выше) осталась бы почти сплошной, дробные
+   9/7 потерялись бы на фоне выросшей толщины. 9+7=16 — сдвиг offset ровно
+   на один период (см. keyframes ниже) даёт идеально бесшовный цикл,
+   дробный сдвиг оставил бы видимый "скачок" на стыке итераций. */
+.piece-outline-accent{
+  stroke:var(--flame-tip);stroke-width:calc(4.6 / var(--cam-scale, 1));
+  stroke-dasharray:calc(9 / var(--cam-scale, 1)) calc(7 / var(--cam-scale, 1));
+}
+@keyframes piece-hint-march{ to { stroke-dashoffset:calc(-16 / var(--cam-scale, 1)) } }
 /* outlineEl — сосед wrap в DOM (см. world.appendChild порядок в app.js),
    не потомок, поэтому класс .hint-glow (висит на wrap/.piece) достаётся
    через соседний селектор, а не обычную вложенность. */
@@ -1310,8 +1328,10 @@ select.text-input{
 .onb-scrim.show{display:block}
 .onb-spotlight{
   position:fixed;border-radius:var(--md-sys-shape-corner-l);
+  /* 2px раньше терялся на большом столе (много мелких деталей вокруг —
+     тонкая рамка тонет в них) — см. правку «Подсказка про тур: жирнее». */
   box-shadow:0 0 0 9999px rgba(10,8,6,.62);pointer-events:none;
-  outline:2px solid var(--flame-tip);outline-offset:3px;
+  outline:4px solid var(--flame-tip);outline-offset:3px;
   transition:top .25s var(--ease-emph-dec),left .25s var(--ease-emph-dec),
              width .25s var(--ease-emph-dec),height .25s var(--ease-emph-dec);
 }

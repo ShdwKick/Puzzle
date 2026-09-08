@@ -2201,7 +2201,14 @@ async function renderLibrary(root, signal) {
   // хоть одна комната — иначе на главной для подавляющего большинства
   // гостей (комнат нет вовсе) это была бы секция ни о чём, разросшаяся до
   // «Пока нет ни одной комнаты — создайте первую» ещё до самих пазлов.
-  mountRoomsSection($(root, "#roomsSectionWrap"), signal, { visibilityEl: $(root, "#roomsSectionOuter") });
+  // onLoaded скрывает CTA «Есть своя фотография?» ниже (см. правку «Убрать
+  // CTA про своё фото, если комната уже есть») — тому, у кого уже есть
+  // комната, рассказывать, что для своих фото нужна комната, уже незачем,
+  // он это явно знает.
+  mountRoomsSection($(root, "#roomsSectionWrap"), signal, {
+    visibilityEl: $(root, "#roomsSectionOuter"),
+    onLoaded: rooms => { $(root, "#ownPhotoCtaWrap").hidden = rooms.length > 0; },
+  });
 
   if (!auth.isAuthenticated()) {
     const note = document.createElement("div");
@@ -3148,7 +3155,16 @@ async function renderTable(root, puzzleId, signal, queryString) {
   let zoom = 1, panX = 0, panY = 0;
   const ZOOM_MIN = 0.12, ZOOM_MAX = 3.2;
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-  function applyWorldTransform() { world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
+  // --cam-scale — читает styles.css (.piece-outline-halo/-accent, подсказка
+  // на детали): камера доезжает до ZOOM_MIN=0.12 на больших пазлах
+  // (fitView), а обводка подсказки живёт в мировых SVG-юнитах — тот же
+  // scale(), что схлопывает саму деталь, схлопывает и её. Без счётчика
+  // подсказку не разглядеть именно там, где она нужнее всего (см. правку
+  // «Подсказка про пазл: жирнее», живая проверка на 999 деталях).
+  function applyWorldTransform() {
+    world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+    world.style.setProperty("--cam-scale", zoom);
+  }
   // fitBox — общая математика вписывания прямоугольника мировых координат в
   // stage (см. план «Повороты...» — подсказка вписывает только пару целевых
   // деталей, не весь стол). marginFactor меньше 1 — свободные поля вокруг
@@ -3385,17 +3401,21 @@ async function renderTable(root, puzzleId, signal, queryString) {
   }, { signal });
 
   // Подсказка (см. план) — случайная ещё не состыкованная пара соседних
-  // деталей: подводим камеру и подсвечиваем обе на пару секунд. Ничего не
-  // двигает и не сохраняет — чисто визуальная наводка. Пока не состыкована
-  // ХОТЬ ОДНА пара (см. правку «Подсказка про край») — вместо случайной
-  // пары подсвечиваем все крайние/угловые детали разом: это и есть
-  // стандартная стратегия сборки («начни с рамки»), больше подходит
-  // человеку, который вообще не понимает, с чего начать, чем случайная
-  // пара где-то в куче. Как только что-то состыковано — снова обычная
-  // подсказка-пара, она полезнее посреди сборки.
+  // деталей, подсвечиваем обе на пару секунд. Ничего не двигает и не
+  // сохраняет — чисто визуальная наводка. Камеру больше НЕ подводим (см.
+  // правку «Подсказка без центрирования») — было решено, что дёрганье
+  // зума/панорамы на каждый клик мешает больше, чем помогает, а на большом
+  // пазле ещё и уводило в fitView() ровно туда, где обводку было хуже всего
+  // видно (см. --cam-scale выше — сама обводка теперь держит размер на
+  // экране и без подвода камеры). Пока не состыкована ХОТЬ ОДНА пара (см.
+  // правку «Подсказка про край») — вместо случайной пары подсвечиваем все
+  // крайние/угловые детали разом: это и есть стандартная стратегия сборки
+  // («начни с рамки»), больше подходит человеку, который вообще не
+  // понимает, с чего начать, чем случайная пара где-то в куче. Как только
+  // что-то состыковано — снова обычная подсказка-пара, она полезнее
+  // посреди сборки.
   $(root, "#hintBtn").addEventListener("click", () => {
     if (computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === 0) {
-      fitView();
       for (const p of pieces.values()) {
         if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
         p.el.classList.add("hint-glow");
@@ -3405,10 +3425,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     }
     const pair = pickHintPair(pieces);
     if (!pair) return;
-    const [a, b] = pair;
-    const size = CELL + 2 * pad;
-    fitBox(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x) + size, Math.max(a.y, b.y) + size, 0.5);
-    for (const p of [a, b]) {
+    for (const p of pair) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
     }
@@ -4226,6 +4243,7 @@ async function mountRoomsSection(container, signal, opts = {}) {
     }
     if (signal.aborted) return;
     if (opts.visibilityEl) opts.visibilityEl.hidden = rooms.length === 0;
+    if (opts.onLoaded) opts.onLoaded(rooms);
     renderPage();
   }
 
@@ -4912,7 +4930,16 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   let zoom = 1, panX = 0, panY = 0;
   const ZOOM_MIN = 0.12, ZOOM_MAX = 3.2;
   const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-  function applyWorldTransform() { world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`; }
+  // --cam-scale — читает styles.css (.piece-outline-halo/-accent, подсказка
+  // на детали): камера доезжает до ZOOM_MIN=0.12 на больших пазлах
+  // (fitView), а обводка подсказки живёт в мировых SVG-юнитах — тот же
+  // scale(), что схлопывает саму деталь, схлопывает и её. Без счётчика
+  // подсказку не разглядеть именно там, где она нужнее всего (см. правку
+  // «Подсказка про пазл: жирнее», живая проверка на 999 деталях).
+  function applyWorldTransform() {
+    world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
+    world.style.setProperty("--cam-scale", zoom);
+  }
   // fitBox — общая математика вписывания прямоугольника мировых координат в
   // stage (см. план «Повороты...» — подсказка вписывает только пару целевых
   // деталей, не весь стол). marginFactor меньше 1 — свободные поля вокруг
@@ -5150,11 +5177,11 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   }, { signal });
 
   // Подсказка + звук — см. солo-версию выше, тот же приём (включая
-  // подсветку всей рамки, пока не состыкована ни одна пара).
+  // подсветку всей рамки, пока не состыкована ни одна пара, и без подвода
+  // камеры — см. правку «Подсказка без центрирования»).
   $(root, "#hintBtn").addEventListener("click", () => {
     if (!pieces) return;
     if (computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === 0) {
-      fitView();
       for (const p of pieces.values()) {
         if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
         p.el.classList.add("hint-glow");
@@ -5164,10 +5191,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     }
     const pair = pickHintPair(pieces);
     if (!pair) return;
-    const [a, b] = pair;
-    const size = CELL + 2 * pad;
-    fitBox(Math.min(a.x, b.x), Math.min(a.y, b.y), Math.max(a.x, b.x) + size, Math.max(a.y, b.y) + size, 0.5);
-    for (const p of [a, b]) {
+    for (const p of pair) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
     }

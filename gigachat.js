@@ -38,6 +38,12 @@ const VISION_PROMPT = `Придумай короткое название для
 Верни СТРОГО JSON без пояснений, без markdown: {"ru":"","en":""}
 Правила: 2-4 слова каждое, как подпись к картинке в каталоге (например "Рыжий кот на подоконнике", "Горы на закате"). Английское — с большой буквы у каждого слова (Title Case). Без кавычек внутри строк, без точки в конце, без слов вроде "пазл"/"puzzle".`;
 
+const VISION_TEXT_PROMPT = (oldTitle, category) => `Придумай короткое название для пазла по этой фотографии — на русском и на английском.
+Старое название с фотостока (может подсказать деталь, которую не видно на самом фото — например место съёмки): "${oldTitle}"
+Категория пазла: "${category || "не указана"}"
+Верни СТРОГО JSON без пояснений, без markdown: {"ru":"","en":""}
+Правила: 2-4 слова каждое, как подпись к картинке в каталоге (например "Рыжий кот на подоконнике", "Горы на закате"). Английское — с большой буквы у каждого слова (Title Case). Без кавычек внутри строк, без точки в конце, без слов вроде "пазл"/"puzzle".`;
+
 module.exports = function createGigaChat(options = {}) {
   const authKey = options.authKey || "";
   const scope = options.scope || "GIGACHAT_API_PERS";
@@ -146,7 +152,20 @@ module.exports = function createGigaChat(options = {}) {
     return normalizeTitle(extractJson(text));
   }
 
-  return { enabled, titleFromText, titleFromImage };
+  /** Название по фотографии И старому тексту вместе (см. правку «Кнопка
+   *  GigaChat по фото + тексту в модалке пазла») — дороже titleFromText
+   *  (та же лишняя ~2000 токенов картинки, см. шапку файла), но полезно,
+   *  когда старое название болванка/малоинформативно: модель видит саму
+   *  сцену и может опереться на текст только за деталями, которых на фото
+   *  не видно (место съёмки и т.п.). */
+  async function titleFromImageAndText(buffer, mime, oldTitle, category) {
+    if (!enabled) throw new Error("GigaChat не настроен");
+    const fileId = await uploadImage(buffer, mime);
+    const { text } = await ask([{ role: "user", content: VISION_TEXT_PROMPT(oldTitle, category), attachments: [fileId] }]);
+    return normalizeTitle(extractJson(text));
+  }
+
+  return { enabled, titleFromText, titleFromImage, titleFromImageAndText };
 };
 
 /** ru/en — обязательные непустые строки, до 80 символов (лимит title у
