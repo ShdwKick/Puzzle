@@ -283,6 +283,13 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    ЕСТЬ, снизу до карусели категорий не хватало воздуха (см. план). */
 #inProgressWrap:not(:empty){margin-bottom:2rem}
 
+/* Комнаты на главной (см. правку «Комнаты на главной») — [hidden] сам даёт
+   display:none, когда комнат нет (см. mountRoomsSection/visibilityEl в
+   app.js), поэтому :not(:empty) тут не нужен, в отличие от #inProgressWrap
+   выше — margin-bottom просто не рендерится вместе с самим блоком. Без
+   этого отступа карточки комнат утыкались прямо в чипы категорий следом. */
+#roomsSectionOuter{margin-bottom:2rem}
+
 /* Карусель категорий над сеткой библиотеки (см. план «Категории пазлов») —
    тот же вид плашек, что у .member-chip, но крупнее и кликабельно: это
    переключатель фильтра, а не статус. */
@@ -1181,8 +1188,12 @@ select.text-input{
 .room-section-title{font-size:1.05rem;font-weight:650;margin:1.2rem 0 .7rem}
 /* «Начать сборку» + кнопка «+» (открывает модалку загрузки своего фото) в
    одной строке — тот же приём justify-content:space-between, что и в шапке.
-   margin-top обнулён — здесь отступ сверху уже даёт gap на .room-active. */
-.room-section-head{display:flex;align-items:center;justify-content:space-between;gap:.8rem}
+   margin-top СВОЙ, не .75rem от gap на .room-active (см. ниже) — тот
+   рассчитан на паузу МЕЖДУ карточками одного списка, а тут смысловая
+   граница: конец списка активных столов, начало другого раздела — те же
+   ~2rem, что у #inProgressWrap/#roomsSectionOuter на главной перед
+   карусель категорий (см. правку «Отступ после комнат/подсказки»). */
+.room-section-head{display:flex;align-items:center;justify-content:space-between;gap:.8rem;margin-top:1.25rem}
 .room-section-head .room-section-title{margin:0 0 .7rem}
 /* Плашки активных досок (#roomActive, см. renderRoom в app.js) — без явного
    gap на контейнере несколько досок сразу (до MAX_ACTIVE_SESSIONS_PER_ROOM)
