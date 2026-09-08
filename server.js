@@ -35,6 +35,14 @@
  *   PUBLIC_URL      (по умолчанию https://puzzle.burninghouse.ru) — для ссылок в письмах.
  *   RESEND_API_KEY, MAIL_FROM — почта о результате публикации (см. lib/mailer.js).
  *                   Без RESEND_API_KEY письма просто логируются, не отправляются.
+ *   GIGACHAT_AUTH_KEY — ключ авторизации GigaChat (см. gigachat.js, правка
+ *                   «Короткие названия пазлов»); без него короткие названия
+ *                   при импорте с Pexels просто не генерируются — остаётся
+ *                   прежняя болванка из title, присланного Admin.
+ *   GIGACHAT_SCOPE  (по умолчанию GIGACHAT_API_PERS) — для физлиц, у юрлиц свой.
+ *   GIGACHAT_MODEL  (по умолчанию GigaChat-2-Pro) — картинки понимают Pro и Max.
+ *   NODE_EXTRA_CA_CERTS — путь к корневому сертификату Минцифры, иначе TLS к
+ *                   Сберу не поднимется (см. Trip/README.md — тот же сертификат).
  */
 "use strict";
 
@@ -48,6 +56,11 @@ const mailer = require("./lib/mailer");
 const mailTpl = require("./lib/emailTemplates");
 const ws = require("./ws-server");
 const { buildClusters, largestClusterSize, connectedPiecesCount, tolerance } = require("./assets/puzzle-clusters.js");
+const gigachat = require("./gigachat")({
+  authKey: process.env.GIGACHAT_AUTH_KEY,
+  scope: process.env.GIGACHAT_SCOPE,
+  model: process.env.GIGACHAT_MODEL,
+});
 
 const PORT = parseInt(process.env.PORT || "8796", 10);
 const HOST = process.env.HOST || "127.0.0.1";
@@ -281,6 +294,16 @@ try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_email TEXT"); } catch {}
 // группу (см. forceDeletePuzzleGroup), держать отклонённую запись незачем.
 try { db.exec("ALTER TABLE puzzles ADD COLUMN room_review_status TEXT"); } catch {}
 
+// Английское название (см. правку «Короткие названия пазлов») — тот же
+// приём, что у categories.name_en: отдельная колонка, не переключение
+// title целиком, у SEO title/description (см. applySeoOverride) свой
+// осознанный выбор оставаться русскими всегда (см. комментарий в app.js,
+// план «Английский язык в интерфейсе») — этой колонки они не касаются.
+// title_en нужен там, где текст детали всё-таки идёт в интерфейс
+// (alt/подписи у пазлов без категории — см. puzzleDisplayTitle) и должен
+// звучать по-английски в английском интерфейсе, а не оставаться русским.
+try { db.exec("ALTER TABLE puzzles ADD COLUMN title_en TEXT"); } catch {}
+
 // УСТАРЕЛО (см. план «Библиотека в комнате — по добавлению, не по
 // умолчанию»): раньше встроенные/библиотечные пазлы были видны во ВСЕХ
 // комнатах сразу, эта таблица держала список локально скрытых. Теперь
@@ -464,6 +487,7 @@ const stmt = {
   // общий на все 4 варианта сложности одной картинки, переименование должно
   // применяться к группе, а не к одной строке.
   updatePuzzleTitle: db.prepare("UPDATE puzzles SET title = ? WHERE image_file = ?"),
+  updatePuzzleTitleEn: db.prepare("UPDATE puzzles SET title_en = ? WHERE image_file = ?"),
   sessionsForPuzzle: db.prepare("SELECT 1 FROM room_sessions WHERE puzzle_id = ? LIMIT 1"),
   sessionIdsForPuzzle: db.prepare("SELECT id FROM room_sessions WHERE puzzle_id = ?"),
   deletePuzzle: db.prepare("DELETE FROM puzzles WHERE id = ?"),
@@ -819,7 +843,7 @@ const imageUrlFor = imageFile => imageFile.endsWith(".svg") ? `/assets/puzzles/$
 
 function puzzlePayload(p) {
   return {
-    id: p.id, title: p.title, gridRows: p.grid_rows, gridCols: p.grid_cols,
+    id: p.id, title: p.title, titleEn: p.title_en || null, gridRows: p.grid_rows, gridCols: p.grid_cols,
     imageUrl: imageUrlFor(p.image_file),
     seed: p.seed, ownerUserId: p.owner_user_id || null,
     // Только для показа автору (клиент сам решает, кому рисовать бейдж —
@@ -1503,7 +1527,7 @@ const server = http.createServer(async (req, res) => {
       // это учитывать, иначе картинка ровно на границе MAX_PHOTO_BYTES
       // ложно словит "тело слишком большое" ещё до проверки buf.length ниже.
       const body = await readJson(req, Math.ceil(MAX_PHOTO_BYTES * 1.4) + 4096);
-      const title = str(body.title, 80) || "Библиотека";
+      let title = str(body.title, 80) || "Библиотека";
       const buf = Buffer.from(String(body.imageBase64 || ""), "base64");
       if (!buf.length) return json(res, 400, { error: "missing image" });
       if (buf.length > MAX_PHOTO_BYTES) return json(res, 413, { error: "too large" });
@@ -1515,6 +1539,29 @@ const server = http.createServer(async (req, res) => {
       // отсутствие поля значит пазл просто некатегоризирован.
       const categoryId = str(body.categoryId, 60);
       if (categoryId && !stmt.categoryById.get(categoryId)) return json(res, 400, { error: "bad category" });
+
+      // Короткое название через GigaChat (см. правку «Короткие названия
+      // пазлов») — только при импорте с Pexels: Admin шлёт pexelsAlt (см.
+      // wirePexelsImport в её app.js) ИМЕННО для этого случая, обычная
+      // ручная загрузка через Admin body.pexelsAlt вообще не ставит и эту
+      // ветку не трогает. Alt есть — пересказываем текстом (дешевле и
+      // точнее, см. gigachat.js); alt пустой — знать не по чему, кроме
+      // самой фотографии, поэтому смотрим на неё (titleFromImage). GigaChat
+      // не настроен или отказал — тихо остаёмся при болванке, которую уже
+      // прислал Admin (photo.alt или "Категория N"): это ухудшение
+      // названия, а не повод ронять импорт целиком.
+      let titleEn = null;
+      if (body.pexelsAlt !== undefined && gigachat.enabled) {
+        const categoryName = categoryId ? (stmt.categoryById.get(categoryId)?.name || null) : null;
+        const alt = str(body.pexelsAlt, 4000);
+        try {
+          const generated = alt ? await gigachat.titleFromText(alt, categoryName) : await gigachat.titleFromImage(buf, mime);
+          title = generated.ru;
+          titleEn = generated.en;
+        } catch (e) {
+          adminLog.warn("GigaChat не смог придумать название пазла", { message: e.message });
+        }
+      }
 
       const groupId = crypto.randomUUID();
       const file = groupId + PHOTO_MIME[mime];
@@ -1535,10 +1582,14 @@ const server = http.createServer(async (req, res) => {
       // пазл — одна категория»): setPuzzleCategory бьёт по image_file, а до
       // этой строки для новой группы ещё нет ни одной строки в puzzles —
       // UPDATE до insert тихо не находил бы что обновлять.
+      if (titleEn) {
+        stmt.updatePuzzleTitleEn.run(titleEn, file);
+        for (const v of variants) v.titleEn = titleEn;
+      }
       setPuzzleCategory(file, categoryId);
       if (categoryId) for (const v of variants) v.categoryId = categoryId;
-      adminLog.info("Admin добавил картинку в библиотеку", { title, variants: variants.length });
-      return json(res, 200, { title, variants });
+      adminLog.info("Admin добавил картинку в библиотеку", { title, titleEn, variants: variants.length });
+      return json(res, 200, { title, titleEn, variants });
     }
     const puzzleDeleteMatch = p.match(/^\/internal\/puzzles\/([\w-]+)$/);
     if (puzzleDeleteMatch && req.method === "DELETE") {
@@ -1818,6 +1869,14 @@ const server = http.createServer(async (req, res) => {
       const title = str(body.title, 80);
       if (!title) return json(res, 400, { error: "bad title" });
       stmt.updatePuzzleTitle.run(title, puzzle.image_file);
+      // titleEn — необязательный (см. правку «Короткие названия пазлов»,
+      // title_en в схеме); body.titleEn === undefined значит «не трогать»,
+      // пустая строка — явно сбросить (тот же принцип, что у nameEn
+      // категорий выше).
+      if (body.titleEn !== undefined) {
+        const titleEn = str(body.titleEn, 80) || null;
+        stmt.updatePuzzleTitleEn.run(titleEn, puzzle.image_file);
+      }
       adminLog.info("Admin переименовал картинку в библиотеке", { puzzleId: puzzle.id, oldTitle: puzzle.title, newTitle: title });
       return json(res, 200, { ok: true, title });
     }

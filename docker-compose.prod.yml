@@ -24,6 +24,19 @@ services:
       # Сгенерировать: openssl rand -hex 32. Пустым — /internal/* просто всегда
       # отвечает 403, а не падает — безопасный дефолт.
       ADMIN_INTERNAL_KEY: ${ADMIN_INTERNAL_KEY:-}
+      # Короткие названия пазлов при импорте с Pexels (см. правку «Короткие
+      # названия пазлов», gigachat.js) — ключ из .env рядом с этим compose
+      # (права 600), в репозиторий и в образ НЕ попадает: образ публичный, а
+      # секрет внутри образа — секрет для всех. Тот же .env, что и
+      # ADMIN_INTERNAL_KEY выше. Пустым — GigaChat просто выключен, импорт
+      # с Pexels работает как раньше, без коротких названий.
+      GIGACHAT_AUTH_KEY: ${GIGACHAT_AUTH_KEY:-}
+      GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      GIGACHAT_MODEL: ${GIGACHAT_MODEL:-GigaChat-2-Pro}
+      # Домены Сбера подписаны корневым сертификатом Минцифры, которого нет в
+      # alpine. Без него TLS не поднимется, а отключать проверку нельзя — по
+      # этой связи уходит фотография пазла. Тот же сертификат/приём, что у Trip.
+      NODE_EXTRA_CA_CERTS: /app/certs/russian_trusted_root_ca.pem
       # Сервис должен быть зарегистрирован в auth как клиент:
       #   docker compose exec auth node server.js client-add puzzle "Что собираем?" https://puzzle.burninghouse.ru/
       # Фронт и API на одном домене, CORS не нужен.
@@ -32,6 +45,9 @@ services:
       - "127.0.0.1:8796:8796"
     volumes:
       - puzzle-data:/app/data
+      # Сертификат кладут на сервер рядом с compose: он публичный, но в образ
+      # его не зашиваем — обновится у Минцифры, менять придётся файл, а не сборку.
+      - ./russian_trusted_root_ca.pem:/app/certs/russian_trusted_root_ca.pem:ro
 
 volumes:
   puzzle-data:
