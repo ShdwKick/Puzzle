@@ -4053,6 +4053,14 @@ document.getElementById("createRoomBtn").addEventListener("click", async () => {
   const input = document.getElementById("newRoomTitle");
   const title = input.value.trim();
   if (!title) return;
+  // disabled на время запроса (см. правку «Дубли комнат при двойном
+  // клике») — без него двойной клик или Enter-Enter (см. keydown ниже,
+  // он же дёргает .click()) успевали уйти двумя POST /api/rooms ДО того,
+  // как первый ответ закрывал модалку и переключал страницу — на сервере
+  // ничего от дублей по названию не защищает. Тот же приём, что у
+  // остальных submit-кнопок в этом файле.
+  const btn = document.getElementById("createRoomBtn");
+  btn.disabled = true;
   try {
     const res = await roomFetch("/api/rooms", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title }),
@@ -4064,6 +4072,7 @@ document.getElementById("createRoomBtn").addEventListener("click", async () => {
     closeModal("createRoomModalBackdrop");
     navigate(`/room/${encodeURIComponent(room.id)}`);
   } catch { /* останемся на месте, поле не очистится — можно повторить */ }
+  btn.disabled = false;
 });
 document.getElementById("newRoomTitle").addEventListener("keydown", e => {
   if (e.key === "Enter") document.getElementById("createRoomBtn").click();
@@ -4185,6 +4194,17 @@ async function renderRoomsList(root, signal) {
   $(root, "#joinRoomOpenBtn").addEventListener("click", () => openModal("joinRoomModalBackdrop"), { signal });
 
   await loadRooms();
+  // Список раньше был статичным снимком на момент захода — если кто-то
+  // создавал комнату, пока вы уже смотрели на список, вы её не видели без
+  // ручной перезагрузки (см. баг-репорт: два человека наплодили комнат с
+  // одинаковым названием, отчасти потому что не видели, что комната уже
+  // есть). Поллинг, не WebSocket — свежести раз в несколько секунд для
+  // списка комнат достаточно, а свой WS-канал под это заводить (см.
+  // ws-server.js — сейчас он привязан к конкретному столу сборки, не к
+  // списку) — несоразмерно самой задаче. document.hidden — не дёргаем
+  // сеть, пока вкладка свёрнута/не активна.
+  const pollTimer = setInterval(() => { if (!document.hidden) loadRooms(); }, 8000);
+  signal.addEventListener("abort", () => clearInterval(pollTimer));
 }
 
 /* ───────────────────────── комнаты: экран комнаты ───────────────────────── */

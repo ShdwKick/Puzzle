@@ -1429,6 +1429,20 @@ const server = http.createServer(async (req, res) => {
         // месте, без своей даты) — «опубликовано за 7д» этим запросом не
         // посчитать, только «загружено за 7д».
         photosUploaded7d: db.prepare("SELECT COUNT(DISTINCT image_file) AS n FROM puzzles WHERE uploader_user_id IS NOT NULL AND created_at > ?").get(since7d).n,
+        // Сколько сейчас реально ждёт админа — сумма трёх независимых
+        // очередей (см. правку «Уведомления о модерации в Admin»): фото в
+        // комнатах на фоновой проверке (roomReviewPending — тот же
+        // room_review_status='pending', что у вкладки «Модерация»),
+        // заявки на публикацию (то же условие, что у allUserPhotos —
+        // owner_user_id обнуляется при одобрении, отклонённые не хранятся,
+        // см. комментарий там же) и предложенные категории. Admin показывает
+        // это отдельным бейджем на карточке сервиса и на вкладке
+        // «Модерация» — раньше узнать, что там что-то накопилось, можно
+        // было только зайдя и посмотрев глазами.
+        pendingModeration:
+          db.prepare("SELECT COUNT(DISTINCT image_file) AS n FROM puzzles WHERE room_review_status = 'pending'").get().n
+          + db.prepare("SELECT COUNT(DISTINCT image_file) AS n FROM puzzles WHERE owner_user_id IS NOT NULL AND moderation_status IS NOT NULL").get().n
+          + db.prepare("SELECT COUNT(*) AS n FROM categories WHERE status = 'pending'").get().n,
         puzzlesStarted: progressRows + roomSessions,
         puzzlesCompleted: completed + roomSessionsCompleted,
         puzzlesCompleted7d: completed7d + roomSessionsCompleted7d,
