@@ -1901,6 +1901,35 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, { ok: true, title });
     }
 
+    // Предложить короткое название через GigaChat, НЕ применяя (см. правку
+    // «GigaChat-кнопка + bulk edit в Admin») — только читает, ничего не
+    // пишет в puzzles; применение — отдельный вызов POST .../title выше,
+    // тем же путём, что и ручное переименование. Разделены нарочно: Admin
+    // должен показать предложение и подождать подтверждения, а не менять
+    // название по одному клику. Всегда titleFromText (не по фото) — у
+    // существующего в библиотеке пазла название уже есть, каким бы оно ни
+    // было, пересказать его дешевле и точнее, чем смотреть на картинку
+    // заново (см. правку «Короткие названия пазлов», сравнение в ней же).
+    const puzzleSuggestMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/title\/suggest$/);
+    if (puzzleSuggestMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      if (!gigachat.enabled) return json(res, 503, { error: "gigachat_disabled", message: "GigaChat не настроен (GIGACHAT_AUTH_KEY)." });
+      const puzzle = stmt.puzzle.get(puzzleSuggestMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      // Тот же критерий, что у применения выше (POST .../title) — не тратим
+      // вызов GigaChat на то, что потом всё равно нельзя будет применить.
+      if (puzzle.owner_user_id !== null || puzzle.image_file.endsWith(".svg")) {
+        return json(res, 400, { error: "not an admin-uploaded puzzle" });
+      }
+      const categoryName = puzzle.category_id ? (stmt.categoryById.get(puzzle.category_id)?.name || null) : null;
+      try {
+        const { ru, en } = await gigachat.titleFromText(puzzle.title, categoryName);
+        return json(res, 200, { ok: true, title: ru, titleEn: en });
+      } catch (e) {
+        return json(res, 502, { error: "gigachat_failed", message: e.message });
+      }
+    }
+
     // Назначение категории уже загруженной через Admin картинке — отдельно
     // от выбора при самой загрузке, иначе три стартовые картинки и всё,
     // что добавлено до этого захода, навсегда остались бы без категорий.
