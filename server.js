@@ -2160,12 +2160,19 @@ async function api(req, res, url, user) {
   // (room_id — граница видимости, не протекает в другие комнаты того же
   // владельца), чтобы клиент мог собрать их в одну карточку (groupPuzzles
   // в app.js) и показать только за столом этой комнаты.
+  // Вход НЕ обязателен (та же анонимная личность, что у комнат/rating, см.
+  // getOrCreateAnonIdentity) — подтверждено пользователем: комнаты и так
+  // анонимные, а от опасного контента защищает не вход, а фоновая
+  // модерация (room_review_status, см. «Моя модерация» ниже) — она
+  // проверяет загрузку независимо от того, кто её сделал. Публикация в
+  // общую библиотеку (POST .../publish) по-прежнему требует настоящего
+  // входа — это ограничение отдельное и тут не трогается.
   if (seg[1] === "puzzles" && seg.length === 2 && m === "POST") {
-    if (!user) return json(res, 401, { error: "unauthorized" });
+    const identity = user || getOrCreateAnonIdentity(req, res);
 
     const roomId = str(url.searchParams.get("roomId"), 64);
     if (!roomId) return json(res, 400, { error: "roomId required" });
-    if (!stmt.roomMember.get(roomId, user.id)) return json(res, 403, { error: "not a member" });
+    if (!stmt.roomMember.get(roomId, identity.id)) return json(res, 403, { error: "not a member" });
 
     // Согласие + бан устройства — до чтения тела запроса (дорогой I/O): нет
     // смысла принимать и сохранять байты картинки, если запрос всё равно
@@ -2203,10 +2210,10 @@ async function api(req, res, url, user) {
       const { rows, cols } = gridForPieceTarget(total, width, height);
       const id = crypto.randomUUID();
       const seed = crypto.randomInt(1, 2 ** 31 - 1);
-      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, user.id, roomId, null, null, ts, deviceId, null, user.id, user.username || null, user.name || null, user.email || null, "pending");
+      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, identity.id, roomId, null, null, ts, deviceId, null, identity.id, identity.username || null, identity.name || null, identity.email || null, "pending");
       return puzzlePayload(stmt.puzzle.get(id));
     });
-    adminLog.info("Загружено своё фото", { userId: user.id, roomId, title, variants: variants.length });
+    adminLog.info("Загружено своё фото", { userId: identity.id, roomId, title, variants: variants.length });
     return json(res, 200, { title, variants });
   }
 

@@ -518,10 +518,25 @@ const anonSession2Body = await ar.json();
 ok("2-й сеанс в анонимной комнате отбит лимитом 1 (не 5)",
   ar.status === 409 && anonSession2Body.limit === 1, JSON.stringify(anonSession2Body));
 
-ar = await fetch(PUZZLE + `/api/puzzles?roomId=${anonRoom.id}&w=300&h=400`, {
+// Вход не обязателен (см. правку «Анонимная загрузка фото» — подтверждено
+// пользователем: комнаты и так анонимные, а от опасного контента защищает
+// фоновая модерация, а не вход) — та же анонимная cookie грузит фото и
+// сразу видит его в комнате, а фоновая модерация всё равно подхватывает
+// загрузку независимо от того, кто её сделал.
+ar = await fetch(PUZZLE + `/api/puzzles?roomId=${anonRoom.id}&w=300&h=400&consent=1&title=${encodeURIComponent("Анонимное фото")}`, {
   method: "POST", headers: { "Content-Type": "image/png", Cookie: anonCookie }, body: fakePng,
 });
-ok("загрузка своего фото в анонимную комнату без входа отбита 401 — как и должно", ar.status === 401, String(ar.status));
+const anonUpload = await ar.json().catch(() => ({}));
+ok("загрузка своего фото в анонимную комнату без входа проходит", ar.status === 200 && Array.isArray(anonUpload.variants), JSON.stringify(anonUpload).slice(0, 200));
+const anonUploadedId = anonUpload.variants[0].id;
+
+ar = await anonCall(anonCookie, `/puzzles?roomId=${anonRoom.id}`);
+const anonRoomPuzzles = await ar.json();
+ok("анонимно загруженное фото сразу видно в комнате той же cookie", ar.status === 200 && anonRoomPuzzles.some(p => p.id === anonUploadedId), JSON.stringify(anonRoomPuzzles.map(p => p.id)));
+
+ar = await fetch(PUZZLE + "/internal/moderation/room-uploads", { headers: { "X-Admin-Key": ADMIN_KEY } });
+ok("анонимная загрузка тоже попадает в очередь фоновой модерации (замена снятой проверки входа)",
+  (await ar.json()).photos.some(x => x.id === anonUploadedId));
 
 // Тот же браузер (та же cookie) теперь входит в аккаунт и открывает СВОЮ
 // анонимную комнату — клейм членства должен перенести его строку на

@@ -299,7 +299,6 @@ const EN = {
   "Загружаем пазлы…": "Loading puzzles…",
   "За этим столом сейчас кто-то сидит — сначала все должны выйти.": "Someone is currently at this table — everyone needs to leave first.",
   "Не удалось загрузить пазлы.": "Couldn't load puzzles.",
-  "Войдите, чтобы добавить своё фото.": "Sign in to add your own photo.",
   "Ещё ничего не собрано.": "Nothing solved yet.",
   "Собрать ещё раз": "Solve again",
   "Продолжить": "Continue",
@@ -1207,9 +1206,11 @@ async function uploadPuzzlePhoto(file, title, roomId) {
   // consent=1 — обязательное согласие с запрещёнными категориями (см. план
   // «Модерация загруженных фото»): форма физически не даёт сюда попасть без
   // отмеченной галочки (mountUploadForm ниже), но сервер всё равно
-  // перепроверяет сам — клиент не источник доверия.
+  // перепроверяет сам — клиент не источник доверия. Вход не обязателен (см.
+  // правку «Анонимная загрузка фото») — roomFetch, а не auth.fetch, чтобы
+  // гость грузил через ту же анонимную cookie-личность, что и комнаты.
   const qs = new URLSearchParams({ w: String(width), h: String(height), title: title || t("Мой пазл"), roomId, consent: "1" });
-  const res = await auth.fetch(`/api/puzzles?${qs}`, {
+  const res = await roomFetch(`/api/puzzles?${qs}`, {
     method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
   });
   const data = await res.json().catch(() => ({}));
@@ -2178,8 +2179,10 @@ async function renderLibrary(root, signal) {
       <h1>${t("Пазлы онлайн бесплатно — собрать пазл в браузере")}</h1>
       <p>${t("Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.")}</p>
     </div>
-    <h2 class="room-section-title">${t("Комнаты")}</h2>
-    <div id="roomsSectionWrap"></div>
+    <div id="roomsSectionOuter" hidden>
+      <h2 class="room-section-title">${t("Комнаты")}</h2>
+      <div id="roomsSectionWrap"></div>
+    </div>
     <div id="guestNoteWrap"></div>
     <div id="ownPhotoCtaWrap"></div>
     <div id="inProgressWrap"></div>
@@ -2193,7 +2196,12 @@ async function renderLibrary(root, signal) {
   // комнаты никто не находил (см. правку «Метрики для теста в Директе»).
   // Не await — независимый виджет, не должен задерживать загрузку сетки
   // пазлов ниже, у которой своя отдельная загрузка (см. loadPuzzles).
-  mountRoomsSection($(root, "#roomsSectionWrap"), signal);
+  // #roomsSectionOuter скрыт по умолчанию (см. разметку выше) и
+  // visibilityEl сам открывает его, только если у человека реально есть
+  // хоть одна комната — иначе на главной для подавляющего большинства
+  // гостей (комнат нет вовсе) это была бы секция ни о чём, разросшаяся до
+  // «Пока нет ни одной комнаты — создайте первую» ещё до самих пазлов.
+  mountRoomsSection($(root, "#roomsSectionWrap"), signal, { visibilityEl: $(root, "#roomsSectionOuter") });
 
   if (!auth.isAuthenticated()) {
     const note = document.createElement("div");
@@ -4117,8 +4125,17 @@ document.getElementById("joinCodeInput").addEventListener("keydown", e => {
  *  функция сама его наполняет и вешает поведение; await не обязателен —
  *  вызывающий код решает сам, ждать ли (renderRoomsList ждёт, у неё это
  *  единственный контент страницы; renderLibrary — нет, чтобы не задерживать
- *  сетку пазлов ради независимого виджета). */
-async function mountRoomsSection(container, signal) {
+ *  сетку пазлов ради независимого виджета).
+ *  opts.visibilityEl — необязательный элемент (заголовок+секция вместе,
+ *  см. renderLibrary), который прячется, пока комнат нет вообще, и
+ *  появляется, как только они есть (см. правку «Не показывать «Комнаты» на
+ *  главной без комнат») — обновляется на каждую загрузку, включая поллинг,
+ *  так что секция сама появится, если кто-то создаст комнату, пока вы уже
+ *  смотрите на пустую главную. На /rooms (renderRoomsList) не передаётся —
+ *  там раздел не про «есть ли что показать», это и есть смысл страницы,
+ *  прятать нечего даже при нуле комнат (пустое состояние + «Создать» —
+ *  само содержимое). */
+async function mountRoomsSection(container, signal, opts = {}) {
   container.innerHTML = `
     <div class="room-actions-row" id="roomActionsRow">
       <button class="btn filled" id="createRoomOpenBtn" type="button">${t("Создать комнату")}</button>
@@ -4208,6 +4225,7 @@ async function mountRoomsSection(container, signal) {
       return;
     }
     if (signal.aborted) return;
+    if (opts.visibilityEl) opts.visibilityEl.hidden = rooms.length === 0;
     renderPage();
   }
 
@@ -4515,19 +4533,13 @@ async function renderRoom(root, roomId, signal) {
 
   renderAddPuzzleLibrary(libraryMount, roomId, addedImageUrls, signal, addGroupToRoomGrid);
 
-  // Загрузка своего фото по-прежнему требует настоящего входа (POST
-  // /api/puzzles и так уже проверяет это на сервере, см. план «анонимные
-  // комнаты») — анониму вместо формы подсказка, чтобы не показывать то,
-  // что всё равно откажет.
-  if (auth.isAuthenticated()) {
-    mountUploadForm(uploadMount, roomId, result => {
-      addGroupToRoomGrid({ ...result.variants[0], variants: result.variants });
-      closeModal("uploadPuzzleModalBackdrop");
-    });
-  } else {
-    uploadMount.innerHTML = `<p class="state-note">${t("Войдите, чтобы добавить своё фото.")}</p><button class="btn tonal sm" id="uploadLoginBtn" type="button">${t("Войти")}</button>`;
-    $(uploadMount, "#uploadLoginBtn").addEventListener("click", () => auth.login(), { signal });
-  }
+  // Загрузка своего фото не требует входа (POST /api/puzzles принимает и
+  // анонимную личность, см. правку «Анонимная загрузка фото») — от опасного
+  // контента защищает фоновая модерация, а не вход.
+  mountUploadForm(uploadMount, roomId, result => {
+    addGroupToRoomGrid({ ...result.variants[0], variants: result.variants });
+    closeModal("uploadPuzzleModalBackdrop");
+  });
 
   const historyEl = $(root, "#roomHistory");
   const past = sessions.filter(s => s.completedAt);

@@ -471,6 +471,24 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    только добавляла пустое обрамление без визуальной разницы, убрана. */
 .upload-form{display:flex;flex-direction:column;gap:.8rem}
 .upload-form .btn{align-self:flex-start}
+/* Нативная кнопка «Выберите файл» (input[type=file]) в браузерном виде по
+   умолчанию почти теряется рядом с обычными .btn — приводим её к тому же
+   языку через ::file-selector-button (стандартный псевдоэлемент), не через
+   свою обёртку label+скрытый input: тут это единственное такое поле,
+   заводить отдельный компонент не окупается. Залитая, тон в тон с
+   .btn.filled — это первый обязательный шаг формы (без файла нечего
+   собирать), должна цеплять взгляд не меньше, чем сам сабмит внизу; была
+   пробована приглушённая .outlined-версия — по отзыву всё равно терялась. */
+#uploadFile{font:inherit;font-size:.85rem;color:var(--md-sys-color-on-surface-variant)}
+#uploadFile::file-selector-button{
+  display:inline-flex;align-items:center;justify-content:center;gap:.4em;
+  border:0;border-radius:var(--md-sys-shape-corner-full);
+  padding:.6em 1.3em;font-weight:600;font-size:.92rem;cursor:pointer;
+  background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary);
+  box-shadow:var(--e1);margin-right:.7rem;
+  transition:box-shadow .15s var(--ease-std);
+}
+#uploadFile::file-selector-button:hover{box-shadow:var(--e2)}
 /* Согласие + запрещённые категории (см. план «Модерация загруженных фото») —
    внутри .upload-form, перед кнопкой сабмита. */
 .upload-consent{
