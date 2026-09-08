@@ -1499,6 +1499,57 @@ const server = http.createServer(async (req, res) => {
       });
     }
 
+    // Подробности одной комнаты для Admin (клик по строке на вкладке
+    // «Комнаты», см. Admin/assets/app.js openRoomModal) — участники и какие
+    // пазлы там на самом деле собирали (room_sessions), плюс что вообще
+    // добавлено в библиотеку комнаты (room_added_puzzles), но ни разу не
+    // начинали собирать. room_sessions.puzzle_id указывает на конкретный
+    // вариант сложности (puzzles.id), у него уже есть готовые title/
+    // image_file — обычный JOIN. room_added_puzzles хранит image_file
+    // (ГРУППУ), не puzzle_id (см. комментарий у самой таблицы выше), поэтому
+    // название берём любой строкой этой группы через подзапрос.
+    const roomDetailMatch = p.match(/^\/internal\/rooms\/([\w-]+)$/);
+    if (roomDetailMatch && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const room = db.prepare("SELECT id, title, join_code, created_by, created_at FROM rooms WHERE id = ?").get(roomDetailMatch[1]);
+      if (!room) return json(res, 404, { error: "not found" });
+
+      const members = db.prepare(`
+        SELECT user_id, username, name, role, joined_at FROM room_members
+        WHERE room_id = ? ORDER BY (role = 'owner') DESC, joined_at
+      `).all(room.id);
+
+      const sessions = db.prepare(`
+        SELECT rs.id, rs.puzzle_id, rs.pieces_total, rs.pieces_placed, rs.started_by, rs.started_at, rs.completed_at,
+               p.title, p.image_file
+        FROM room_sessions rs JOIN puzzles p ON p.id = rs.puzzle_id
+        WHERE rs.room_id = ?
+        ORDER BY rs.started_at DESC
+      `).all(room.id);
+
+      const addedPuzzles = db.prepare(`
+        SELECT rap.image_file, rap.added_by, rap.added_at,
+               (SELECT title FROM puzzles WHERE image_file = rap.image_file LIMIT 1) AS title
+        FROM room_added_puzzles rap
+        WHERE rap.room_id = ?
+        ORDER BY rap.added_at DESC
+      `).all(room.id);
+
+      return json(res, 200, {
+        room: { id: room.id, title: room.title, joinCode: room.join_code || null, createdBy: room.created_by, createdAt: room.created_at },
+        members: members.map(m => ({ userId: m.user_id, username: m.username, name: m.name, role: m.role, joinedAt: m.joined_at })),
+        sessions: sessions.map(s => ({
+          id: s.id, puzzleId: s.puzzle_id, title: s.title, imageUrl: imageUrlFor(s.image_file),
+          piecesTotal: s.pieces_total, piecesPlaced: s.pieces_placed,
+          startedBy: s.started_by, startedAt: s.started_at, completedAt: s.completed_at,
+        })),
+        addedPuzzles: addedPuzzles.map(a => ({
+          imageFile: a.image_file, title: a.title || null, imageUrl: imageUrlFor(a.image_file),
+          addedBy: a.added_by, addedAt: a.added_at,
+        })),
+      });
+    }
+
     // Вкладка «Обратная связь» в Admin (см. правку «Форма обратной связи») —
     // только на чтение, без approve/reject/ответа (это не модерация — прочли
     // и разобрались вне сервиса). Тот же LIMIT 200, что у /internal/rooms.
