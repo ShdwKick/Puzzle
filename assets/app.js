@@ -123,7 +123,8 @@ const EN = {
   "Аккаунт BurningHouse": "BurningHouse account",
   "Оформление": "Appearance",
   "Начать обучение": "Start the tour",
-  "Не знаете, с чего начать? Нажмите «?» — покажем, как тут всё устроено.": "Not sure where to start? Tap “?” — we’ll show you around.",
+  "Не знаете, с чего начать? Нажмите «?» — покажем, как тут всё устроено.": "Not sure where to start? Tap the \"?\" — we'll show you around.",
+  "Понравился результат? Нажмите «⋮» на карточке — там можно опубликовать пазл в общую библиотеку.": "Like how it turned out? Tap the \"⋮\" on the card — you can publish the puzzle to the shared library there.",
   "Управление аккаунтом →": "Manage account →",
   "Выйти": "Log out",
   "Создать комнату": "Create room",
@@ -2177,12 +2178,22 @@ async function renderLibrary(root, signal) {
       <h1>${t("Пазлы онлайн бесплатно — собрать пазл в браузере")}</h1>
       <p>${t("Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.")}</p>
     </div>
+    <h2 class="room-section-title">${t("Комнаты")}</h2>
+    <div id="roomsSectionWrap"></div>
     <div id="guestNoteWrap"></div>
     <div id="ownPhotoCtaWrap"></div>
     <div id="inProgressWrap"></div>
     <div id="categoryCarouselWrap"></div>
     <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">${t("Загружаем…")}</p></div>
     ${PAGER_HTML()}`;
+
+  // Список комнат теперь и на самой главной, сверху (см. правку «Комнаты
+  // на главной», по образцу того, как в Movies список комнат — это и есть
+  // главная страница) — по живой аналитике реклама приводит людей, но
+  // комнаты никто не находил (см. правку «Метрики для теста в Директе»).
+  // Не await — независимый виджет, не должен задерживать загрузку сетки
+  // пазлов ниже, у которой своя отдельная загрузка (см. loadPuzzles).
+  mountRoomsSection($(root, "#roomsSectionWrap"), signal);
 
   if (!auth.isAuthenticated()) {
     const note = document.createElement("div");
@@ -2239,7 +2250,12 @@ async function renderLibrary(root, signal) {
   // сохраняет относительный порядок элементов — категории тоже наследуют
   // это перемешивание, отдельно их не переупорядочиваем.
   shuffleInPlace(allGroups);
-  const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, ".pager"), signal);
+  // #puzzleGrid + .pager — не просто $(root,".pager"): страница теперь несёт
+  // ещё один .pager (см. mountRoomsSection, правка «Комнаты на главной») —
+  // общий класс, случайный первый querySelector зацепил бы не тот. Соседний
+  // селектор точно берёт пейджер СРАЗУ после сетки пазлов (см. разметку
+  // выше — PAGER_HTML() идёт непосредственно за #puzzleGrid).
+  const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, "#puzzleGrid + .pager"), signal);
 
   // Одна категория на пазл (см. план «Один пазл — одна категория») —
   // каждый пазл считается ровно в одном счётчике, некатегоризированные
@@ -4091,12 +4107,19 @@ document.getElementById("joinCodeInput").addEventListener("keydown", e => {
   if (e.key === "Enter") goToRoomCode(e.target.value);
 });
 
-async function renderRoomsList(root, signal) {
-  root.innerHTML = `
-    <div class="library-head">
-      <h1>${t("Комнаты")}</h1>
-      <p>${t("Соберите пазл вместе с друзьями — детали двигаются в реальном времени для всех, кто за столом.")}</p>
-    </div>
+/** Сама секция списка комнат — карточки, пагинация, гостевая подсказка,
+ *  кнопки «Создать»/«Присоединиться», живое обновление поллингом. Общая
+ *  для двух мест (см. правку «Комнаты на главной», по образцу того, как
+ *  список комнат сделан в Movies — там он и есть главная страница целиком):
+ *  отдельная страница /rooms (renderRoomsList — свой h1+интро снаружи) и
+ *  теперь верх главной библиотеки (renderLibrary — там просто заголовок
+ *  секции поменьше). container — уже существующий пустой элемент, эта
+ *  функция сама его наполняет и вешает поведение; await не обязателен —
+ *  вызывающий код решает сам, ждать ли (renderRoomsList ждёт, у неё это
+ *  единственный контент страницы; renderLibrary — нет, чтобы не задерживать
+ *  сетку пазлов ради независимого виджета). */
+async function mountRoomsSection(container, signal) {
+  container.innerHTML = `
     <div class="room-actions-row" id="roomActionsRow">
       <button class="btn filled" id="createRoomOpenBtn" type="button">${t("Создать комнату")}</button>
       <button class="btn outlined" id="joinRoomOpenBtn" type="button">${t("Присоединиться к комнате")}</button>
@@ -4124,7 +4147,7 @@ async function renderRoomsList(root, signal) {
     btn.textContent = t("Войти");
     btn.addEventListener("click", () => auth.login());
     note.append(span, btn);
-    $(root, "#roomList").before(note);
+    $(container, "#roomList").before(note);
   }
 
   // Пагинация — целиком на фронте, список уже загружен целиком (см.
@@ -4134,8 +4157,8 @@ async function renderRoomsList(root, signal) {
   let roomsPage = 0;
 
   function renderPage() {
-    const list = $(root, "#roomList");
-    const pagerEl = $(root, "#roomsPager");
+    const list = $(container, "#roomList");
+    const pagerEl = $(container, "#roomsPager");
     if (!rooms.length) {
       list.innerHTML = `<p class="state-note">${t("Пока нет ни одной комнаты — создайте первую.")}</p>`;
       pagerEl.hidden = true;
@@ -4168,14 +4191,14 @@ async function renderRoomsList(root, signal) {
     const showPager = rooms.length > ROOMS_PAGE_SIZE;
     pagerEl.hidden = !showPager;
     if (showPager) {
-      $(root, "#roomsPagerLabel").textContent = pagerLabel(roomsPage + 1, pages);
-      $(root, "#roomsPrevBtn").disabled = roomsPage <= 0;
-      $(root, "#roomsNextBtn").disabled = roomsPage >= pages - 1;
+      $(container, "#roomsPagerLabel").textContent = pagerLabel(roomsPage + 1, pages);
+      $(container, "#roomsPrevBtn").disabled = roomsPage <= 0;
+      $(container, "#roomsNextBtn").disabled = roomsPage >= pages - 1;
     }
   }
 
   async function loadRooms() {
-    const list = $(root, "#roomList");
+    const list = $(container, "#roomList");
     try {
       const res = await roomFetch("/api/rooms");
       if (!res.ok) throw new Error("rooms fetch failed");
@@ -4188,10 +4211,10 @@ async function renderRoomsList(root, signal) {
     renderPage();
   }
 
-  $(root, "#roomsPrevBtn").addEventListener("click", () => { roomsPage = Math.max(0, roomsPage - 1); renderPage(); }, { signal });
-  $(root, "#roomsNextBtn").addEventListener("click", () => { roomsPage += 1; renderPage(); }, { signal });
-  $(root, "#createRoomOpenBtn").addEventListener("click", () => openModal("createRoomModalBackdrop"), { signal });
-  $(root, "#joinRoomOpenBtn").addEventListener("click", () => openModal("joinRoomModalBackdrop"), { signal });
+  $(container, "#roomsPrevBtn").addEventListener("click", () => { roomsPage = Math.max(0, roomsPage - 1); renderPage(); }, { signal });
+  $(container, "#roomsNextBtn").addEventListener("click", () => { roomsPage += 1; renderPage(); }, { signal });
+  $(container, "#createRoomOpenBtn").addEventListener("click", () => openModal("createRoomModalBackdrop"), { signal });
+  $(container, "#joinRoomOpenBtn").addEventListener("click", () => openModal("joinRoomModalBackdrop"), { signal });
 
   await loadRooms();
   // Список раньше был статичным снимком на момент захода — если кто-то
@@ -4205,6 +4228,16 @@ async function renderRoomsList(root, signal) {
   // сеть, пока вкладка свёрнута/не активна.
   const pollTimer = setInterval(() => { if (!document.hidden) loadRooms(); }, 8000);
   signal.addEventListener("abort", () => clearInterval(pollTimer));
+}
+
+async function renderRoomsList(root, signal) {
+  root.innerHTML = `
+    <div class="library-head">
+      <h1>${t("Комнаты")}</h1>
+      <p>${t("Соберите пазл вместе с друзьями — детали двигаются в реальном времени для всех, кто за столом.")}</p>
+    </div>
+    <div id="roomsSectionWrap"></div>`;
+  await mountRoomsSection($(root, "#roomsSectionWrap"), signal);
 }
 
 /* ───────────────────────── комнаты: экран комнаты ───────────────────────── */
@@ -4433,9 +4466,20 @@ async function renderRoom(root, roomId, signal) {
     // решает, кому показать крестик: владельцу своего фото — «удалить»,
     // любому участнику комнаты (roomId передан) на библиотечном пазле —
     // «убрать из этой комнаты» (см. canRemoveFromRoom в buildCard).
+    // publishHintTarget — первая СВОЯ ещё не опубликованная карточка (тот
+    // же критерий, что buildCard использует для пункта «Опубликовать» в
+    // меню «…», см. const mine там) — см. правку «Подсказка про
+    // публикацию»: подсказку показываем не более чем на одной карточке.
+    let publishHintTarget = null;
+    const user = auth.isAuthenticated() ? auth.getUser() : null;
     for (const group of currentGroups) {
-      grid.appendChild(buildCard(group, { onPlay: playVariant, roomId }));
+      const node = buildCard(group, { onPlay: playVariant, roomId });
+      grid.appendChild(node);
+      if (!publishHintTarget && user && group.ownerUserId === user.id && (!group.moderationStatus || group.moderationStatus === "rejected")) {
+        publishHintTarget = node;
+      }
     }
+    if (publishHintTarget) maybeShowPublishHint(publishHintTarget, signal);
   }
   // Добавление карточки на лету (из панели «Из библиотеки» или сразу после
   // своей загрузки) — не полный перерендер: переводит сетку из пустого

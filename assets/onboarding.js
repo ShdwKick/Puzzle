@@ -303,12 +303,60 @@ function showTableHint(btn) {
   const autoTimer = setTimeout(close, 8000);
 }
 
-/** Пузырь под кнопкой, прижат к правому краю — сама кнопка последняя
- *  справа в тулбаре стола (см. .table-toolbar), поэтому по центру или
- *  слева от неё пузырь вылезал бы за край экрана. */
+/** Пузырь под кнопкой, прижат к правому краю кнопки (не экрана — "right"
+ *  считается от innerWidth до правого края САМОЙ кнопки, поэтому работает
+ *  одинаково правильно и у #tableHelpBtn в тулбаре стола, и у кнопки «…»
+ *  карточки пазла где угодно в сетке, см. maybeShowPublishHint ниже — общая
+ *  функция, не только про стол, несмотря на название). */
 function positionTableHint(hint, btn) {
   const r = btn.getBoundingClientRect();
   const margin = 8;
   hint.style.top = (r.bottom + margin) + "px";
   hint.style.right = Math.max(margin, innerWidth - r.right) + "px";
+}
+
+/**
+ * Разовая подсказка на кнопку «…» СВОЕЙ ещё не опубликованной карточки в
+ * комнате (см. правку «Подсказка про публикацию») — тот же приём и стиль,
+ * что у maybeShowTableHint выше (по просьбе «подсказку как для кнопки с
+ * обучением на доске»): без затемнения экрана, пузырь у самой кнопки,
+ * один раз за браузер. В отличие от подсказки тура, ведёт не к одной
+ * прямой кнопке, а к пункту МЕНЮ («Опубликовать») — текст это отражает,
+ * закрывается по клику на саму кнопку «…» (открытие меню — уже находка).
+ */
+const PUBLISH_HINT_KEY = "puzzle.publishHintSeen";
+
+function maybeShowPublishHint(cardEl, signal) {
+  if (localStorage.getItem(PUBLISH_HINT_KEY)) return;
+  const btn = cardEl.querySelector(".menu-wrap .icon-btn");
+  if (!shown(btn)) return;
+  const timer = setTimeout(() => showPublishHint(btn), 1500);
+  signal.addEventListener("abort", () => clearTimeout(timer));
+}
+
+function showPublishHint(btn) {
+  if (!shown(btn)) return;
+  localStorage.setItem(PUBLISH_HINT_KEY, "1");
+  const hint = document.createElement("div");
+  hint.className = "table-hint";
+  hint.setAttribute("role", "status");
+  hint.innerHTML =
+    `<button class="table-hint-close" type="button" aria-label="${t("Закрыть")}">&times;</button>` +
+    `<p>${t("Понравился результат? Нажмите «⋮» на карточке — там можно опубликовать пазл в общую библиотеку.")}</p>`;
+  document.body.appendChild(hint);
+  positionTableHint(hint, btn);
+
+  const close = () => {
+    hint.remove();
+    document.removeEventListener("pointerdown", onOutside, true);
+    removeEventListener("resize", onResize);
+    clearTimeout(autoTimer);
+  };
+  const onOutside = e => { if (!hint.contains(e.target) && e.target !== btn) close(); };
+  const onResize = () => positionTableHint(hint, btn);
+  document.addEventListener("pointerdown", onOutside, true);
+  addEventListener("resize", onResize);
+  hint.querySelector(".table-hint-close").addEventListener("click", close);
+  btn.addEventListener("click", close, { once: true });
+  const autoTimer = setTimeout(close, 8000);
 }

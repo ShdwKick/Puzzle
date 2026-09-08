@@ -478,6 +478,12 @@ const stmt = {
     WHERE room_id = ?
        OR (owner_user_id IS NULL AND image_file IN (SELECT image_file FROM room_added_puzzles WHERE room_id = ?))
     ORDER BY sort_order, created_at`),
+  // Свои фото ИМЕННО этой комнаты (room_id — обычный TEXT без FK/каскада,
+  // см. ALTER TABLE room_id выше) — используется при удалении комнаты (см.
+  // правку «Удалять фото при удалении комнаты»), чтобы найти, что чистить
+  // руками: библиотечные пазлы, просто добавленные в комнату, сюда не
+  // попадают (у них room_id не проставлен, см. puzzlesForRoom выше).
+  puzzlesByRoomId: db.prepare("SELECT * FROM puzzles WHERE room_id = ?"),
   insertCustomPuzzle: db.prepare(`INSERT INTO puzzles
       (id,title,image_file,grid_rows,grid_cols,seed,sort_order,created_at,owner_user_id,room_id,
        moderation_status,moderation_reason,consent_at,upload_device,category_id,
@@ -2463,11 +2469,28 @@ async function api(req, res, url, user) {
       // stmt.deleteRoom) сам вычищает room_members/room_sessions/
       // room_added_puzzles; закрыть живые WS-подключения за него каскад не
       // может — это отдельный шаг (closeRoomLiveSessions), не часть SQL.
+      // Свои фото этой комнаты (см. правку «Удалять фото при удалении
+      // комнаты») каскад ТОЖЕ не трогает — room_id у puzzles обычный TEXT
+      // без FK (см. ALTER TABLE room_id), без этого шага загруженные фото и
+      // файлы на диске оставались бы висеть привязанными к уже
+      // несуществующей комнате навсегда. Группируем по image_file (у одной
+      // загрузки ~11 строк-вариантов сложности, см. PIECE_PRESETS) — на
+      // каждую группу один вызов forceDeletePuzzleGroup (тот же, что при
+      // отклонении публикации/загрузки — сам чистит все варианты и файл).
+      // Библиотечные пазлы, просто добавленные в комнату (room_added_
+      // puzzles), сюда не попадают — у них room_id не проставлен, они не
+      // чьи-то, удалять их незачем.
       if (seg.length === 3 && m === "DELETE") {
         if (member.role !== "owner") return json(res, 403, { error: "not the owner" });
         closeRoomLiveSessions(roomId);
+        const seenImages = new Set();
+        for (const photo of stmt.puzzlesByRoomId.all(roomId)) {
+          if (seenImages.has(photo.image_file)) continue;
+          seenImages.add(photo.image_file);
+          forceDeletePuzzleGroup(photo);
+        }
         stmt.deleteRoom.run(roomId);
-        adminLog.info("Комната удалена владельцем", { roomId, byUserId: identity.id });
+        adminLog.info("Комната удалена владельцем", { roomId, byUserId: identity.id, deletedPhotos: seenImages.size });
         return json(res, 200, { ok: true });
       }
 
