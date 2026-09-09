@@ -3051,7 +3051,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     return;
   }
   $(root, "#tableTitle").textContent = puzzleDisplayTitle(puzzle);
-  trackGoal("puzzle_started");
+  trackGoal("puzzle_started", { pieces: puzzle.gridRows * puzzle.gridCols });
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
   const pad = CELL * PAD_FACTOR;
@@ -3416,6 +3416,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   // посреди сборки.
   $(root, "#hintBtn").addEventListener("click", () => {
     if (computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === 0) {
+      trackGoal("hint_used", { mode: "edges" });
       for (const p of pieces.values()) {
         if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
         p.el.classList.add("hint-glow");
@@ -3425,6 +3426,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     }
     const pair = pickHintPair(pieces);
     if (!pair) return;
+    trackGoal("hint_used", { mode: "pair" });
     for (const p of pair) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
@@ -4792,7 +4794,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   }
   const puzzle = session.puzzle;
   $(root, "#tableTitle").textContent = puzzleDisplayTitle(puzzle);
-  trackGoal("puzzle_started");
+  trackGoal("puzzle_started", { pieces: puzzle.gridRows * puzzle.gridCols });
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
   const pad = CELL * PAD_FACTOR;
@@ -5182,6 +5184,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   $(root, "#hintBtn").addEventListener("click", () => {
     if (!pieces) return;
     if (computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === 0) {
+      trackGoal("hint_used", { mode: "edges" });
       for (const p of pieces.values()) {
         if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
         p.el.classList.add("hint-glow");
@@ -5191,6 +5194,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     }
     const pair = pickHintPair(pieces);
     if (!pair) return;
+    trackGoal("hint_used", { mode: "pair" });
     for (const p of pair) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
@@ -5526,13 +5530,19 @@ function trackPageview() {
  *  только «сколько их было». reachGoal сам заводит цель в отчётах при
  *  первом срабатывании (JS-событие) — оформить её полноценной именованной
  *  целью в интерфейсе Метрики можно отдельно, необязательно, здесь только
- *  код. Пять точек: puzzle_started/puzzle_completed (renderTable/
- *  renderRoomTable — showWin), room_created (createRoomBtn), photo_submitted
- *  (заявка на публикацию — само одобрение проходит уже в Admin, откуда
- *  клиент не видит момент), signed_in (init — именно возврат с /authorize,
- *  не каждая загрузка уже вошедшего). */
-function trackGoal(name) {
-  if (typeof ym === "function") ym(METRIKA_ID, "reachGoal", name);
+ *  код. params — необязательный объект параметров цели (см. правку
+ *  «Метрики про подсказки и сложность») — Метрика сама показывает их в
+ *  отчёте по цели, отдельную цель на каждое значение заводить не нужно.
+ *  Точки: puzzle_started/puzzle_completed (renderTable/renderRoomTable —
+ *  showWin; puzzle_started несёт {pieces} — реальное число деталей
+ *  выбранного уровня сложности, см. вызовы), room_created (createRoomBtn),
+ *  photo_submitted (заявка на публикацию — само одобрение проходит уже в
+ *  Admin, откуда клиент не видит момент), signed_in (init — именно возврат
+ *  с /authorize, не каждая загрузка уже вошедшего), hint_used (клик по
+ *  «Подсказка» на столе, несёт {mode: "edges"|"pair"} — рамка целиком, пока
+ *  ничего не собрано, или обычная пара деталей). */
+function trackGoal(name, params) {
+  if (typeof ym === "function") ym(METRIKA_ID, "reachGoal", name, params);
 }
 
 /* ───────────────────────── роутер ─────────────────────────

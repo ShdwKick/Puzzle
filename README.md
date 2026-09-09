@@ -150,6 +150,76 @@ Admin — ещё нет, отдельной задачей. Здесь — чт�
 `/internal/puzzles` с тем же `ADMIN_INTERNAL_KEY`-протоколом, но сам
 эндпоинт и приём файла — не по образцу, проектировать заново.
 
+## GigaChat — короткие названия
+
+Используется в двух местах: автогенерация названия при импорте с Pexels
+(`gigachat.titleFromText`/`titleFromImage`) и кнопки «✨ по тексту»/«✨ по
+фото» в библиотеке Admin (`/internal/puzzles/:id/title/suggest`, см.
+`gigachat.js`). Ключ живёт **только в окружении сервера**: в браузер не
+попадает, в образ не зашивается, в репозиторий не коммитится. Без
+`GIGACHAT_AUTH_KEY` сервис работает как раньше, эндпоинт отвечает `503
+gigachat_disabled`.
+
+Домены Сбера подписаны корневым сертификатом Минцифры, которого нет в
+alpine — без него TLS не поднимется (тот же приём, что у Trip).
+
+### Настройка на сервере
+
+Оба файла кладут рядом с `docker-compose.prod.yml` (то есть в `~/Puzzle/`),
+в репозиторий они не попадают.
+
+```bash
+cd ~/Puzzle
+
+# 1. Ключ — в .env рядом с compose (права 600), та же переменная,
+# что ADMIN_INTERNAL_KEY.
+# GIGACHAT_AUTH_KEY=ключ_из_Сбер_Студии
+
+# 2. Корневой сертификат Минцифры.
+curl -fsSL https://gu-st.ru/content/Other/doc/russian_trusted_root_ca.cer \
+  -o russian_trusted_root_ca.pem
+chmod 644 russian_trusted_root_ca.pem
+
+# 3. Убедиться, что файл текстовый (PEM), а не двоичный (DER):
+head -1 russian_trusted_root_ca.pem   # ожидаем -----BEGIN CERTIFICATE-----
+
+docker compose up -d
+```
+
+Имя файла должно совпадать с тем, что в `docker-compose.prod.yml`
+(`russian_trusted_root_ca.pem`) — путь монтирования прописан там буквально.
+
+**Ловушка**, в которую уже попадали: если запустить `docker compose up`
+РАНЬШЕ, чем положить сам `.pem` на сервер, Docker молча создаёт на месте
+bind-mount'а пустую ДИРЕКТОРИЮ вместо файла — и на хосте, и внутри
+контейнера — без единой ошибки. Дальше `NODE_EXTRA_CA_CERTS` указывает на
+директорию, Node её просто игнорирует, и TLS к Сберу падает с
+`SELF_SIGNED_CERT_IN_CHAIN`, как будто сертификата нет вовсе. Проверка:
+
+```bash
+docker compose exec puzzle ls -la /app/certs/
+# ожидаем -rw-r--r-- (файл), НЕ drwxr-xr-x (директория)
+```
+
+Если директория — `docker compose down`, `rm -rf russian_trusted_root_ca.pem`
+на хосте, повторить шаг 2 выше, `docker compose up -d`.
+
+Проверка, что всё село:
+
+```bash
+docker compose exec puzzle printenv NODE_EXTRA_CA_CERTS
+docker compose exec puzzle node -e "fetch('https://gigachat.devices.sberbank.ru/api/v1/models').then(r=>console.log('TLS в порядке, ответ',r.status)).catch(e=>console.log('не вышло:',e.message))"
+```
+
+Ответ `401` — это успех: соединение установилось, а без токена и должно
+быть «не авторизован». `fetch failed`/`SELF_SIGNED_CERT_IN_CHAIN` означает,
+что сертификат не подхватился (см. ловушку выше).
+
+Хватает одного корневого сертификата — промежуточный не нужен. Он
+публичный, секретом не является; менять придётся, только когда Минцифры
+выпустит новый — тогда достаточно заменить файл и перезапустить контейнер,
+пересобирать образ не нужно.
+
 ## Дизайн
 
 Подключено: вещество — бор (зелёное пламя, `--flame-tip:#7ddf3c`,
