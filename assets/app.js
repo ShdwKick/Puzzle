@@ -1218,6 +1218,7 @@ async function uploadPuzzlePhoto(file, title, roomId) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "upload failed");
   invalidatePuzzlesCache(); // библиотека изменилась — старый кэш врёт
+  trackGoal("photo_uploaded");
   return data;
 }
 
@@ -5545,10 +5546,12 @@ function trackPageview() {
  *  showWin; puzzle_started несёт {pieces} — реальное число деталей
  *  выбранного уровня сложности, см. вызовы), room_created (createRoomBtn),
  *  photo_submitted (заявка на публикацию — само одобрение проходит уже в
- *  Admin, откуда клиент не видит момент), signed_in (init — именно возврат
- *  с /authorize, не каждая загрузка уже вошедшего), hint_used (клик по
- *  «Подсказка» на столе, несёт {mode: "edges"|"pair"} — рамка целиком, пока
- *  ничего не собрано, или обычная пара деталей). */
+ *  Admin, откуда клиент не видит момент), photo_uploaded (uploadPuzzlePhoto
+ *  — своё фото успешно загружено В КОМНАТУ, до и независимо от публикации:
+ *  анонимно тоже считается, см. правку «Анонимная загрузка фото»), signed_in
+ *  (init — именно возврат с /authorize, не каждая загрузка уже вошедшего),
+ *  hint_used (клик по «Подсказка» на столе, несёт {mode: "edges"|"pair"} —
+ *  рамка целиком, пока ничего не собрано, или обычная пара деталей). */
 function trackGoal(name, params) {
   if (typeof ym === "function") ym(METRIKA_ID, "reachGoal", name, params);
 }
