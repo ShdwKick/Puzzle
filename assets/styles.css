@@ -1164,6 +1164,10 @@ select.text-input{
   font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;
 }
 .code-box-hint{font-size:.82rem}
+/* Подпись-напоминание под кодом (см. app.js, renderRoom) — .muted уже даёт
+   цвет/размер, тут только раскладка: по центру, той же шириной, что и сам
+   .code-box визуально ограничивает взгляд, не растягивается на всю строку. */
+.room-invite-caption{margin:.6rem auto 1.2rem;max-width:26rem;text-align:center}
 
 .room-members{display:flex;flex-wrap:wrap;gap:.5rem;margin-bottom:1.2rem}
 .member-chip{

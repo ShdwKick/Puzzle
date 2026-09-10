@@ -380,6 +380,8 @@ const EN = {
   "Тёмная тема": "Dark theme",
   "Вход нужен только для того, чтобы прогресс сохранялся между заходами.":
     "You only need to log in so your progress is saved between visits.",
+  "Пригласите друзей и собирайте пазл вместе — в реальном времени, за одним столом.":
+    "Invite friends and build the puzzle together — in real time, at the same table.",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -4319,6 +4321,12 @@ async function renderRoom(root, roomId, signal) {
       <button class="btn tonal sm" id="copyInviteLinkBtn" type="button">${t("Скопировать ссылку")}</button>
       <span class="code-box-hint muted" id="roomCodeHint" aria-live="polite" hidden></span>
     </div>
+    <!-- Подпись под кодом — комнаты создают, но почти никого по ссылке не
+         зовут (см. правку «Подпись про приглашение друзей» — по ad-funnel
+         метрикам ни одной комнаты с реально приглашённым участником пока
+         не было). Ничего не измеряет и не решает само по себе, просто
+         напоминание прямо у кнопки, а не только в общих текстах сервиса. -->
+    <p class="room-invite-caption muted">${t("Пригласите друзей и собирайте пазл вместе — в реальном времени, за одним столом.")}</p>
     <div class="room-members" id="roomMembers"></div>
     <div class="room-active" id="roomActive"></div>
     <h3 class="room-section-title">${t("История сборок")}</h3>
