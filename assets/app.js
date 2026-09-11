@@ -386,6 +386,9 @@ const EN = {
     "Like how it turned out? Share this puzzle with everyone — publish it to the shared library.",
   "Отправлено на модерацию — появится в общей библиотеке после проверки.":
     "Sent for review — it'll appear in the shared library once approved.",
+  "Подсказка: рамка": "Hint: border",
+  "Подсказка: пара деталей": "Hint: matching pair",
+  "Не знаете, что делать дальше? Тут есть подсказки.": "Not sure what to do next? There are hints for that.",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -664,6 +667,7 @@ async function openPuzzlePreviewModal(p, { variants, onPlay }) {
     authorEl.hidden = false;
     authorEl.href = `/profile/${encodeURIComponent(p.uploaderUserId)}`;
     authorEl.textContent = `${t("Добавил:")} ${p.uploaderUsername}`;
+    authorEl.onclick = () => closeModal("puzzlePreviewModalBackdrop");
   } else {
     authorEl.hidden = true;
   }
@@ -3113,6 +3117,51 @@ function bindBoardBackground(stage, colorInput, resetBtn, signal) {
   }, { signal });
 }
 
+/** Ненавязчивое напоминание про подсказки при бездействии (см. правку «Две
+ *  кнопки подсказки + напоминание») — почти никто не пользовался старой
+ *  единственной кнопкой, гипотеза в том, что про неё просто забывают
+ *  посреди сборки. В отличие от подсказки тура/публикации (см.
+ *  onboarding.js, localStorage «видел один раз») — НЕ одноразовое: пузырь
+ *  может появляться заново при каждом новом периоде бездействия за этим
+ *  же столом, пока пазл не собран целиком (isSolved()). Активность —
+ *  pointerdown ГДЕ УГОДНО на столе, в capture-фазе: драг детали/панели
+ *  делают stopPropagation в bubble-фазе (см. bindPieceDrag), capture на
+ *  stage долетает раньше и не зависит от этого. isSolved — функция, не
+ *  готовое значение: pieces у стола комнаты строится асинхронно первым
+ *  WS-sync и в момент вызова может быть ещё не готов. */
+const HINT_IDLE_MS = 25000;
+function bindHintIdleReminder(root, stage, isSolved, signal) {
+  let timer = null, bubble = null;
+  function hide() { bubble?.remove(); bubble = null; }
+  function show() {
+    if (bubble || isSolved()) return;
+    const btn = $(root, "#hintEdgesBtn");
+    const row = $(root, "#widgetsRow");
+    // .collapsed — свёрнут через max-width/overflow:hidden (см.
+    // bindCollapsibleCluster), не display:none, поэтому offsetParent тут
+    // не отличил бы свёрнутое состояние от развёрнутого.
+    if (!btn || !row || row.classList.contains("collapsed")) return;
+    bubble = document.createElement("div");
+    bubble.className = "table-hint";
+    bubble.setAttribute("role", "status");
+    bubble.innerHTML =
+      `<button class="table-hint-close" type="button" aria-label="${t("Закрыть")}">&times;</button>` +
+      `<p>${t("Не знаете, что делать дальше? Тут есть подсказки.")}</p>`;
+    document.body.appendChild(bubble);
+    positionTableHint(bubble, btn);
+    $(bubble, ".table-hint-close").addEventListener("click", poke);
+  }
+  function poke() {
+    hide();
+    clearTimeout(timer);
+    if (isSolved()) return;
+    timer = setTimeout(show, HINT_IDLE_MS);
+  }
+  stage.addEventListener("pointerdown", poke, { signal, capture: true });
+  poke();
+  signal.addEventListener("abort", () => { clearTimeout(timer); hide(); });
+}
+
 async function renderTable(root, puzzleId, signal, queryString) {
   root.innerHTML = `
     <div class="table-screen">
@@ -3182,7 +3231,13 @@ async function renderTable(root, puzzleId, signal, queryString) {
              раскрывается влево (см. styles.css). -->
         <div class="table-widgets">
           <div class="tools-row" id="widgetsRow">
-            <button class="btn outlined icon" id="hintBtn" type="button" title="${t("Подсказка")}" aria-label="${t("Подсказка")}">
+            <!-- Раньше одна кнопка «Подсказка», сама решала рамка или пара
+                 (см. правку «Две кнопки подсказки») — по факту почти никто
+                 ей не пользовался, разделили на два явных действия. -->
+            <button class="btn outlined icon" id="hintEdgesBtn" type="button" title="${t("Подсказка: рамка")}" aria-label="${t("Подсказка: рамка")}">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></svg>
+            </button>
+            <button class="btn outlined icon" id="hintPairBtn" type="button" title="${t("Подсказка: пара деталей")}" aria-label="${t("Подсказка: пара деталей")}">
               <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.4 1 1.2 1 2.05V17h6v-2.25c0-.85.4-1.65 1-2.05A7 7 0 0 0 12 2z"/></svg>
             </button>
             <button class="btn outlined icon" id="soundBtn" type="button"></button>
@@ -3559,30 +3614,29 @@ async function renderTable(root, puzzleId, signal, queryString) {
     scheduleSave();
   }, { signal });
 
-  // Подсказка (см. план) — случайная ещё не состыкованная пара соседних
-  // деталей, подсвечиваем обе на пару секунд. Ничего не двигает и не
-  // сохраняет — чисто визуальная наводка. Камеру больше НЕ подводим (см.
-  // правку «Подсказка без центрирования») — было решено, что дёрганье
-  // зума/панорамы на каждый клик мешает больше, чем помогает, а на большом
-  // пазле ещё и уводило в fitView() ровно туда, где обводку было хуже всего
-  // видно (см. --cam-scale выше — сама обводка теперь держит размер на
-  // экране и без подвода камеры). Пока не состыкована ХОТЬ ОДНА пара (см.
-  // правку «Подсказка про край») — вместо случайной пары подсвечиваем все
-  // крайние/угловые детали разом: это и есть стандартная стратегия сборки
-  // («начни с рамки»), больше подходит человеку, который вообще не
-  // понимает, с чего начать, чем случайная пара где-то в куче. Как только
-  // что-то состыковано — снова обычная подсказка-пара, она полезнее
-  // посреди сборки.
-  $(root, "#hintBtn").addEventListener("click", () => {
-    if (computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === 0) {
-      trackGoal("hint_used", { mode: "edges" });
-      for (const p of pieces.values()) {
-        if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
-        p.el.classList.add("hint-glow");
-        setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
-      }
-      return;
+  // Подсказка — раньше одна кнопка сама решала рамка или пара (см. план),
+  // теперь два явных действия (см. правку «Две кнопки подсказки +
+  // напоминание» — почти никто старой не пользовался). Камеру больше НЕ
+  // подводим ни у той, ни у другой (см. правку «Подсказка без
+  // центрирования») — обводка сама держит размер на экране через
+  // --cam-scale, дёрганье зума мешало больше, чем помогало.
+  // «Рамка» — все крайние/угловые детали разом, стандартная стратегия
+  // сборки («начни с рамки»); доступна в любой момент, не только пока
+  // рамка не собрана — это подсказка «вот где рамка», а не проверка
+  // прогресса.
+  $(root, "#hintEdgesBtn").addEventListener("click", () => {
+    trackGoal("hint_used", { mode: "edges" });
+    for (const p of pieces.values()) {
+      if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
+      p.el.classList.add("hint-glow");
+      setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
     }
+  }, { signal });
+  // «Пара» — случайная ещё не состыкованная пара соседних деталей.
+  // Молча ничего не делает, если пар не осталось (pickHintPair вернул
+  // null) — отдельного disabled у кнопки не заводим, момент редкий
+  // (самый конец сборки).
+  $(root, "#hintPairBtn").addEventListener("click", () => {
     const pair = pickHintPair(pieces);
     if (!pair) return;
     trackGoal("hint_used", { mode: "pair" });
@@ -3591,6 +3645,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
       setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
     }
   }, { signal });
+  bindHintIdleReminder(root, stage, () => computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === rows * cols, signal);
   bindSoundButton($(root, "#soundBtn"), signal);
   bindCollapsibleCluster($(root, "#toolsToggleBtn"), $(root, "#toolsRow"), "puzzle_tools_collapsed", signal);
   bindCollapsibleCluster($(root, "#widgetsToggleBtn"), $(root, "#widgetsRow"), "puzzle_widgets_collapsed", signal);
@@ -4826,7 +4881,13 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
              история живёт только пока открыта эта вкладка. -->
         <div class="table-widgets">
           <div class="tools-row" id="widgetsRow">
-            <button class="btn outlined icon" id="hintBtn" type="button" title="${t("Подсказка")}" aria-label="${t("Подсказка")}">
+            <!-- Раньше одна кнопка «Подсказка», сама решала рамка или пара
+                 (см. правку «Две кнопки подсказки») — по факту почти никто
+                 ей не пользовался, разделили на два явных действия. -->
+            <button class="btn outlined icon" id="hintEdgesBtn" type="button" title="${t("Подсказка: рамка")}" aria-label="${t("Подсказка: рамка")}">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></svg>
+            </button>
+            <button class="btn outlined icon" id="hintPairBtn" type="button" title="${t("Подсказка: пара деталей")}" aria-label="${t("Подсказка: пара деталей")}">
               <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.4 1 1.2 1 2.05V17h6v-2.25c0-.85.4-1.65 1-2.05A7 7 0 0 0 12 2z"/></svg>
             </button>
             <button class="btn outlined icon" id="soundBtn" type="button"></button>
@@ -5300,20 +5361,21 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     socket.send({ type: "shuffle", pieces: arr });
   }, { signal });
 
-  // Подсказка + звук — см. солo-версию выше, тот же приём (включая
-  // подсветку всей рамки, пока не состыкована ни одна пара, и без подвода
-  // камеры — см. правку «Подсказка без центрирования»).
-  $(root, "#hintBtn").addEventListener("click", () => {
+  // Подсказка — см. солo-версию выше (две кнопки вместо одной, правка «Две
+  // кнопки подсказки + напоминание»), тот же приём + без подвода камеры
+  // (см. правку «Подсказка без центрирования»). !pieces — стол ещё не
+  // получил первый WS-sync, подсвечивать нечего.
+  $(root, "#hintEdgesBtn").addEventListener("click", () => {
     if (!pieces) return;
-    if (computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === 0) {
-      trackGoal("hint_used", { mode: "edges" });
-      for (const p of pieces.values()) {
-        if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
-        p.el.classList.add("hint-glow");
-        setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
-      }
-      return;
+    trackGoal("hint_used", { mode: "edges" });
+    for (const p of pieces.values()) {
+      if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
+      p.el.classList.add("hint-glow");
+      setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
     }
+  }, { signal });
+  $(root, "#hintPairBtn").addEventListener("click", () => {
+    if (!pieces) return;
     const pair = pickHintPair(pieces);
     if (!pair) return;
     trackGoal("hint_used", { mode: "pair" });
@@ -5322,6 +5384,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
     }
   }, { signal });
+  bindHintIdleReminder(root, stage, () => !!pieces && computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === rows * cols, signal);
   bindSoundButton($(root, "#soundBtn"), signal);
   bindCollapsibleCluster($(root, "#toolsToggleBtn"), $(root, "#toolsRow"), "puzzle_tools_collapsed", signal);
   bindCollapsibleCluster($(root, "#widgetsToggleBtn"), $(root, "#widgetsRow"), "puzzle_widgets_collapsed", signal);
