@@ -510,6 +510,51 @@
       <input type="checkbox" id="puzzlePreviewRotate">
       <span>Повороты деталей — детали нужно ещё повернуть, не только сложить</span>
     </label>
+    <!-- Призыв опубликовать — только для своего ещё не опубликованного фото
+         (см. openPuzzlePreviewModal, правка «Публикация из модалок стола и
+         истории»), тот же .win-publish-cta, что на окне победы, для
+         единообразия трёх мест, где он появляется. -->
+    <div class="win-publish-cta" id="puzzlePreviewPublishCta" hidden>
+      <p id="puzzlePreviewPublishText"></p>
+      <button class="btn filled sm" id="puzzlePreviewPublishBtn" type="button"></button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== МОДАЛКА: КАРТОЧКА ИЗ ИСТОРИИ СБОРКИ =====================
+     Клик по карточке в «Истории сборок» комнаты (см. buildHistoryCard в
+     assets/app.js, правка «Модалка истории сборки») — тот же визуальный
+     приём, что у превью пазла выше (#puzzlePreviewModalBackdrop): картинка
+     на всю ширину, название под ней в .puzzle-preview-caption. Без выбора
+     сложности/формы, в отличие от превью — у ЭТОЙ сборки они уже
+     зафиксированы прошедшим сеансом, тут не переигрываются. Две кнопки —
+     «Страница пазла» (обычная ссылка на /puzzle/:id, не JS — если её нет
+     смысла показывать, historyModalPageLink.hidden, см. openHistoryModal) и
+     «За стол» (новый сеанс тем же вариантом, что и в самой карточке). -->
+<div class="modal-backdrop hidden" id="historyModalBackdrop">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="historyModalTitle">
+    <div class="modal-head">
+      <h2 id="historyModalTitle"></h2>
+      <button class="icon-btn" id="historyModalClose" aria-label="Закрыть">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+    <img class="puzzle-preview-image" id="historyModalImage" alt="">
+    <div class="puzzle-preview-caption">
+      <span class="puzzle-preview-caption-title" id="historyModalCaptionTitle"></span>
+    </div>
+    <p class="puzzle-page-rating-summary" id="historyModalMeta"></p>
+    <!-- Призыв опубликовать — только для своего ещё не опубликованного фото
+         (см. openHistoryModal, правка «Публикация из модалок стола и
+         истории»), тот же .win-publish-cta, что на окне победы. -->
+    <div class="win-publish-cta" id="historyModalPublishCta" hidden>
+      <p id="historyModalPublishText"></p>
+      <button class="btn filled sm" id="historyModalPublishBtn" type="button"></button>
+    </div>
+    <div class="bar">
+      <a class="btn outlined" id="historyModalPageLink" href="#">Страница пазла</a>
+      <button class="btn filled" id="historyModalPlayBtn" type="button">За стол</button>
+    </div>
   </div>
 </div>
 

@@ -607,6 +607,36 @@ document.getElementById("difficultyPlayBtn").addEventListener("click", () => {
   onPlay(variants[idx], asymmetric, rotate);
 });
 
+/** Призыв «Опубликовать» внутри статичной модалки (.win-publish-cta, см.
+ *  index.html) — общая логика для превью пазла в «Начать сборку» и
+ *  карточки истории сборки (см. правку «Публикация из модалок стола и
+ *  истории»); окно победы (showWin) собирает свой такой же блок отдельно,
+ *  JS-ом с нуля при каждом открытии — там нет статичной разметки, которую
+ *  можно было бы переиспользовать этой же функцией. idPrefix — префикс
+ *  id-ов в разметке (например "puzzlePreview" → #puzzlePreviewPublishCta/
+ *  PublishText/PublishBtn). Условие ровно то же, что у пункта «Опубликовать»
+ *  в меню карточки (см. buildCard, mine). */
+function wirePublishCta(idPrefix, puzzle, onApplied) {
+  const cta = document.getElementById(`${idPrefix}PublishCta`);
+  const eligible = puzzle.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === puzzle.ownerUserId
+    && (!puzzle.moderationStatus || puzzle.moderationStatus === "rejected");
+  cta.hidden = !eligible;
+  if (!eligible) return;
+  const textEl = document.getElementById(`${idPrefix}PublishText`);
+  const btn = document.getElementById(`${idPrefix}PublishBtn`);
+  textEl.textContent = t("Понравился результат? Поделитесь этим пазлом со всеми — опубликуйте его в общей библиотеке.");
+  btn.hidden = false;
+  btn.textContent = t(puzzle.moderationStatus === "rejected" ? "Отправить снова" : "Опубликовать");
+  btn.onclick = () => {
+    openPublishModal(puzzle.id, puzzleDisplayTitle(puzzle), () => {
+      puzzle.moderationStatus = "pending";
+      textEl.textContent = t("Отправлено на модерацию — появится в общей библиотеке после проверки.");
+      btn.hidden = true;
+      onApplied?.();
+    });
+  };
+}
+
 /* ───────────────────────── превью пазла ─────────────────────────
  * Открывается кликом по самой карточке (см. buildCard ниже) — не по кнопке
  * «За стол», та по-прежнему сразу зовёт openDifficultyModal выше (быстрый
@@ -681,9 +711,56 @@ async function openPuzzlePreviewModal(p, { variants, onPlay }) {
     })
     .catch(() => {});
 
+  wirePublishCta("puzzlePreview", p);
   openModal("puzzlePreviewModalBackdrop");
 }
 bindModal("puzzlePreviewModalBackdrop", null, "puzzlePreviewModalClose");
+
+/** Модалка карточки «Истории сборок» (см. buildHistoryCard, правка
+ *  «Модалка истории сборки») — картинка+название+данные и две кнопки, без
+ *  выбора сложности/формы (см. комментарий у самой модалки в index.html):
+ *  у прошедшего сеанса s они уже зафиксированы. «Страница пазла» скрыта
+ *  для чужого/ещё не опубликованного своего фото (ownerUserId задан) —
+ *  /puzzle/:id отдаёт 404 не автору (см. server.js), ссылка была бы
+ *  тупиковой; тот же критерий, что у кнопки «поделиться» на окне победы. */
+function openHistoryModal(s, roomId) {
+  const displayTitle = puzzleDisplayTitle(s.puzzle);
+  document.getElementById("historyModalTitle").textContent = displayTitle;
+  document.getElementById("historyModalCaptionTitle").textContent = displayTitle;
+  const img = document.getElementById("historyModalImage");
+  img.src = s.puzzle.imageUrl;
+  img.alt = displayTitle;
+  const duration = formatDuration(Math.max(0, s.completedAt - s.startedAt));
+  document.getElementById("historyModalMeta").textContent = getLang() === "en"
+    ? `${s.piecesTotal} pieces · built in ${duration} · ${fmtDate(s.completedAt)}`
+    : `${s.piecesTotal} деталей · собрано за ${duration} · ${fmtDate(s.completedAt)}`;
+
+  // onclick (не addEventListener) — модалка статична, переживает открытия,
+  // повторный addEventListener копил бы слушателей. Сам переход — обычная
+  // ссылка, её ловит глобальный делегат кликов (route() ниже по файлу) и
+  // подменяет на SPA-переход без перезагрузки; тут только закрыть модалку —
+  // без этого она осталась бы висеть поверх новой страницы (сама она не
+  // перерисовывается роутером, живёт статично в index.html).
+  const pageLink = document.getElementById("historyModalPageLink");
+  pageLink.hidden = !!s.puzzle.ownerUserId;
+  if (!s.puzzle.ownerUserId) {
+    pageLink.href = `/puzzle/${encodeURIComponent(s.puzzle.id)}`;
+    pageLink.onclick = () => closeModal("historyModalBackdrop");
+  }
+
+  document.getElementById("historyModalPlayBtn").onclick = async e => {
+    e.target.disabled = true;
+    try {
+      const newId = await startRoomSession(roomId, s.puzzle.id);
+      closeModal("historyModalBackdrop");
+      navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`);
+    } catch { e.target.disabled = false; }
+  };
+
+  wirePublishCta("historyModal", s.puzzle);
+  openModal("historyModalBackdrop");
+}
+bindModal("historyModalBackdrop", null, "historyModalClose");
 
 /* ───────────────────────── страница пазла (/puzzle/:id) ─────────────────────────
  * Полноценная страница вместо клика по карточке в библиотеке (см. план
@@ -1583,8 +1660,10 @@ function buildHistoryCard(s, roomId, signal) {
     ? `${s.piecesTotal} pieces · built in ${duration} · ${fmtDate(s.completedAt)}`
     : `${s.piecesTotal} деталей · собрано за ${duration} · ${fmtDate(s.completedAt)}`;
   // Доступна и когда сейчас уже идёт другой активный сеанс — startRoomSession
-  // в этом случае просто перекинет на него (409-ветка).
+  // в этом случае просто перекинет на него (409-ветка). stopPropagation —
+  // не даём всплыть до клика по card ниже (тот открывает модалку).
   $(card, ".btn.outlined.sm").addEventListener("click", async e => {
+    e.stopPropagation();
     e.target.disabled = true;
     try {
       const newId = await startRoomSession(roomId, s.puzzle.id);
@@ -1595,6 +1674,7 @@ function buildHistoryCard(s, roomId, signal) {
   // 409 здесь в норме не встречается, но deleteRoomSession всё равно
   // корректно её обработает, если что-то поменялось между рендером и кликом.
   $(card, ".progress-card-delete").addEventListener("click", async e => {
+    e.stopPropagation();
     if (!confirm(getLang() === "en" ? `Delete the "${puzzleDisplayTitle(s.puzzle)}" session?` : `Удалить сеанс сборки «${puzzleDisplayTitle(s.puzzle)}»?`)) return;
     // currentTarget, не target: клик может попасть на вложенный <svg>/<path>
     // иконки крестика — у них нет свойства disabled, а нужно отключить
@@ -1606,6 +1686,12 @@ function buildHistoryCard(s, roomId, signal) {
       alert(err.message === "table not empty" ? t("За этим столом сейчас кто-то сидит — сначала все должны выйти.") : t("Не удалось удалить."));
     }
   }, { signal });
+  // Клик по самой карточке (см. правку «Модалка истории сборки») —
+  // модалка с картинкой/данными и своими кнопками «Страница пазла»/«За
+  // стол» (openHistoryModal, index.html #historyModalBackdrop); кнопки
+  // внутри самой карточки остановили всплытие выше, сюда их клики не
+  // доходят.
+  card.addEventListener("click", () => openHistoryModal(s, roomId), { signal });
   return card;
 }
 
