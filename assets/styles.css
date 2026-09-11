@@ -706,7 +706,15 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .piece.selected + .piece-outline-overlay .piece-outline-accent{
   opacity:1;
 }
+/* Чуть тоньше, чем у подсказки выше (см. правку «Тоньше при таскании») —
+   выделение держится постоянно, пока деталь выбрана/тащится, подсказка —
+   пару секунд и специально бросается в глаза; одинаковая толщина у обоих
+   не давала визуально отличить «я сам это выбрал» от «мне намекают». */
+.piece.selected + .piece-outline-overlay .piece-outline-halo{
+  stroke-width:calc(7 / var(--cam-scale, 1));
+}
 .piece.selected + .piece-outline-overlay .piece-outline-accent{
+  stroke-width:calc(3 / var(--cam-scale, 1));
   stroke-dasharray:none;
 }
 /* Тень "приподнятости" во время переноса — независимо от кольца выше,
@@ -753,10 +761,67 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   max-width:22rem;opacity:1;
   transition:max-width .28s var(--ease-emph-dec),opacity .18s var(--ease-std);
 }
-.board-tools.collapsed, .table-widgets.collapsed{gap:0}
+.board-tools.collapsed, .table-widgets.collapsed, .hint-widgets.collapsed{gap:0}
 .tools-row.collapsed{max-width:0;opacity:0;pointer-events:none}
 .tools-toggle svg{transition:transform .2s var(--ease-std)}
 .tools-toggle[aria-expanded="false"] svg{transform:rotate(180deg)}
+/* Подсказки — ОТДЕЛЬНЫЙ сворачиваемый кластер под звуком/чатом/
+   участниками, не внутри #widgetsRow и не внутри .table-widgets (см.
+   правку «Подсказки — своя независимая
+   группа» — раньше жили внутри общей плашки .table-widgets и делили с ней
+   один тоггл: визуально ОДНА выдвигающаяся плашка, хотя кнопки внутри —
+   два разных по смыслу набора действий; до этого — вообще в одном
+   горизонтальном ряду со звуком). .widgets-stack просто раскладывает
+   .table-widgets/.hint-widgets — два НЕЗАВИСИМЫХ «острова», каждый со
+   своим тогглом и своим bindCollapsibleCluster (см. app.js) — колонкой.
+   .hint-widgets — сам «остров» (фон/тень, тот же визуальный язык, что у
+   .table-widgets), тоггл в нём ПЕРВЫЙ ребёнок (якорь сверху),
+   .hint-btn-group раскрывается вниз — тот же паттерн, что у .table-widgets
+   с .tools-row, только по вертикали и с descendant-селектором ниже (тут
+   тоггл и раскрывающийся блок — родитель/потомок одного острова, не
+   соседи по .widgets-stack). align-items:center у группы — не stretch
+   (умолчание для flex-column) — круглые .btn.icon растянулись бы в
+   овалы. */
+/* align-items:flex-end — НЕ умолчание (stretch): при stretch оба острова
+   тянутся на ширину самого широкого из них, и когда .table-widgets
+   схлопывается (уже, чем .hint-widgets), общая ширина .widgets-stack
+   пересчитывается — .hint-widgets, растянутый на неё, сдвигается по
+   горизонтали вслед за ЧУЖИМ схлопыванием, хотя сам не менялся (баг,
+   пойманный на глаз: «двигается группа подсказок»). flex-end — у каждого
+   острова своя, независимая от соседа ширина по контенту, оба всегда
+   прижаты правым краем к .9rem — сосед может как угодно схлопываться,
+   не задевая позицию другого. */
+.widgets-stack{position:absolute;right:.9rem;top:.9rem;display:flex;flex-direction:column;align-items:flex-end;gap:.5rem}
+.hint-widgets{
+  display:flex;flex-direction:column;align-items:center;gap:.35rem;
+  background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
+  border-radius:var(--md-sys-shape-corner-l);padding:.4rem;box-shadow:var(--e1);
+  transition:gap .25s var(--ease-emph-dec);
+}
+.hint-btn-group{
+  display:flex;flex-direction:column;align-items:center;gap:.35rem;overflow:hidden;
+  /* Ровно 2 кнопки по 2.4rem + 1 gap — раньше тут стояли «на глаз» 6rem
+     (с запасом под старую, ошибочно сжатую до 24px высоту кнопок, см.
+     .hint-widgets .btn выше) — теперь, когда кнопки нормального размера,
+     запас просто оставлял пустой хвост в конце схлопывающей анимации. */
+  max-height:5.15rem;opacity:1;
+  transition:max-height .28s var(--ease-emph-dec),opacity .18s var(--ease-std);
+}
+.hint-widgets.collapsed .hint-btn-group{max-height:0;opacity:0;pointer-events:none}
+/* Внимание к подсказкам при бездействии (см. app.js, bindHintIdleReminder/
+   setHintAttention, правка «Анимация подсказок при бездействии») — та же
+   пара кнопок, что и в .hint-btn-group выше, просто на время «залипает»
+   пульсом акцентного цвета, чтобы взгляд сам зацепился, а не только текст
+   в пузыре-напоминании рядом. Снимается сразу по активности (см. ту же
+   функцию) — не бесконечная анимация, а именно привлечение внимания. */
+@keyframes hint-attn-pulse{
+  0%, 100% { transform:scale(1); box-shadow:0 0 0 0 color-mix(in srgb, var(--flame-tip) 45%, transparent); }
+  50%      { transform:scale(1.08); box-shadow:0 0 0 7px color-mix(in srgb, var(--flame-tip) 0%, transparent); }
+}
+.hint-attn{
+  animation:hint-attn-pulse 1.6s ease-in-out infinite;
+  border-color:var(--flame-tip);color:var(--flame-tip);
+}
 
 /* «Назад» — была текстовой ссылкой «← Комната»/«← Библиотека» в
    .table-toolbar, теперь иконка в стиле кнопок масштаба, в ЛЕВОМ ВЕРХНЕМ
@@ -1332,12 +1397,19 @@ select.text-input{
    position:relative только для якоря своих поповеров, собственный фон им
    больше не нужен — теперь на общей плашке. */
 .table-widgets{
-  position:absolute;right:.9rem;top:.9rem;display:flex;flex-direction:row;align-items:center;gap:.4rem;
+  display:flex;flex-direction:row;align-items:center;gap:.4rem;
   background:color-mix(in srgb, var(--md-sys-color-surface) 88%, transparent);
   border-radius:var(--md-sys-shape-corner-l);padding:.4rem;box-shadow:var(--e1);
   transition:gap .25s var(--ease-emph-dec);
 }
 .table-widgets .btn{width:2.4rem;height:2.4rem;padding:0}
+/* Без этого переопределения кнопки .hint-widgets проваливались в общий
+   .icon{width:24px;height:24px} (styles.css выше) — та же ловушка, что
+   .table-widgets .btn выше уже решает для звука: сама кнопка тоже несёт
+   класс "icon" (не только вложенный svg), и без более специфичного
+   правила .icon{width:24px} перебивал .btn.icon{padding:.5em}, сжимая
+   кнопку ровно до размера иконки (24×24) и обрезая её кружок-фон. */
+.hint-widgets .btn{width:2.4rem;height:2.4rem;padding:0}
 .presence-widget, .chat-widget{position:relative}
 .btn.presence-btn, .btn.chat-btn{position:relative}
 .presence-count{

@@ -3130,16 +3130,29 @@ function bindBoardBackground(stage, colorInput, resetBtn, signal) {
  *  готовое значение: pieces у стола комнаты строится асинхронно первым
  *  WS-sync и в момент вызова может быть ещё не готов. */
 const HINT_IDLE_MS = 25000;
+/** Пульсирующее выделение кнопок подсказки (.hint-attn, см. styles.css,
+ *  правка «Анимация подсказок при бездействии») — отдельная функция, не
+ *  инлайн в bindHintIdleReminder ниже: единственный вызывающий пока сам
+ *  таймер бездействия, но сигнатура не завязана конкретно на него —
+ *  просили «для idle и остального», при желании подключить с других
+ *  событий позже не придётся трогать bindHintIdleReminder вовсе. */
+function setHintAttention(root, on) {
+  $(root, "#hintEdgesBtn")?.classList.toggle("hint-attn", on);
+  $(root, "#hintPairBtn")?.classList.toggle("hint-attn", on);
+}
 function bindHintIdleReminder(root, stage, isSolved, signal) {
   let timer = null, bubble = null;
-  function hide() { bubble?.remove(); bubble = null; }
+  function hide() { bubble?.remove(); bubble = null; setHintAttention(root, false); }
   function show() {
     if (bubble || isSolved()) return;
     const btn = $(root, "#hintEdgesBtn");
-    const row = $(root, "#widgetsRow");
-    // .collapsed — свёрнут через max-width/overflow:hidden (см.
+    const row = $(root, "#hintBtnGroup");
+    // .collapsed — свёрнут через max-height/overflow:hidden (см.
     // bindCollapsibleCluster), не display:none, поэтому offsetParent тут
-    // не отличил бы свёрнутое состояние от развёрнутого.
+    // не отличил бы свёрнутое состояние от развёрнутого. Подсказки теперь
+    // свой независимый кластер (см. правку «Подсказки — своя независимая
+    // группа») — проверяем СВОЙ #hintBtnGroup, не #widgetsRow (кластер
+    // звука/чата больше не влияет на видимость кнопок подсказки).
     if (!btn || !row || row.classList.contains("collapsed")) return;
     bubble = document.createElement("div");
     bubble.className = "table-hint";
@@ -3150,6 +3163,7 @@ function bindHintIdleReminder(root, stage, isSolved, signal) {
     document.body.appendChild(bubble);
     positionTableHint(bubble, btn);
     $(bubble, ".table-hint-close").addEventListener("click", poke);
+    setHintAttention(root, true);
   }
   function poke() {
     hide();
@@ -3158,7 +3172,9 @@ function bindHintIdleReminder(root, stage, isSolved, signal) {
     timer = setTimeout(show, HINT_IDLE_MS);
   }
   stage.addEventListener("pointerdown", poke, { signal, capture: true });
-  poke();
+  // Не poke(): в комнате isSolved() читает `pieces`, а тот объявлен (let)
+  // ниже по renderRoomTable — синхронный вызов тут ловил TDZ ReferenceError.
+  timer = setTimeout(show, HINT_IDLE_MS);
   signal.addEventListener("abort", () => { clearTimeout(timer); hide(); });
 }
 
@@ -3183,7 +3199,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
              — выход со стола не инструмент сборки). -->
         <div class="board-back">
           <a class="btn outlined icon" href="/" title="${t("Библиотека")}" aria-label="${t("Библиотека")}">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+            <svg class="icon" viewBox="0 0 24 24"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg>
           </a>
         </div>
         <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
@@ -3229,22 +3245,39 @@ async function renderTable(root, puzzleId, signal, queryString) {
              кнопки»), тот же сворачиваемый кластер, что и .board-tools,
              просто якорем на другом углу — тоггл справа, .tools-row
              раскрывается влево (см. styles.css). -->
-        <div class="table-widgets">
-          <div class="tools-row" id="widgetsRow">
-            <!-- Раньше одна кнопка «Подсказка», сама решала рамка или пара
-                 (см. правку «Две кнопки подсказки») — по факту почти никто
-                 ей не пользовался, разделили на два явных действия. -->
-            <button class="btn outlined icon" id="hintEdgesBtn" type="button" title="${t("Подсказка: рамка")}" aria-label="${t("Подсказка: рамка")}">
-              <svg class="icon" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></svg>
+        <div class="widgets-stack">
+          <div class="table-widgets">
+            <div class="tools-row" id="widgetsRow">
+              <button class="btn outlined icon" id="soundBtn" type="button"></button>
+            </div>
+            <button class="btn outlined icon tools-toggle" id="widgetsToggleBtn" type="button" title="${t("Свернуть/развернуть инструменты")}" aria-label="${t("Свернуть/развернуть инструменты")}" aria-expanded="true">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
             </button>
-            <button class="btn outlined icon" id="hintPairBtn" type="button" title="${t("Подсказка: пара деталей")}" aria-label="${t("Подсказка: пара деталей")}">
-              <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.4 1 1.2 1 2.05V17h6v-2.25c0-.85.4-1.65 1-2.05A7 7 0 0 0 12 2z"/></svg>
-            </button>
-            <button class="btn outlined icon" id="soundBtn" type="button"></button>
           </div>
-          <button class="btn outlined icon tools-toggle" id="widgetsToggleBtn" type="button" title="${t("Свернуть/развернуть инструменты")}" aria-label="${t("Свернуть/развернуть инструменты")}" aria-expanded="true">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-          </button>
+          <!-- Раньше одна кнопка «Подсказка», сама решала рамка или пара
+               (см. правку «Две кнопки подсказки») — по факту почти никто
+               ей не пользовался, разделили на два явных действия.
+               .hint-widgets — ОТДЕЛЬНЫЙ сворачиваемый кластер под звуком,
+               свой тоггл (см. правку «Подсказки — своя независимая группа»:
+               раньше делил один тоггл со звуком через .table-widgets —
+               визуально ОДНА выдвигающаяся плашка, что вводило в
+               заблуждение; теперь два независимых кластера, каждый со
+               своим bindCollapsibleCluster). Тоггл — ПЕРВЫЙ ребёнок (якорь
+               сверху), .hint-btn-group раскрывается вниз — тот же паттерн,
+               что у .table-widgets, только по вертикали. -->
+          <div class="hint-widgets">
+            <button class="btn outlined icon tools-toggle" id="hintToggleBtn" type="button" title="${t("Свернуть/развернуть подсказки")}" aria-label="${t("Свернуть/развернуть подсказки")}" aria-expanded="true">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+            </button>
+            <div class="hint-btn-group" id="hintBtnGroup">
+              <button class="btn outlined icon" id="hintEdgesBtn" type="button" title="${t("Подсказка: рамка")}" aria-label="${t("Подсказка: рамка")}">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></svg>
+              </button>
+              <button class="btn outlined icon" id="hintPairBtn" type="button" title="${t("Подсказка: пара деталей")}" aria-label="${t("Подсказка: пара деталей")}">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.4 1 1.2 1 2.05V17h6v-2.25c0-.85.4-1.65 1-2.05A7 7 0 0 0 12 2z"/></svg>
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>`;
@@ -3502,7 +3535,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     // wheel-хендлер), а кнопки +/−/⤢ (и, отдельно найденный тот же баг,
     // кнопки в окне победы) не реагировали на клик вовсе.
     if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
-      || e.target.closest(".board-back") || e.target.closest(".table-widgets") || e.target.closest(".preview-panel")
+      || e.target.closest(".board-back") || e.target.closest(".widgets-stack") || e.target.closest(".preview-panel")
       || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -3649,6 +3682,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   bindSoundButton($(root, "#soundBtn"), signal);
   bindCollapsibleCluster($(root, "#toolsToggleBtn"), $(root, "#toolsRow"), "puzzle_tools_collapsed", signal);
   bindCollapsibleCluster($(root, "#widgetsToggleBtn"), $(root, "#widgetsRow"), "puzzle_widgets_collapsed", signal);
+  bindCollapsibleCluster($(root, "#hintToggleBtn"), $(root, "#hintBtnGroup"), "puzzle_hints_collapsed", signal);
 
   /* ── перетаскивание детали: группа = объединение кластеров текущего выделения ──
      activeDrag — общее (не per-piece) состояние, см. блок авто-панорамы
@@ -3804,6 +3838,17 @@ async function renderTable(root, puzzleId, signal, queryString) {
 
   function showWin() {
     trackGoal("puzzle_completed");
+    // Защитная уборка визуального мусора (см. правку «Артефакты после
+    // сборки», жалоба со скриншотом — обводка/рамка выделения оставались
+    // видны поверх уже собранной картинки) — hint-glow/выделение/рамка
+    // выделения не всегда корректно снимаются в редких гонках (resync
+    // стола, потерянный pointerup при уходе фокуса с вкладки и т.п.). К
+    // моменту победы стол должен быть чист, что бы ни случилось раньше —
+    // не разбираем каждую конкретную гонку по отдельности, просто гасим
+    // всё разом здесь.
+    for (const p of pieces.values()) p.el.classList.remove("hint-glow");
+    setSelected([]);
+    marqueeEl.hidden = true;
     const overlay = document.createElement("div");
     overlay.className = "win-overlay";
     const card = document.createElement("div");
@@ -4282,7 +4327,7 @@ function bindSoundButton(btn, signal) {
 function bindCollapsibleCluster(toggleBtn, rowEl, storageKey, signal) {
   const apply = collapsed => {
     rowEl.classList.toggle("collapsed", collapsed);
-    toggleBtn.closest(".board-tools, .table-widgets")?.classList.toggle("collapsed", collapsed);
+    toggleBtn.closest(".board-tools, .table-widgets, .hint-widgets")?.classList.toggle("collapsed", collapsed);
     toggleBtn.setAttribute("aria-expanded", String(!collapsed));
   };
   apply(localStorage.getItem(storageKey) === "1");
@@ -4839,7 +4884,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
              — выход со стола не инструмент сборки). -->
         <div class="board-back">
           <a class="btn outlined icon" href="/room/${encodeURIComponent(roomId)}" title="${t("Комната")}" aria-label="${t("Комната")}">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M15 6l-6 6 6 6"/></svg>
+            <svg class="icon" viewBox="0 0 24 24"><path d="M19 12H5"/><path d="M11 18l-6-6 6-6"/></svg>
           </a>
         </div>
         <!-- Кнопки действий стола — всегда иконками (не только на мобильном,
@@ -4879,50 +4924,67 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
              .tools-row раскрывается влево. Чат — намеренно эфемерный (см.
              план «Чат на доску») — ничего не хранится ни на сервере, ни тут,
              история живёт только пока открыта эта вкладка. -->
-        <div class="table-widgets">
-          <div class="tools-row" id="widgetsRow">
-            <!-- Раньше одна кнопка «Подсказка», сама решала рамка или пара
-                 (см. правку «Две кнопки подсказки») — по факту почти никто
-                 ей не пользовался, разделили на два явных действия. -->
-            <button class="btn outlined icon" id="hintEdgesBtn" type="button" title="${t("Подсказка: рамка")}" aria-label="${t("Подсказка: рамка")}">
-              <svg class="icon" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></svg>
-            </button>
-            <button class="btn outlined icon" id="hintPairBtn" type="button" title="${t("Подсказка: пара деталей")}" aria-label="${t("Подсказка: пара деталей")}">
-              <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.4 1 1.2 1 2.05V17h6v-2.25c0-.85.4-1.65 1-2.05A7 7 0 0 0 12 2z"/></svg>
-            </button>
-            <button class="btn outlined icon" id="soundBtn" type="button"></button>
-            <div class="chat-widget">
-              <button class="btn outlined icon chat-btn" id="chatBtn" type="button"
-                title="${t("Чат")}" aria-label="${t("Чат")}" aria-haspopup="true" aria-expanded="false">
-                💬<span class="presence-count" id="chatUnread" hidden>0</span>
-              </button>
-              <div class="chat-popover hidden" id="chatPopover">
-                <p class="presence-popover-title">${t("Чат")}</p>
-                <div class="chat-messages" id="chatMessages">
-                  <p class="state-note">${t("Пока никто ничего не написал.")}</p>
+        <div class="widgets-stack">
+          <div class="table-widgets">
+            <div class="tools-row" id="widgetsRow">
+              <button class="btn outlined icon" id="soundBtn" type="button"></button>
+              <div class="chat-widget">
+                <button class="btn outlined icon chat-btn" id="chatBtn" type="button"
+                  title="${t("Чат")}" aria-label="${t("Чат")}" aria-haspopup="true" aria-expanded="false">
+                  💬<span class="presence-count" id="chatUnread" hidden>0</span>
+                </button>
+                <div class="chat-popover hidden" id="chatPopover">
+                  <p class="presence-popover-title">${t("Чат")}</p>
+                  <div class="chat-messages" id="chatMessages">
+                    <p class="state-note">${t("Пока никто ничего не написал.")}</p>
+                  </div>
+                  <form class="chat-form" id="chatForm">
+                    <input class="text-input" id="chatInput" type="text" maxlength="500" placeholder="${t("Сообщение…")}" autocomplete="off">
+                    <button class="btn filled icon sm" type="submit" title="${t("Отправить")}" aria-label="${t("Отправить")}">
+                      <svg class="icon" viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-2-7-8-1z"/></svg>
+                    </button>
+                  </form>
                 </div>
-                <form class="chat-form" id="chatForm">
-                  <input class="text-input" id="chatInput" type="text" maxlength="500" placeholder="${t("Сообщение…")}" autocomplete="off">
-                  <button class="btn filled icon sm" type="submit" title="${t("Отправить")}" aria-label="${t("Отправить")}">
-                    <svg class="icon" viewBox="0 0 24 24"><path d="M4 12 20 4l-6 16-2-7-8-1z"/></svg>
-                  </button>
-                </form>
+              </div>
+              <div class="presence-widget">
+                <button class="btn outlined icon presence-btn" id="presenceBtn" type="button"
+                  title="${t("Участники за столом")}" aria-label="${t("Участники за столом")}" aria-haspopup="true" aria-expanded="false">
+                  👥<span class="presence-count" id="presenceCount" hidden>0</span>
+                </button>
+                <div class="presence-popover hidden" id="presencePopover">
+                  <p class="presence-popover-title">${t("За столом")}</p>
+                  <div class="presence-popover-list" id="presenceList"></div>
+                </div>
               </div>
             </div>
-            <div class="presence-widget">
-              <button class="btn outlined icon presence-btn" id="presenceBtn" type="button"
-                title="${t("Участники за столом")}" aria-label="${t("Участники за столом")}" aria-haspopup="true" aria-expanded="false">
-                👥<span class="presence-count" id="presenceCount" hidden>0</span>
+            <button class="btn outlined icon tools-toggle" id="widgetsToggleBtn" type="button" title="${t("Свернуть/развернуть инструменты")}" aria-label="${t("Свернуть/развернуть инструменты")}" aria-expanded="true">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+          <!-- Раньше одна кнопка «Подсказка», сама решала рамка или пара
+               (см. правку «Две кнопки подсказки») — по факту почти никто
+               ей не пользовался, разделили на два явных действия.
+               .hint-widgets — ОТДЕЛЬНЫЙ сворачиваемый кластер под звуком/
+               чатом/участниками, свой тоггл (см. правку «Подсказки — своя
+               независимая группа»: раньше делил один тоггл со звуком через
+               .table-widgets — визуально ОДНА выдвигающаяся плашка, что
+               вводило в заблуждение; теперь два независимых кластера,
+               каждый со своим bindCollapsibleCluster). Тоггл — ПЕРВЫЙ
+               ребёнок (якорь сверху), .hint-btn-group раскрывается вниз —
+               тот же паттерн, что у .table-widgets, только по вертикали. -->
+          <div class="hint-widgets">
+            <button class="btn outlined icon tools-toggle" id="hintToggleBtn" type="button" title="${t("Свернуть/развернуть подсказки")}" aria-label="${t("Свернуть/развернуть подсказки")}" aria-expanded="true">
+              <svg class="icon" viewBox="0 0 24 24"><path d="M18 15l-6-6-6 6"/></svg>
+            </button>
+            <div class="hint-btn-group" id="hintBtnGroup">
+              <button class="btn outlined icon" id="hintEdgesBtn" type="button" title="${t("Подсказка: рамка")}" aria-label="${t("Подсказка: рамка")}">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M3 8V5a2 2 0 0 1 2-2h3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/></svg>
               </button>
-              <div class="presence-popover hidden" id="presencePopover">
-                <p class="presence-popover-title">${t("За столом")}</p>
-                <div class="presence-popover-list" id="presenceList"></div>
-              </div>
+              <button class="btn outlined icon" id="hintPairBtn" type="button" title="${t("Подсказка: пара деталей")}" aria-label="${t("Подсказка: пара деталей")}">
+                <svg class="icon" viewBox="0 0 24 24"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.7c.6.4 1 1.2 1 2.05V17h6v-2.25c0-.85.4-1.65 1-2.05A7 7 0 0 0 12 2z"/></svg>
+              </button>
             </div>
           </div>
-          <button class="btn outlined icon tools-toggle" id="widgetsToggleBtn" type="button" title="${t("Свернуть/развернуть инструменты")}" aria-label="${t("Свернуть/развернуть инструменты")}" aria-expanded="true">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg>
-          </button>
         </div>
         <div class="zoom-controls">
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="${t("Приблизить")}" aria-label="${t("Приблизить")}">+</button>
@@ -5238,7 +5300,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     // presence и чат разом (см. renderRoomTable) — иначе клик/скролл внутри
     // поповера чата пытался запустить панораму доски под ним.
     if (e.target.closest(".piece") || e.target.closest(".zoom-controls") || e.target.closest(".board-tools")
-      || e.target.closest(".board-back") || e.target.closest(".table-widgets") || e.target.closest(".preview-panel")
+      || e.target.closest(".board-back") || e.target.closest(".widgets-stack") || e.target.closest(".preview-panel")
       || e.target.closest(".win-overlay") || e.target.closest(".table-give-up")) return;
     stage.setPointerCapture(e.pointerId);
     active.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -5388,6 +5450,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   bindSoundButton($(root, "#soundBtn"), signal);
   bindCollapsibleCluster($(root, "#toolsToggleBtn"), $(root, "#toolsRow"), "puzzle_tools_collapsed", signal);
   bindCollapsibleCluster($(root, "#widgetsToggleBtn"), $(root, "#widgetsRow"), "puzzle_widgets_collapsed", signal);
+  bindCollapsibleCluster($(root, "#hintToggleBtn"), $(root, "#hintBtnGroup"), "puzzle_hints_collapsed", signal);
 
   function updateProgressLabel(placed, total) {
     progressEl.innerHTML = "";
@@ -5413,6 +5476,11 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   }
   function showWin() {
     trackGoal("puzzle_completed");
+    // Защитная уборка визуального мусора — см. solo-версию выше (правка
+    // «Артефакты после сборки»), тот же приём.
+    for (const p of pieces.values()) p.el.classList.remove("hint-glow");
+    setSelected([]);
+    marqueeEl.hidden = true;
     const overlay = document.createElement("div");
     overlay.className = "win-overlay";
     const card = document.createElement("div");
