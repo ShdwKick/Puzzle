@@ -593,11 +593,18 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   100%{ filter:drop-shadow(0 1px 1px rgba(0,0,0,.18)) drop-shadow(0 0 0 transparent) }
 }
 .piece.just-snapped{animation:piece-snap .55s var(--ease-emph-dec)}
-/* Обводка через drop-shadow, не box-shadow: деталь — фигурная SVG,
-   обычная тень легла бы прямоугольником по bounding box, а drop-shadow
-   идёт по альфа-каналу самой картинки и повторяет форму детали. */
+/* Раньше тут была обводка через drop-shadow прямо на .piece — не видна
+   почти совсем (см. правку «Выделение пазла: видимая обводка», жалоба с
+   ПК): wrap (= .piece) несёт clip-path:path(d) для хит-теста (см.
+   createPieceEl в app.js), а clip-path обрезает ЛЮБОЙ вышедший НАРУЖУ blur
+   ровно по контуру детали — та же причина, по которой три первых захода
+   на обводку подсказки ниже тоже были невидимы, просто тогда это заметили
+   и переделали, а .selected — нет. Теперь — тот же outlineEl-приём, что и
+   у подсказки (см. .piece-outline-halo/accent ниже): свой SVG-элемент,
+   СОСЕДНИЙ с wrap, а не внутри него, clip-path его не касается. Тень
+   "приподнятости" остаётся тут же, отдельным простым drop-shadow. */
 .piece.selected{
-  filter:drop-shadow(0 1px 2px rgba(0,0,0,.25)) drop-shadow(0 0 4px var(--flame-tip)) drop-shadow(0 0 4px var(--flame-tip));
+  filter:drop-shadow(0 1px 2px rgba(0,0,0,.25));
 }
 /* Подсказка (см. план «Повороты деталей + звук + подсказка», pickHintPair
    в app.js) — прошла три захода: drop-shadow-обводка как у .selected выше
@@ -670,10 +677,26 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .piece.hint-glow + .piece-outline-overlay .piece-outline-accent{
   animation:piece-hint-outline .9s ease-in-out infinite, piece-hint-march 1s linear infinite;
 }
-/* Во время самого драга — БЕЗ огонькового ободка выделения (только тень
-   "приподнятости", как у .piece.dragging): ободок вокруг каждой детали
-   группы во время движения читался как лишний шум, а не как полезная
-   информация — то, что деталь тащится, и так видно по тени и курсору. */
+/* Выделение (клик/shift-клик/рамка выделения, см. setSelected в app.js) —
+   тот же outlineEl, что у подсказки выше, тем же приёмом (соседний
+   SVG, clip-path wrap его не обрезает), но БЕЗ анимации: подсказка —
+   разовый «посмотри сюда» на пару секунд, а выделение — устойчивое
+   состояние, ему нужна ровная сплошная обводка, а не мигание. Сплошная —
+   поэтому stroke-dasharray:none переопределяет пунктир базового правила
+   .piece-outline-accent выше. Раньше во время самого драга обводку
+   намеренно гасили (читалась как шум, тени было достаточно) — по факту
+   оказалось наоборот не видно вообще ни выделения, ни тем более группы
+   во время переноса (см. ту же правку) — тут это не gate'ится по
+   .dragging нарочно, обводка теперь держится и во время переноса тоже. */
+.piece.selected + .piece-outline-overlay .piece-outline-halo,
+.piece.selected + .piece-outline-overlay .piece-outline-accent{
+  opacity:1;
+}
+.piece.selected + .piece-outline-overlay .piece-outline-accent{
+  stroke-dasharray:none;
+}
+/* Тень "приподнятости" во время переноса — независимо от кольца выше,
+   отдельный слой (filter на самом .piece, а не outlineEl). */
 .piece.selected.dragging{
   filter:drop-shadow(0 6px 14px rgba(0,0,0,.35));
 }
@@ -816,6 +839,11 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .win-image-actions{position:absolute;top:.6rem;right:.6rem}
 .win-image-actions .icon-btn{background:rgba(0,0,0,.45);color:#fff}
 .win-card h2{font-size:1.35rem;margin:1.2rem 0 .5rem}
+/* Плашка автора (см. app.js, showWin в renderRoomTable, правка «Автор на
+   окне победы») — тот же .puzzle-page-author-badge, что на странице пазла,
+   но margin-bottom тут свой: там элемент в flex-колонке с общим gap, тут —
+   обычный блок, без него следующий .win-stats прижался бы вплотную. */
+.win-card .puzzle-page-author-badge{margin-bottom:1.2rem}
 .win-card p{color:var(--md-sys-color-on-surface-variant);margin-bottom:1.2rem}
 /* Статистика сборки (см. план «Статистика сборки») — на окне победы
    (buildStatsBlock в app.js, между описанием и рейтингом) и на странице
@@ -832,6 +860,17 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    пилла, выровненных поровну. */
 .win-actions{display:flex;gap:.6rem}
 .win-actions .btn{flex:1}
+/* Призыв опубликовать своё фото прямо на окне победы (см. app.js, showWin
+   в renderRoomTable, правка «Публикация с окна победы») — та же формула
+   акцентной рамки, что у .category-suggest, только компактнее: тут не
+   отдельная страница, а один блок внутри уже тесной .win-card. */
+.win-publish-cta{
+  margin:0 0 1.2rem;padding:.9rem 1.1rem;text-align:center;
+  border-radius:var(--md-sys-shape-corner-l);
+  background:color-mix(in srgb, var(--flame-tip) 8%, var(--md-sys-color-surface-container-low));
+  border:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
+}
+.win-publish-cta p{margin:0 0 .7rem;color:var(--md-sys-color-on-surface);font-size:.9rem}
 /* Превью пазла (см. план «Карточка — по образцу Movies») — картинка на всю
    ширину модалки, вровень с краями (отрицательные margin компенсируют
    padding .modal:1.1rem 1.3rem 1.3rem — см. .movie-info-poster в Movies,
@@ -945,6 +984,20 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
 }
 .puzzle-page-tag:hover{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary)}
+/* Плашка автора (см. правку «Плашка автора на странице пазла») — та же
+   форма таблетки, что у .puzzle-page-tag выше (secondary-container,
+   тот же hover), но с person-icon вместо голого текста — на самой
+   странице пазла места достаточно для полноценной плашки, в отличие от
+   карточки/превью-модалки (там остался прежний .puzzle-card-author,
+   тонкая подпись-ссылка). */
+.puzzle-page-author-badge{
+  display:inline-flex;align-items:center;gap:.4em;align-self:flex-start;
+  padding:.32em .8em .32em .55em;border-radius:var(--md-sys-shape-corner-full);
+  background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
+  font-size:.82rem;font-weight:600;text-decoration:none;
+}
+.puzzle-page-author-badge:hover{background:var(--md-sys-color-primary);color:var(--md-sys-color-on-primary)}
+.puzzle-page-author-badge .icon{width:1.1rem;height:1.1rem;stroke-width:2.2}
 .puzzle-page-rating-summary{font-size:.9rem;color:var(--md-sys-color-on-surface-variant)}
 .puzzle-page-rating-summary b{color:var(--md-sys-color-on-surface);font-weight:650}
 /* buildRatingWidget (app.js) — тот же виджет, что на окне победы, звёзды
@@ -1211,22 +1264,11 @@ select.text-input{
 }
 .room-active-card p{flex:1;min-width:12rem;color:var(--md-sys-color-on-surface-variant)}
 
-.room-history{display:flex;flex-direction:column;gap:.5rem}
-.history-row{
-  display:flex;justify-content:space-between;gap:1rem;padding:.6rem .9rem;flex-wrap:wrap;
-  background:var(--md-sys-color-surface-container-low);border-radius:var(--md-sys-shape-corner-m);
-}
-.history-puzzle{font-weight:650}
-.history-meta{color:var(--md-sys-color-on-surface-variant);font-size:.88rem}
-/* .history-row стало три элемента (заголовок+метаданные+кнопки «Собрать ещё
-   раз»/«Удалить») — space-between расставил бы их неровно, группируем
-   текстовые в один блок, а кнопки — в другой. */
-.history-info{display:flex;flex-direction:column;gap:.15rem}
-/* align-items:center — без него «Собрать ещё раз» (текстовая .btn.sm,
-   выше) и крестик-удаление (.icon-btn.xs, ниже, фиксированная высота)
-   выравнивались бы по умолчанию (stretch → фактически по верхнему краю
-   строки), а не по центру друг относительно друга. */
-.history-actions{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap}
+/* «История сборок» — .puzzle-grid карточек .puzzle-card (см. правку
+   «Картинка и время сборки в истории», buildHistoryCard в app.js), больше
+   не свои .room-history/.history-row: раньше текстовые строки без превью,
+   теперь тот же вид, что у «Продолжить сборку» на главной. Своих правил
+   тут не нужно — .puzzle-grid/.puzzle-card уже определены выше. */
 
 /* ===================== КОМНАТЫ: ВСТУПЛЕНИЕ ПО ССЫЛКЕ ===================== */
 .room-join-screen{

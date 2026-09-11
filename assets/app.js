@@ -382,6 +382,10 @@ const EN = {
     "You only need to log in so your progress is saved between visits.",
   "Пригласите друзей и собирайте пазл вместе — в реальном времени, за одним столом.":
     "Invite friends and build the puzzle together — in real time, at the same table.",
+  "Понравился результат? Поделитесь этим пазлом со всеми — опубликуйте его в общей библиотеке.":
+    "Like how it turned out? Share this puzzle with everyone — publish it to the shared library.",
+  "Отправлено на модерацию — появится в общей библиотеке после проверки.":
+    "Sent for review — it'll appear in the shared library once approved.",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -759,7 +763,7 @@ async function renderPuzzlePage(root, id, signal) {
           <button class="icon-btn" id="puzzlePageShareBtn" type="button" title="${t("Скопировать ссылку на пазл")}" aria-label="${t("Скопировать ссылку на пазл")}">${SHARE_ICON}</button>
         </div>
         ${category ? `<a class="puzzle-page-tag" id="puzzlePageTag" href="#"></a>` : ""}
-        <a class="puzzle-card-author" id="puzzlePageAuthor" href="#" hidden></a>
+        <a class="puzzle-page-author-badge" id="puzzlePageAuthor" href="#" hidden></a>
         <p class="puzzle-page-rating-summary" id="puzzlePageRatingSummary" hidden></p>
         <div class="puzzle-page-rate" id="puzzlePageRate"></div>
         <div class="puzzle-page-sep"></div>
@@ -814,12 +818,19 @@ async function renderPuzzlePage(root, id, signal) {
   }
 
   // Автор — то же условие, что у buildCard/openPuzzlePreviewModal: только у
-  // ОДОБРЕННЫХ публикаций.
+  // ОДОБРЕННЫХ публикаций. На самой странице пазла — не просто ссылка
+  // текстом (как в карточке/превью, там места мало), а плашка с иконкой
+  // (см. правку «Плашка автора на странице пазла») — тот же person-icon,
+  // что у кнопки «Аккаунт» в шапке (index.html), для узнаваемости.
+  // /profile/:id пока никуда не ведёт (страницы профиля ещё нет, см. план) —
+  // сама плашка от этого не менее уместна, ссылка заработает, когда профиль
+  // появится.
   const authorEl = $(root, "#puzzlePageAuthor");
   if (p.uploaderUsername && p.moderationStatus === "approved") {
     authorEl.hidden = false;
     authorEl.href = `/profile/${encodeURIComponent(p.uploaderUserId)}`;
-    authorEl.textContent = `${t("Добавил:")} ${p.uploaderUsername}`;
+    authorEl.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg><span></span>`;
+    $(authorEl, "span").textContent = `${t("Добавил:")} ${p.uploaderUsername}`;
   } else {
     authorEl.hidden = true;
   }
@@ -1535,6 +1546,65 @@ function buildInProgressCard(ip, signal, onDeleted) {
       localStorage.removeItem(localKey(ip.puzzleId));
     }
     onDeleted();
+  }, { signal });
+  return card;
+}
+
+/** Карточка одной завершённой сборки в «Истории сборок» комнаты (см. правку
+ *  «Картинка и время сборки в истории» — раньше .history-row текстовой
+ *  строкой, без превью и без времени сборки). Тот же .puzzle-card целиком,
+ *  что у buildInProgressCard выше, включая .progress-card-delete (класс
+ *  общий, скрывающее hover-правило в CSS завязано на .puzzle-card>
+ *  .progress-card-delete, не на конкретный смысл кнопки) — бейдж с
+ *  процентом тут не нужен, сборка и так завершена целиком. */
+function buildHistoryCard(s, roomId, signal) {
+  const card = document.createElement("article");
+  card.className = "puzzle-card";
+  card.innerHTML = `
+    <div class="puzzle-card-thumb">
+      <img alt="" loading="lazy">
+    </div>
+    <button class="icon-btn xs progress-card-delete" type="button" title="${t("Удалить")}" aria-label="${t("Удалить")}">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="puzzle-card-body">
+      <div class="puzzle-card-title-row">
+        <h3 class="puzzle-card-title"></h3>
+        <button class="btn outlined sm" type="button">${t("Собрать ещё раз")}</button>
+      </div>
+      <p class="puzzle-card-meta"></p>
+    </div>`;
+  const img = $(card, "img");
+  img.src = s.puzzle.imageUrl;
+  img.alt = puzzleDisplayTitle(s.puzzle);
+  $(card, ".puzzle-card-title").textContent = puzzleDisplayTitle(s.puzzle);
+  const duration = formatDuration(Math.max(0, s.completedAt - s.startedAt));
+  $(card, ".puzzle-card-meta").textContent = getLang() === "en"
+    ? `${s.piecesTotal} pieces · built in ${duration} · ${fmtDate(s.completedAt)}`
+    : `${s.piecesTotal} деталей · собрано за ${duration} · ${fmtDate(s.completedAt)}`;
+  // Доступна и когда сейчас уже идёт другой активный сеанс — startRoomSession
+  // в этом случае просто перекинет на него (409-ветка).
+  $(card, ".btn.outlined.sm").addEventListener("click", async e => {
+    e.target.disabled = true;
+    try {
+      const newId = await startRoomSession(roomId, s.puzzle.id);
+      navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`);
+    } catch { e.target.disabled = false; }
+  }, { signal });
+  // Завершённый сеанс — за столом никого уже нет (completedAt выставлен),
+  // 409 здесь в норме не встречается, но deleteRoomSession всё равно
+  // корректно её обработает, если что-то поменялось между рендером и кликом.
+  $(card, ".progress-card-delete").addEventListener("click", async e => {
+    if (!confirm(getLang() === "en" ? `Delete the "${puzzleDisplayTitle(s.puzzle)}" session?` : `Удалить сеанс сборки «${puzzleDisplayTitle(s.puzzle)}»?`)) return;
+    // currentTarget, не target: клик может попасть на вложенный <svg>/<path>
+    // иконки крестика — у них нет свойства disabled, а нужно отключить
+    // саму кнопку.
+    e.currentTarget.disabled = true;
+    try { await deleteRoomSession(roomId, s.id); card.remove(); }
+    catch (err) {
+      e.currentTarget.disabled = false;
+      alert(err.message === "table not empty" ? t("За этим столом сейчас кто-то сидит — сначала все должны выйти.") : t("Не удалось удалить."));
+    }
   }, { signal });
   return card;
 }
@@ -4331,7 +4401,7 @@ async function renderRoom(root, roomId, signal) {
     <div class="room-members" id="roomMembers"></div>
     <div class="room-active" id="roomActive"></div>
     <h3 class="room-section-title">${t("История сборок")}</h3>
-    <div class="room-history" id="roomHistory"></div>`;
+    <div class="puzzle-grid" id="roomHistory"></div>`;
 
   $(root, ".room-head-title").textContent = room.title;
   const roomCodeEl = $(root, "#roomCode");
@@ -4576,50 +4646,7 @@ async function renderRoom(root, roomId, signal) {
     historyEl.innerHTML = `<p class="state-note">${t("Ещё ничего не собрано.")}</p>`;
   } else {
     historyEl.innerHTML = "";
-    for (const s of past) {
-      const row = document.createElement("div");
-      row.className = "history-row";
-      row.innerHTML = `
-        <div class="history-info">
-          <span class="history-puzzle"></span>
-          <span class="history-meta"></span>
-        </div>
-        <div class="history-actions">
-          <button class="btn outlined sm history-replay" type="button">${t("Собрать ещё раз")}</button>
-          <button class="icon-btn xs history-delete" type="button" title="${t("Удалить")}" aria-label="${t("Удалить")}">
-            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
-          </button>
-        </div>`;
-      $(row, ".history-puzzle").textContent = puzzleDisplayTitle(s.puzzle);
-      $(row, ".history-meta").textContent = getLang() === "en"
-        ? `${s.piecesTotal} pieces · completed ${fmtDate(s.completedAt)}`
-        : `${s.piecesTotal} деталей · собран ${fmtDate(s.completedAt)}`;
-      // Доступна и когда сейчас уже идёт другой активный сеанс —
-      // startRoomSession в этом случае просто перекинет на него (409-ветка).
-      $(row, ".history-replay").addEventListener("click", async e => {
-        e.target.disabled = true;
-        try {
-          const newId = await startRoomSession(roomId, s.puzzle.id);
-          navigate(`/room/${encodeURIComponent(roomId)}/table/${encodeURIComponent(newId)}`);
-        } catch { e.target.disabled = false; }
-      }, { signal });
-      // Завершённый сеанс — за столом никого уже нет (completedAt выставлен),
-      // 409 здесь в норме не встречается, но deleteRoomSession всё равно
-      // корректно её обработает, если что-то поменялось между рендером и кликом.
-      $(row, ".history-delete").addEventListener("click", async e => {
-        if (!confirm(getLang() === "en" ? `Delete the "${puzzleDisplayTitle(s.puzzle)}" session?` : `Удалить сеанс сборки «${puzzleDisplayTitle(s.puzzle)}»?`)) return;
-        // currentTarget, не target: клик может попасть на вложенный <svg>/<path>
-        // иконки крестика — у них нет свойства disabled, а нужно отключить
-        // саму кнопку.
-        e.currentTarget.disabled = true;
-        try { await deleteRoomSession(roomId, s.id); row.remove(); }
-        catch (err) {
-          e.currentTarget.disabled = false;
-          alert(err.message === "table not empty" ? t("За этим столом сейчас кто-то сидит — сначала все должны выйти.") : t("Не удалось удалить."));
-        }
-      }, { signal });
-      historyEl.appendChild(row);
-    }
+    for (const s of past) historyEl.appendChild(buildHistoryCard(s, roomId, signal));
   }
 }
 
@@ -5277,8 +5304,51 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     }
     const h2 = document.createElement("h2"); h2.textContent = t("Готово!");
     const p = document.createElement("p"); p.textContent = getLang() === "en" ? `Puzzle "${displayTitle}" is complete — solved together with friends.` : `Пазл «${displayTitle}» собран вместе с друзьями.`;
+    // Автор — для СВОЕГО фото (ownerUserId задан), независимо от статуса
+    // модерации (см. правку «Автор на окне победы»): в отличие от плашки на
+    // публичной странице пазла (там gate по moderationStatus==='approved' —
+    // страница публичная, индексируется), тут все и так уже видят само
+    // фото внутри своей комнаты — прятать, кто его принёс, до публикации
+    // незачем. uploaderUsername пуст у анонимного автора (см. правку
+    // «Анонимная загрузка фото», getOrCreateAnonIdentity) — тогда просто не
+    // показываем, как и везде: приписывать выгрузку некому.
+    let authorBadge = null;
+    if (puzzle.ownerUserId && puzzle.uploaderUsername) {
+      authorBadge = document.createElement("a");
+      authorBadge.className = "puzzle-page-author-badge";
+      authorBadge.href = `/profile/${encodeURIComponent(puzzle.uploaderUserId)}`;
+      authorBadge.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg><span></span>`;
+      $(authorBadge, "span").textContent = `${t("Добавил:")} ${puzzle.uploaderUsername}`;
+    }
     const stats = buildStatsBlock(session.startedAt, Date.now(), puzzle.gridRows * puzzle.gridCols);
     const rating = buildRatingWidget(puzzle, signal);
+    // Подсказка «опубликуй своё фото» на самом окне победы (см. правку
+    // «Публикация с окна победы») — момент, когда автор только что увидел
+    // собранным СВОЁ фото, самый уместный для призыва поделиться, лучше,
+    // чем ждать, пока он сам найдёт «⋮» на карточке (см. mine/пункт меню в
+    // buildCard — то же условие один в один, тот же openPublishModal).
+    // Анониму (puzzle.ownerUserId начинается с "anon:") тут делать нечего —
+    // auth.getUser()?.id никогда не совпадёт с анонимным id, публикация
+    // недоступна не только по кнопке в меню, но и здесь — так и должно быть.
+    let publishCta = null;
+    if (puzzle.ownerUserId && auth.isAuthenticated() && auth.getUser()?.id === puzzle.ownerUserId
+        && (!puzzle.moderationStatus || puzzle.moderationStatus === "rejected")) {
+      publishCta = document.createElement("div");
+      publishCta.className = "win-publish-cta";
+      const ctaText = document.createElement("p");
+      ctaText.textContent = t("Понравился результат? Поделитесь этим пазлом со всеми — опубликуйте его в общей библиотеке.");
+      const ctaBtn = document.createElement("button");
+      ctaBtn.className = "btn filled sm"; ctaBtn.type = "button";
+      ctaBtn.textContent = t(puzzle.moderationStatus === "rejected" ? "Отправить снова" : "Опубликовать");
+      ctaBtn.addEventListener("click", () => {
+        openPublishModal(puzzle.id, displayTitle, () => {
+          puzzle.moderationStatus = "pending";
+          ctaText.textContent = t("Отправлено на модерацию — появится в общей библиотеке после проверки.");
+          ctaBtn.remove();
+        });
+      });
+      publishCta.append(ctaText, ctaBtn);
+    }
     const actions = document.createElement("div");
     actions.className = "win-actions";
     const stayBtn = document.createElement("button");
@@ -5288,7 +5358,11 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     homeBtn.className = "btn filled"; homeBtn.type = "button"; homeBtn.textContent = t("В комнату");
     homeBtn.addEventListener("click", () => { navigate(`/room/${encodeURIComponent(roomId)}`); });
     actions.append(stayBtn, homeBtn);
-    card.append(imgWrap, h2, p, stats, rating, actions);
+    card.append(imgWrap, h2, p);
+    if (authorBadge) card.appendChild(authorBadge);
+    card.append(stats, rating);
+    if (publishCta) card.appendChild(publishCta);
+    card.appendChild(actions);
     overlay.appendChild(card);
     stage.appendChild(overlay);
     launchConfetti(overlay);
