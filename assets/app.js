@@ -636,7 +636,7 @@ function wirePublishCta(idPrefix, puzzle, onApplied) {
       textEl.textContent = t("Отправлено на модерацию — появится в общей библиотеке после проверки.");
       btn.hidden = true;
       onApplied?.();
-    });
+    }, idPrefix);
   };
 }
 
@@ -1071,7 +1071,7 @@ async function renderPuzzlePage(root, id, signal) {
  * index.html, "pending"-переменная переносит контекст между открытием и
  * подтверждением. */
 let pendingPublishId = null;
-async function openPublishModal(id, title, onDone) {
+async function openPublishModal(id, title, onDone, source) {
   document.getElementById("publishModalTitle").textContent = `${t("Опубликовать")} «${title}»`;
   const list = document.getElementById("publishCategoryList");
   list.innerHTML = [...PROHIBITED_TIER_A, ...PROHIBITED_TIER_B].map(c => `<li>${t(c)}</li>`).join("");
@@ -1095,7 +1095,7 @@ async function openPublishModal(id, title, onDone) {
         </select>`
       : "";
   } catch { categoriesBox.innerHTML = ""; }
-  pendingPublishId = { id, onDone };
+  pendingPublishId = { id, onDone, source };
   openModal("publishModalBackdrop");
 }
 bindModal("publishModalBackdrop", null, "publishModalClose");
@@ -1108,7 +1108,7 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
     errEl.hidden = false;
     return;
   }
-  const { id, onDone } = pendingPublishId;
+  const { id, onDone, source } = pendingPublishId;
   const categorySelect = document.getElementById("publishCategorySelect");
   const categoryId = categorySelect ? categorySelect.value : "";
   const newCategoryName = document.getElementById("publishNewCategoryName").value.trim();
@@ -1116,7 +1116,7 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
   btn.disabled = true;
   try {
     await publishPuzzle(id, { categoryId, newCategoryName });
-    trackGoal("photo_submitted");
+    trackGoal("photo_submitted", { source: source || "unknown" });
     closeModal("publishModalBackdrop");
     pendingPublishId = null;
     onDone();
@@ -2109,7 +2109,7 @@ function buildCard(p, opts = {}) {
         p.moderationStatus = "pending"; p.moderationReason = null;
         const fresh = buildCard(p, opts);
         node.replaceWith(fresh);
-      });
+      }, "cardMenu");
     } });
   }
   // «+ В комнату» — только в библиотеке/профиле (opts.roomId не задан):
@@ -4180,6 +4180,7 @@ function buildRatingWidget(puzzle, signal) {
       await roomFetch(`/api/puzzles/${encodeURIComponent(puzzle.id)}/rating`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating: value }),
       });
+      trackGoal("rating_submitted", { value });
       note.textContent = t("Спасибо за оценку!");
       note.hidden = false;
     } catch { /* тихо — оценка не критична, окно не блокируем */ }
@@ -4601,10 +4602,10 @@ async function renderRoom(root, roomId, signal) {
     hintTimer = setTimeout(() => { roomCodeHint.hidden = true; }, 1800);
   }
   roomCodeEl.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(room.joinCode); flashCopied(); } catch { /* буфер недоступен — код и так виден */ }
+    try { await navigator.clipboard.writeText(room.joinCode); flashCopied(); trackGoal("room_invite_copied", { method: "code" }); } catch { /* буфер недоступен — код и так виден */ }
   }, { signal });
   $(root, "#copyInviteLinkBtn").addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(inviteUrl); flashCopied(); } catch { /* буфер недоступен — ссылка есть в приглашении */ }
+    try { await navigator.clipboard.writeText(inviteUrl); flashCopied(); trackGoal("room_invite_copied", { method: "link" }); } catch { /* буфер недоступен — ссылка есть в приглашении */ }
   }, { signal });
 
   // Удаление комнаты целиком — необратимо (все сборки и история пропадают
@@ -4850,6 +4851,7 @@ async function renderRoomJoin(root, code, signal) {
     if (!res.ok) throw new Error("join failed");
     const data = await res.json();
     if (signal.aborted) return;
+    trackGoal("room_joined");
     navigate(`/room/${encodeURIComponent(data.roomId)}`);
   } catch {
     if (!signal.aborted) body.innerHTML = `<p class="state-note">${t("Приглашение не найдено или больше не действует.")}</p>`;
@@ -5156,6 +5158,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     const text = chatInput.value.trim();
     if (!text) return;
     socket.send({ type: "chat", text });
+    trackGoal("chat_message_sent");
     chatInput.value = "";
   }, { signal });
 
@@ -5562,7 +5565,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
           puzzle.moderationStatus = "pending";
           ctaText.textContent = t("Отправлено на модерацию — появится в общей библиотеке после проверки.");
           ctaBtn.remove();
-        });
+        }, "win");
       });
       publishCta.append(ctaText, ctaBtn);
     }
@@ -5836,13 +5839,22 @@ function trackPageview() {
  *  Точки: puzzle_started/puzzle_completed (renderTable/renderRoomTable —
  *  showWin; puzzle_started несёт {pieces} — реальное число деталей
  *  выбранного уровня сложности, см. вызовы), room_created (createRoomBtn),
- *  photo_submitted (заявка на публикацию — само одобрение проходит уже в
- *  Admin, откуда клиент не видит момент), photo_uploaded (uploadPuzzlePhoto
- *  — своё фото успешно загружено В КОМНАТУ, до и независимо от публикации:
- *  анонимно тоже считается, см. правку «Анонимная загрузка фото»), signed_in
- *  (init — именно возврат с /authorize, не каждая загрузка уже вошедшего),
- *  hint_used (клик по «Подсказка» на столе, несёт {mode: "edges"|"pair"} —
- *  рамка целиком, пока ничего не собрано, или обычная пара деталей). */
+ *  room_joined (renderRoomJoin — успешный POST .../join, до навигации в
+ *  саму комнату), room_invite_copied (клик по коду или по «Скопировать
+ *  ссылку» в комнате, несёт {method: "code"|"link"}), chat_message_sent
+ *  (сабмит формы чата за столом комнаты — само сообщение не пишется в цель,
+ *  только факт отправки), rating_submitted (звёздный рейтинг пазла, несёт
+ *  {value: 1..5}), photo_submitted (заявка на публикацию — само одобрение
+ *  проходит уже в Admin, откуда клиент не видит момент; несёт {source} —
+ *  через какую именно кнопку отправили: "win"/"cardMenu"/"puzzlePreview"/
+ *  "historyModal", см. openPublishModal и её вызовы — раньше все четыре
+ *  входа сливались в одну и ту же цель без разбивки), photo_uploaded
+ *  (uploadPuzzlePhoto — своё фото успешно загружено В КОМНАТУ, до и
+ *  независимо от публикации: анонимно тоже считается, см. правку
+ *  «Анонимная загрузка фото»), signed_in (init — именно возврат с
+ *  /authorize, не каждая загрузка уже вошедшего), hint_used (клик по
+ *  «Подсказка» на столе, несёт {mode: "edges"|"pair"} — рамка целиком, пока
+ *  ничего не собрано, или обычная пара деталей). */
 function trackGoal(name, params) {
   if (typeof ym === "function") ym(METRIKA_ID, "reachGoal", name, params);
 }
