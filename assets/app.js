@@ -389,6 +389,9 @@ const EN = {
   "Подсказка: рамка": "Hint: border",
   "Подсказка: пара деталей": "Hint: matching pair",
   "Не знаете, что делать дальше? Тут есть подсказки.": "Not sure what to do next? There are hints for that.",
+  "Сортировка:": "Sort:",
+  "Случайный порядок": "Random order",
+  "По рейтингу": "By rating",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -1261,6 +1264,24 @@ function filterGroupsByCategory(groups, categoryId) {
   return groups.filter(p => p.categoryId === categoryId);
 }
 
+/** «По рейтингу» (см. план «Рейтинг на карточке» → сортировка) — рейтинг
+ *  сейчас у меньшинства пазлов (см. правку «оценок пока мало»), так что
+ *  без рейтинга ВСЕГДА в хвост, а не вперемешку с оценёнными — иначе
+ *  случайно оказавшийся вверху нулевой пазл выглядел бы как баг сортировки.
+ *  Array.prototype.sort в V8 стабильна — оценённые между собой не трогает
+ *  порядок при равном среднем (сравниваем ещё и по count, больше оценок —
+ *  выше при равном среднем), а хвост без рейтинга сохраняет уже
+ *  перемешанный (см. shuffleInPlace в renderLibrary) относительный
+ *  порядок, не съезжает в исходный порядок БД. */
+function sortGroupsByRating(groups) {
+  return [...groups].sort((a, b) => {
+    if (!a.rating && !b.rating) return 0;
+    if (!a.rating) return 1;
+    if (!b.rating) return -1;
+    return b.rating.average - a.rating.average || b.rating.count - a.rating.count;
+  });
+}
+
 /** Верхний потолок стороны выше, чем у фото Trip (2000 против 1600) —
  *  картинка режется на десятки кусков и разглядывается вблизи при зуме. */
 async function shrinkForPuzzle(file) {
@@ -1988,6 +2009,20 @@ function buildCard(p, opts = {}) {
   // ей нужен t() тут: шаблон клонируется заново на каждую карточку, но
   // сам текст внутри него не подхватывает язык сам по себе.
   $(node, ".puzzle-card-play").textContent = t("За стол");
+  // Рейтинг — на самой карточке (см. план «Рейтинг на карточке»), рядом с
+  // названием в .puzzle-card-title-row: пусто, если оценок ещё нет вовсе
+  // (p.rating===null, см. server.js puzzlePayload/ratingCache) — бейдж от
+  // нуля был бы просто шумом на каждой новой карточке. Вставляем ДО
+  // playBtn (тот, если он есть — только внутри комнаты, см. ниже, — сам
+  // ещё не удалён на этом шаге), чтобы порядок в строке был «название …
+  // рейтинг [За стол]», а не вперемешку.
+  if (p.rating && p.rating.count > 0) {
+    const ratingEl = document.createElement("span");
+    ratingEl.className = "puzzle-card-rating";
+    ratingEl.title = `${p.rating.average.toFixed(1)} · ${p.rating.count} ${tn(p.rating.count, ["оценка", "оценки", "оценок"], ["rating", "ratings"])}`;
+    ratingEl.innerHTML = `★ <b>${p.rating.average.toFixed(1)}</b>`;
+    $(node, ".puzzle-card-title-row").insertBefore(ratingEl, $(node, ".puzzle-card-play"));
+  }
   const variants = p.variants || [p];
   // «N уровней сложности» убрано — у нас нет настройки доступных уровней,
   // их всегда PIECE_PRESETS.length (6) у любого пазла, показывать это на
@@ -2350,6 +2385,19 @@ async function renderLibrary(root, signal) {
     <div id="ownPhotoCtaWrap"></div>
     <div id="inProgressWrap"></div>
     <div id="categoryCarouselWrap"></div>
+    <!-- Сортировка (см. план «Рейтинг на карточке» → сортировка) — рядом с
+         категориями, не внутри самой карусели (это независимые оси: что
+         показывать vs в каком порядке). Оценок пока мало (см. правку), так
+         что «По рейтингу» — ОПЦИЯ, не замена дефолтному перемешиванию
+         (allGroups и так перетасован один раз за загрузку, см. ниже) —
+         большинству пазлов сейчас сортировать было бы не по чему. -->
+    <div class="library-sort-row" id="librarySortRow" hidden>
+      <label for="librarySortSelect">${t("Сортировка:")}</label>
+      <select class="text-input" id="librarySortSelect">
+        <option value="random">${t("Случайный порядок")}</option>
+        <option value="rating">${t("По рейтингу")}</option>
+      </select>
+    </div>
     <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">${t("Загружаем…")}</p></div>
     ${PAGER_HTML()}`;
 
@@ -2435,6 +2483,27 @@ async function renderLibrary(root, signal) {
   // выше — PAGER_HTML() идёт непосредственно за #puzzleGrid).
   const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, "#puzzleGrid + .pager"), signal);
 
+  // Сортировка — независимая от фильтра категории ось (см. разметку выше),
+  // поэтому оба состояния держим тут и пересобираем список через общий
+  // applyView() при смене любого из них, а не дублируем showPage(...) в
+  // двух местах с расходящейся логикой.
+  let activeCategoryId = null;
+  let sortMode = "random";
+  function applyView() {
+    const base = activeCategoryId === null ? allGroups : filterGroupsByCategory(allGroups, activeCategoryId);
+    showPage(sortMode === "rating" ? sortGroupsByRating(base) : base);
+  }
+  // Строку с сортировкой показываем, только если хоть у одного пазла уже
+  // есть рейтинг — иначе выбор «По рейтингу» сортировал бы пустоту (см.
+  // правку выше, «оценок пока мало»).
+  if (allGroups.some(p => p.rating)) {
+    $(root, "#librarySortRow").hidden = false;
+    $(root, "#librarySortSelect").addEventListener("change", e => {
+      sortMode = e.target.value;
+      applyView();
+    }, { signal });
+  }
+
   // Одна категория на пазл (см. план «Один пазл — одна категория») —
   // каждый пазл считается ровно в одном счётчике, некатегоризированные
   // (categoryId нет) не считаются нигде.
@@ -2460,7 +2529,8 @@ async function renderLibrary(root, signal) {
       btn.addEventListener("click", () => {
         carousel.querySelectorAll(".category-chip").forEach(chip => chip.classList.remove("is-active"));
         btn.classList.add("is-active");
-        showPage(c.id === null ? allGroups : filterGroupsByCategory(allGroups, c.id));
+        activeCategoryId = c.id;
+        applyView();
       });
       carousel.appendChild(btn);
     }
@@ -2492,7 +2562,7 @@ async function renderLibrary(root, signal) {
     window.addEventListener("resize", updateToggleVisibility, { signal });
   }
 
-  showPage(allGroups);
+  applyView();
   root.appendChild(renderCategorySuggestBox(signal));
 }
 

@@ -302,6 +302,14 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    тот же вид плашек, что у .member-chip, но крупнее и кликабельно: это
    переключатель фильтра, а не статус. */
 .category-carousel{display:flex;flex-wrap:wrap;gap:.6rem;margin-bottom:1.2rem}
+/* Сортировка — своя строка НАД сеткой (см. renderLibrary, план «Рейтинг на
+   карточке» → сортировка), отдельно от карусели категорий: это разные оси
+   (что показывать vs в каком порядке), сливать их в один ряд компонентов
+   было бы путаницей. select — .text-input, тот же язык, что у остальных
+   select-ов в проекте (см. публикацию/категории), ширина по контенту (нет
+   width:100%), тут это к месту — строка и так короткая. */
+.library-sort-row{display:flex;align-items:center;gap:.6rem;margin-bottom:1.2rem;font-size:.9rem;color:var(--md-sys-color-on-surface-variant)}
+.library-sort-row select{font-size:.88rem;padding:.4em .7em}
 .category-chip{
   flex:none;display:inline-flex;align-items:center;
   background:var(--md-sys-color-secondary-container);color:var(--md-sys-color-on-secondary-container);
@@ -393,6 +401,13 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .puzzle-card-title-row{display:flex;align-items:center;justify-content:space-between;gap:.7rem}
 .puzzle-card-title{font-size:1.05rem;font-weight:650;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .puzzle-card-meta{font-size:.85rem;color:var(--md-sys-color-on-surface-variant);flex:1}
+/* Звезда — тем же акцентом, что .star.filled на странице пазла (see выше),
+   число — обычным текстом на surface, тот же язык, что .puzzle-page-
+   rating-summary там же, просто компактнее под карточку. flex:none —
+   не сжимается, как и .puzzle-card-play рядом (title-row делит место
+   через flex:1 у самого заголовка, см. выше). */
+.puzzle-card-rating{flex:none;font-size:.85rem;font-weight:600;color:var(--flame-tip);white-space:nowrap}
+.puzzle-card-rating b{color:var(--md-sys-color-on-surface);font-weight:700}
 .puzzle-card-play{flex:none}
 /* Статус модерации своего фото (см. план «Модерация загруженных фото») —
    текстовая строка в теле карточки, не путать с .puzzle-card-badge (та —

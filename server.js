@@ -847,7 +847,24 @@ async function isDeviceBanned(deviceId) {
 // POST /internal/puzzles, так что путаницы файл↔расширение тут не бывает.
 const imageUrlFor = imageFile => imageFile.endsWith(".svg") ? `/assets/puzzles/${imageFile}` : `/uploads/${imageFile}`;
 
-function puzzlePayload(p) {
+/** ratingCache — необязательный Map (заводит и передаёт вызывающий код,
+ *  общий на весь список в одном запросе, см. вызовы puzzlePayload/.map()
+ *  ниже) — рейтинг привязан к image_file, а не к id конкретного уровня
+ *  сложности (см. схему, puzzle_ratings), и у одной фотографии обычно
+ *  несколько строк puzzles (по варианту на каждый PIECE_PRESETS) — без
+ *  кэша на список из N вариантов ушло бы N одинаковых запросов на один и
+ *  тот же image_file вместо одного. Без ratingCache поле просто всегда
+ *  null (лишнего запроса не будет) — не каждому потребителю puzzlePayload
+ *  вообще нужен рейтинг. */
+function puzzlePayload(p, ratingCache) {
+  let rating;
+  if (ratingCache) {
+    if (!ratingCache.has(p.image_file)) {
+      const s = stmt.ratingSummary.get(p.image_file);
+      ratingCache.set(p.image_file, s.n > 0 ? { average: s.avg, count: s.n } : null);
+    }
+    rating = ratingCache.get(p.image_file);
+  }
   return {
     id: p.id, title: p.title, titleEn: p.title_en || null, gridRows: p.grid_rows, gridCols: p.grid_cols,
     imageUrl: imageUrlFor(p.image_file),
@@ -863,6 +880,12 @@ function puzzlePayload(p) {
     uploaderUserId: p.uploader_user_id || null,
     uploaderUsername: p.uploader_username || null,
     uploaderName: p.uploader_name || null,
+    // На карточке в сетке (см. план «Рейтинг на карточке») — только когда
+    // есть хотя бы одна оценка (rating===null иначе, buildCard в app.js
+    // прячет бейдж целиком). Число оценок в поле тоже есть (count) — сама
+    // карточка сейчас показывает только среднее, но задел на «(N)» рядом
+    // остаётся, если понадобится позже.
+    rating: rating || null,
   };
 }
 
@@ -2190,10 +2213,11 @@ async function api(req, res, url, user) {
   const userPuzzlesMatch = seg[1] === "users" && seg[2] && seg[3] === "puzzles" && seg.length === 4 && m === "GET";
   if (userPuzzlesMatch) {
     const rows = stmt.approvedByUploader.all(seg[2]);
+    const ratingCache = new Map();
     return json(res, 200, {
       username: rows[0]?.uploader_username || null,
       name: rows[0]?.uploader_name || null,
-      puzzles: rows.map(puzzlePayload),
+      puzzles: rows.map(p => puzzlePayload(p, ratingCache)),
     });
   }
 
@@ -2210,9 +2234,11 @@ async function api(req, res, url, user) {
       // входа, если это твоя комната.
       const identity = user || getOrCreateAnonIdentity(req, res);
       if (!stmt.roomMember.get(roomId, identity.id)) return json(res, 403, { error: "not a member" });
-      return json(res, 200, stmt.puzzlesForRoom.all(roomId, roomId).map(puzzlePayload));
+      const roomRatingCache = new Map();
+      return json(res, 200, stmt.puzzlesForRoom.all(roomId, roomId).map(p => puzzlePayload(p, roomRatingCache)));
     }
-    return json(res, 200, stmt.puzzlesPublic.all().map(puzzlePayload));
+    const libraryRatingCache = new Map();
+    return json(res, 200, stmt.puzzlesPublic.all().map(p => puzzlePayload(p, libraryRatingCache)));
   }
 
   // Загрузка своего фото и генерация пазла из него — см. README «Свои фото».
@@ -2487,7 +2513,12 @@ async function api(req, res, url, user) {
         };
       }
     }
-    return json(res, 200, { puzzle: puzzlePayload(puzzle), variants: variants.map(puzzlePayload), myStats });
+    const pageRatingCache = new Map();
+    return json(res, 200, {
+      puzzle: puzzlePayload(puzzle, pageRatingCache),
+      variants: variants.map(p => puzzlePayload(p, pageRatingCache)),
+      myStats,
+    });
   }
 
   if (seg[1] === "rooms") {
