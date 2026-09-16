@@ -159,6 +159,17 @@
         <span class="bh-service">Что собираем?</span>
       </a>
     </div>
+    <!-- Публикация своего фото (см. renderPublishPage) — слева, сразу за
+         логотипом, а не в ряду значков справа: это единственное в шапке
+         ДЕЙСТВИЕ, остальное — переходы по разделам, и среди одинаковых
+         иконок оно терялось. До неё путь «выложить своё» находил только
+         тот, кто забрёл в чужой профиль. Гостя тоже пускаем — страница
+         сама встретит его плашкой про вход (прятать кнопку значило бы
+         скрывать саму возможность от тех, кто ещё не завёл аккаунт). -->
+    <a class="btn filled sm appbar-publish" href="/publish" title="Опубликовать свой пазл" aria-label="Опубликовать свой пазл">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="3.2"/><path d="M12 10.4v5.2M9.4 13h5.2"/></svg>
+      <span id="appbarPublishText">Опубликовать</span>
+    </a>
     <div class="spacer"></div>
     <!-- Кнопка «Установить как приложение» — прячется по умолчанию, показывается
          только когда браузер реально прислал beforeinstallprompt (Chrome/Edge
@@ -181,6 +192,9 @@
     <div class="menu-wrap" id="accountMenuWrap">
       <button class="icon-btn" id="accountBtn" title="Аккаунт" aria-label="Аккаунт" aria-haspopup="dialog">
         <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.5-7 8-7s8 3 8 7"/></svg>
+        <!-- Непрочитанные уведомления (см. refreshNotificationsBadge в app.js) —
+             видны, не открывая модалку; у гостя всегда скрыт. -->
+        <span class="appbar-notif-badge" id="accountBadge" hidden></span>
       </button>
     </div>
   </div>
@@ -628,6 +642,14 @@
       <div id="publishLibraryCategories"></div>
       <input class="text-input" id="publishNewCategoryName" type="text" maxlength="80" placeholder="Предложить новую категорию (пойдёт на модерацию) — необязательно">
     </div>
+    <!-- Письмо о результате модерации — по желанию (см. правку «Галочка про
+         письмо»). Уведомление в аккаунте приходит в любом случае, поэтому
+         снятая галочка не оставляет человека без ответа, см. notifyPublishOutcome
+         в server.js. -->
+    <label class="publish-notify-check">
+      <input type="checkbox" id="publishNotifyEmail" checked>
+      <span id="publishNotifyEmailText">Прислать результат письмом</span>
+    </label>
     <button class="btn filled" id="publishConfirmBtn" type="button">Отправить на модерацию</button>
     <p class="state-note" id="publishError" hidden></p>
   </div>

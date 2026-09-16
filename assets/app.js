@@ -426,11 +426,11 @@ const EN = {
   "Слишком много заявок ждут проверки — дождитесь результата по предыдущим.":
     "Too many submissions are awaiting review — wait for the earlier ones first.",
   "Загрузка с этого устройства недоступна.": "Uploads from this device are not available.",
-  "Не удалось отправить — попробуйте ещё раз.": "Couldn't submit — please try again.",
   "Хотите опубликовать свой пазл?": "Want to publish your own puzzle?",
   "Загрузите фотографию — после проверки модератором она станет пазлом в общей библиотеке, и собрать его смогут все. Комната для этого не нужна.":
     "Upload a photo — after a moderator approves it, it becomes a puzzle in the shared library for everyone. No room needed.",
   "Опубликовать пазл": "Publish a puzzle",
+  "Прислать результат письмом": "Email me the outcome",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -492,6 +492,8 @@ function applyStaticTranslations() {
   byId("publishModalTitle", el => { el.textContent = t("Опубликовать в общую библиотеку"); });
   byId("publishConfirmBtn", el => { el.textContent = t("Отправить на модерацию"); });
   byId("publishNewCategoryName", el => { el.placeholder = t("Предложить новую категорию (пойдёт на модерацию) — необязательно"); });
+  byId("appbarPublishText", el => { el.textContent = t("Опубликовать"); });
+  byId("publishNotifyEmailText", el => { el.textContent = t("Прислать результат письмом"); });
   document.querySelectorAll('.modal-backdrop .icon-btn[aria-label="Закрыть"]').forEach(el => { el.setAttribute("aria-label", t("Закрыть")); });
 
   // Футер — вне #app, живёт постоянно (см. план «Футер»).
@@ -1118,6 +1120,11 @@ async function openPublishModal(id, title, onDone, source) {
   const list = document.getElementById("publishCategoryList");
   list.innerHTML = [...PROHIBITED_TIER_A, ...PROHIBITED_TIER_B].map(c => `<li>${t(c)}</li>`).join("");
   document.getElementById("publishConsent").checked = false;
+  // Галочка про письмо — тоже сбрасывается к умолчанию на каждое открытие:
+  // модалка одна на все публикации (см. комментарий про pendingPublishId
+  // выше), иначе снятая в прошлый раз незаметно перенеслась бы на следующее
+  // фото.
+  document.getElementById("publishNotifyEmail").checked = true;
   document.getElementById("publishNewCategoryName").value = "";
   document.getElementById("publishError").hidden = true;
   // Категория — одиночный выбор через <select> (см. план «Один пазл — одна
@@ -1154,10 +1161,11 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
   const categorySelect = document.getElementById("publishCategorySelect");
   const categoryId = categorySelect ? categorySelect.value : "";
   const newCategoryName = document.getElementById("publishNewCategoryName").value.trim();
+  const notifyEmail = document.getElementById("publishNotifyEmail").checked;
   const btn = document.getElementById("publishConfirmBtn");
   btn.disabled = true;
   try {
-    await publishPuzzle(id, { categoryId, newCategoryName });
+    await publishPuzzle(id, { categoryId, newCategoryName, notifyEmail });
     trackGoal("photo_submitted", { source: source || "unknown" });
     closeModal("publishModalBackdrop");
     pendingPublishId = null;
@@ -1382,7 +1390,7 @@ async function uploadPuzzlePhoto(file, title, roomId) {
  *  настоящего входа (auth.fetch, не roomFetch): публикация анониму недоступна
  *  и раньше. Согласие тут одно, но СТРОГОЕ — форма показывает полный список
  *  (TIER_A + TIER_B), как и модалка публикации. */
-async function uploadAndPublishPhoto(file, title, { categoryId, newCategoryName } = {}) {
+async function uploadAndPublishPhoto(file, title, { categoryId, newCategoryName, notifyEmail } = {}) {
   const { blob, width, height } = await shrinkForPuzzle(file);
   // Без подстановки «Мой пазл», как у загрузки в комнату: для публикации
   // название обязательно (см. server.js, «title required») — дефолт тут
@@ -1391,6 +1399,9 @@ async function uploadAndPublishPhoto(file, title, { categoryId, newCategoryName 
   const qs = new URLSearchParams({ w: String(width), h: String(height), title, consent: "1", publish: "1" });
   if (categoryId) qs.set("categoryId", categoryId);
   if (newCategoryName) qs.set("newCategoryName", newCategoryName);
+  // Отправляем параметр только при отказе от письма: на сервере колонка по
+  // умолчанию 1, и «ничего не прислали» = «как обычно, письмом».
+  if (notifyEmail === false) qs.set("notifyEmail", "0");
   const res = await auth.fetch(`/api/puzzles?${qs}`, {
     method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
   });
@@ -1429,10 +1440,17 @@ async function deletePuzzle(id) {
 /** Отправка своего фото на публикацию в общую библиотеку (см. план
  *  «Модерация загруженных фото») — отдельное, более строгое согласие, не то
  *  же самое, что consent=1 при обычной загрузке в комнату. */
-async function publishPuzzle(id, { categoryId, newCategoryName } = {}) {
+async function publishPuzzle(id, { categoryId, newCategoryName, notifyEmail } = {}) {
   const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}/publish`, {
     method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ consent: true, categoryId: categoryId || undefined, newCategoryName: newCategoryName || undefined }),
+    body: JSON.stringify({
+      consent: true,
+      categoryId: categoryId || undefined,
+      newCategoryName: newCategoryName || undefined,
+      // false — явный отказ от письма (см. правку «Галочка про письмо»);
+      // undefined оставляет серверное поведение по умолчанию (письмо шлём).
+      notifyEmail: notifyEmail === false ? false : undefined,
+    }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "publish failed");
@@ -1935,24 +1953,53 @@ document.getElementById("feedbackForm").addEventListener("submit", async e => {
  *  начинается на "puzzle.") — уведомления других сервисов эта вкладка не
  *  трогает и не помечает прочитанными, у каждого сервиса своя срезка
  *  одного общего списка (см. Auth/INTEGRATION.md, соглашение о префиксах). */
-async function loadAccountNotifications() {
-  const list = document.getElementById("accountNotificationsList");
-  const badge = document.getElementById("accountNotificationsBadge");
-  list.innerHTML = `<p class="state-note">${t("Загрузка…")}</p>`;
-  let all;
+/** Уведомления этого сервиса (см. план «Системные уведомления Auth →
+ *  Puzzle») — общий канал Auth, поэтому фильтруем по префиксу типа: чужие
+ *  уведомления Puzzle не показывает и не трогает. Возвращает null при любой
+ *  ошибке — вызывающий сам решает, показывать сообщение (модалка) или молча
+ *  оставить всё как есть (бейдж в шапке). */
+async function fetchPuzzleNotifications() {
   try {
     const res = await auth.fetch(`${auth.authBase}/api/notifications`);
     if (!res.ok) throw new Error("bad status");
-    all = (await res.json()).notifications || [];
+    return ((await res.json()).notifications || []).filter(n => n.type.startsWith("puzzle."));
   } catch {
+    return null;
+  }
+}
+
+/** Счётчик непрочитанных — сразу в двух местах: кружок на кнопке аккаунта в
+ *  шапке (виден всегда, ради него всё и затевалось) и бейдж у заголовка
+ *  «Уведомления» внутри модалки. Держим их одной функцией, чтобы они не
+ *  разъезжались: модалка умеет пометить прочитанным, шапка про это узнаёт
+ *  только отсюда. */
+function setNotificationsCount(unreadCount) {
+  for (const id of ["accountBadge", "accountNotificationsBadge"]) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.hidden = !unreadCount;
+    el.textContent = unreadCount > 9 ? "9+" : String(unreadCount || "");
+  }
+}
+
+/** Обновляет ТОЛЬКО счётчик, не трогая список в модалке — для шапки: её
+ *  цифра нужна и до того, как модалку хоть раз открыли. Гостю считать
+ *  нечего (уведомления привязаны к аккаунту), запрос не шлём вовсе. */
+async function refreshNotificationsBadge() {
+  if (!auth || !auth.isAuthenticated()) return setNotificationsCount(0);
+  const mine = await fetchPuzzleNotifications();
+  if (mine) setNotificationsCount(mine.filter(n => !n.readAt).length);
+}
+
+async function loadAccountNotifications() {
+  const list = document.getElementById("accountNotificationsList");
+  list.innerHTML = `<p class="state-note">${t("Загрузка…")}</p>`;
+  const mine = await fetchPuzzleNotifications();
+  if (!mine) {
     list.innerHTML = `<p class="state-note">${t("Не удалось загрузить уведомления.")}</p>`;
-    badge.hidden = true;
     return;
   }
-  const mine = all.filter(n => n.type.startsWith("puzzle."));
-  const unreadCount = mine.filter(n => !n.readAt).length;
-  if (unreadCount > 0) { badge.hidden = false; badge.textContent = unreadCount > 9 ? "9+" : String(unreadCount); }
-  else badge.hidden = true;
+  setNotificationsCount(mine.filter(n => !n.readAt).length);
   if (!mine.length) {
     list.innerHTML = `<p class="state-note">${t("Нет уведомлений")}</p>`;
     return;
@@ -1975,7 +2022,12 @@ async function loadAccountNotifications() {
     }
     if (unread) {
       item.addEventListener("click", () => {
-        auth.fetch(`${auth.authBase}/api/notifications/${encodeURIComponent(n.id)}/read`, { method: "POST" }).catch(() => {});
+        // Цифру в шапке пересчитываем ПОСЛЕ ответа сервера, а не оптимистично:
+        // прочитанность живёт в Auth, и если запрос не дошёл, честнее оставить
+        // счётчик прежним, чем показать ноль, который не сохранился.
+        auth.fetch(`${auth.authBase}/api/notifications/${encodeURIComponent(n.id)}/read`, { method: "POST" })
+          .then(() => refreshNotificationsBadge())
+          .catch(() => {});
       }, { once: true });
     }
     list.appendChild(item);
@@ -2706,6 +2758,13 @@ async function renderPublishPage(root, signal) {
     <div id="publishPageBody"></div>`;
   const body = $(root, "#publishPageBody");
 
+  // Верх воронки публикации (см. trackGoal ниже): само открытие страницы —
+  // отдельная цель от photo_submitted, иначе видно только тех, кто дошёл до
+  // конца, и не видно, сколько людей вообще заинтересовалось. state
+  // разделяет «увидел форму» и «упёрся в плашку про вход» — если гостей
+  // много, значит теряем их именно на входе, а не на самой форме.
+  trackGoal("publish_page_opened", { state: auth.isAuthenticated() ? "form" : "guest" });
+
   // Гостю — не форма, а честная плашка про вход (сервер всё равно отобьёт
   // 401, см. POST /api/puzzles?publish=1): дать заполнить всё и уронить на
   // отправке было бы худшим из вариантов. Карточкой в стиле остальной
@@ -2784,6 +2843,11 @@ async function renderPublishPage(root, signal) {
         </label>
       </div>
 
+      <label class="publish-notify-check">
+        <input type="checkbox" id="publishPageNotifyEmail" checked>
+        <span>${t("Прислать результат письмом")}</span>
+      </label>
+
       <button class="btn filled publish-submit" type="submit">${t("Отправить на модерацию")}</button>
       <p class="state-note publish-error" id="publishPageError" hidden></p>
     </form>`;
@@ -2850,6 +2914,7 @@ async function renderPublishPage(root, signal) {
       await uploadAndPublishPhoto(file, title, {
         categoryId: $(form, "#publishPageCategory")?.value || "",
         newCategoryName: $(form, "#publishPageNewCategory").value.trim(),
+        notifyEmail: $(form, "#publishPageNotifyEmail").checked,
       });
       if (signal.aborted) return;
       const userId = auth.getUser()?.id;
@@ -6288,7 +6353,11 @@ function trackPageview() {
  *  проходит уже в Admin, откуда клиент не видит момент; несёт {source} —
  *  через какую именно кнопку отправили: "win"/"cardMenu"/"puzzlePreview"/
  *  "historyModal", см. openPublishModal и её вызовы — раньше все четыре
- *  входа сливались в одну и ту же цель без разбивки), photo_uploaded
+ *  входа сливались в одну и ту же цель без разбивки; у прямой публикации
+ *  без комнаты source="directPublish"), publish_page_opened (открытие
+ *  страницы /publish — верх той же воронки, несёт {state:"form"|"guest"}:
+ *  показали форму или плашку «нужен вход», см. renderPublishPage),
+ *  photo_uploaded
  *  (uploadPuzzlePhoto — своё фото успешно загружено В КОМНАТУ, до и
  *  независимо от публикации: анонимно тоже считается, см. правку
  *  «Анонимная загрузка фото»), signed_in (init — именно возврат с
@@ -6389,6 +6458,11 @@ async function init() {
   const loggedIn = await auth.handleRedirect();
   if (loggedIn) trackGoal("signed_in");
   renderAuthArea();
+  // Цифра на кнопке аккаунта — сразу при загрузке, не дожидаясь, пока
+  // человек откроет модалку: ради этого бейдж и нужен. Не await — своя
+  // независимая загрузка, задерживать из-за неё первый рендер страницы
+  // незачем (гостю запрос вообще не уходит, см. refreshNotificationsBadge).
+  refreshNotificationsBadge();
   const returnTo = loggedIn && sessionStorage.getItem("puzzle_return_to");
   if (returnTo) {
     sessionStorage.removeItem("puzzle_return_to");

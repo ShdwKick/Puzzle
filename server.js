@@ -288,6 +288,14 @@ try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_name TEXT"); } catch {}
 // не уходит, без ошибки.
 try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_email TEXT"); } catch {}
 
+// Хочет ли автор письмо о результате модерации (см. правку «Галочка про
+// письмо») — 1 по умолчанию, чтобы поведение уже загруженного не менялось
+// задним числом. Уведомление в аккаунте (Admin → Auth /internal/notifications,
+// см. notify в ответах approve/reject) приходит ВСЕГДА и от этого флага не
+// зависит: флаг выключает только письмо, а не сам факт «вам ответили». Как и
+// остальные атрибуты загрузки, живёт на всей группе (image_file) одинаково.
+try { db.exec("ALTER TABLE puzzles ADD COLUMN notify_email INTEGER NOT NULL DEFAULT 1"); } catch {}
+
 // Фоновая модерация ЗАГРУЗКИ В КОМНАТУ (см. тот же план) — отдельная от
 // moderation_status выше, который целиком про ПУБЛИКАЦИЮ в общую
 // библиотеку. Правила разные: своя фотография в комнате видна сразу же
@@ -582,6 +590,11 @@ const stmt = {
   // (image_file), не по строкам: один аплоад заводит PIECE_PRESETS строк, но
   // для модератора это одна карточка (см. MAX_PENDING_PUBLISH_PER_USER).
   pendingPublishCountByUploader: db.prepare("SELECT COUNT(DISTINCT image_file) AS n FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'pending'"),
+  // Выбор «письмо или только уведомление» делается в момент ОТПРАВКИ на
+  // публикацию, а не загрузки: у фото из комнаты строки уже вставлены, флаг
+  // проставляется отдельным UPDATE'ом по группе (как и всё остальное, что
+  // общее у вариантов сложности одной картинки).
+  setNotifyEmail: db.prepare("UPDATE puzzles SET notify_email = ? WHERE image_file = ?"),
 
   insertFeedback: db.prepare(`INSERT INTO feedback (id,message,contact,user_id,username,page_url,created_at) VALUES (?,?,?,?,?,?,?)`),
   // LIMIT 200 — тот же приём, что у /internal/rooms ниже: Admin показывает
@@ -946,6 +959,12 @@ function puzzlePayload(p, ratingCache) {
  *  room_id именно из этого снимка). Fire-and-forget — не блокирует ответ
  *  админу и не роняет запрос при сбое почты, только логирует. */
 function notifyPublishOutcome(puzzle, outcome, reason) {
+  // notify_email = 0 — автор при отправке снял галочку «прислать письмом»
+  // (см. правку «Галочка про письмо»): результат он всё равно увидит
+  // уведомлением в аккаунте (его создаёт Admin через Auth, см. notify в
+  // ответах approve/reject — от этого флага оно не зависит), письма просто
+  // не будет. Старые строки — 1 по умолчанию, поведение не меняется.
+  if (!puzzle.notify_email) return;
   if (!puzzle.uploader_email) return;
   const mail = outcome === "approved"
     ? mailTpl.publishApproved({ title: puzzle.title, link: `${PUBLIC_URL}/profile/${encodeURIComponent(puzzle.uploader_user_id)}` })
@@ -2409,8 +2428,14 @@ async function api(req, res, url, user) {
       return puzzlePayload(stmt.puzzle.get(id));
     });
     if (directPublish) {
-      adminLog.info("Фото загружено сразу на публикацию (без комнаты)", { userId: identity.id, title, categoryId: directCategoryId, newCategory: directNewCategory, variants: variants.length });
-      return json(res, 200, { title, variants, moderationStatus: "pending" });
+      // Письмо о результате — по галочке (см. правку «Галочка про письмо»);
+      // notifyEmail=0 её снимает, всё остальное (включая уведомление в
+      // аккаунте) не меняется. Колонка по умолчанию 1, поэтому пишем только
+      // при явном отказе.
+      const wantsEmail = url.searchParams.get("notifyEmail") !== "0";
+      if (!wantsEmail) stmt.setNotifyEmail.run(0, file);
+      adminLog.info("Фото загружено сразу на публикацию (без комнаты)", { userId: identity.id, title, categoryId: directCategoryId, newCategory: directNewCategory, variants: variants.length, notifyEmail: wantsEmail });
+      return json(res, 200, { title, variants, moderationStatus: "pending", notifyEmail: wantsEmail });
     }
     adminLog.info("Загружено своё фото", { userId: identity.id, roomId, title, variants: variants.length });
     return json(res, 200, { title, variants });
@@ -2458,8 +2483,15 @@ async function api(req, res, url, user) {
     if (cat.error) return json(res, 400, { error: cat.error });
     setPuzzleCategory(puzzle.image_file, cat.categoryId);
 
+    // Письмо о результате — по галочке (см. правку «Галочка про письмо»),
+    // тот же выбор, что и у прямой публикации. Пишем всегда, а не только при
+    // отказе, как там: это ПЕРЕотправка тоже может быть (после rejected), и
+    // прошлый выбор не должен молча переезжать на новую заявку.
+    const wantsEmail = body.notifyEmail !== false;
+    stmt.setNotifyEmail.run(wantsEmail ? 1 : 0, puzzle.image_file);
+
     stmt.setModerationPending.run(puzzle.image_file);
-    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, categoryId: cat.categoryId, newCategory: cat.newCategory });
+    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, categoryId: cat.categoryId, newCategory: cat.newCategory, notifyEmail: wantsEmail });
     return json(res, 200, { ok: true, moderationStatus: "pending" });
   }
 

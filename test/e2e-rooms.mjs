@@ -1441,6 +1441,37 @@ ok("письмо-отказ залогировано мейлером", await wa
 ok("reject отдаёт uploaderUserId — совпадает с автором загрузки", rejectBody.uploaderUserId === jwtSubMail, JSON.stringify(rejectBody));
 ok("reject отдаёт notify.type с префиксом сервиса и причину в body", rejectBody.notify && rejectBody.notify.type === "puzzle.photo_rejected" && rejectBody.notify.body === "тестовая причина отказа", JSON.stringify(rejectBody.notify));
 
+// ───────── галочка «прислать письмом» (см. правку «Галочка про письмо») —
+// снятая отключает ТОЛЬКО письмо, пакет для уведомления в аккаунте
+// (Admin → Auth) обязан остаться на месте ─────────
+const NO_MAIL_TITLE = "Фото без письма (тест)";
+ur = await callRaw(tokenMail, `/puzzles?roomId=${mailRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent(NO_MAIL_TITLE)}`, fakePng, "image/png");
+const uploadNoMail = await ur.json();
+const noMailId = uploadNoMail.variants[0].id;
+r = await asJson(tokenMail, `/puzzles/${noMailId}/publish`, { method: "POST", body: { consent: true, notifyEmail: false } });
+ok("публикация с notifyEmail:false — 200", r.status === 200, JSON.stringify(r.body));
+
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${noMailId}/approve`, { method: "POST" });
+const noMailApprove = await ir.json();
+ok("Admin одобрил её — 200", ir.status === 200, String(ir.status));
+// Ищем именно ТЕМУ письма, а не само название: название засветится в логе и
+// без всякой почты — его пишет adminLog при приёме заявки (на это уже
+// наступили: первая версия проверки падала именно из-за этого).
+ok("письма при снятой галочке НЕ было",
+  !(await waitForLog("puzzle", `«${NO_MAIL_TITLE}» опубликовано в библиотеке`, 1500)),
+  "тема письма нашлась в логе, хотя галочку сняли");
+ok("но пакет уведомления в аккаунт остался", noMailApprove.notify && noMailApprove.notify.type === "puzzle.photo_approved", JSON.stringify(noMailApprove.notify));
+
+// И обратная сторона: галочка не «залипает» между заявками — следующая
+// публикация того же человека без явного notifyEmail снова шлёт письмо.
+const MAIL_AGAIN_TITLE = "Фото снова с письмом (тест)";
+ur = await callRaw(tokenMail, `/puzzles?roomId=${mailRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent(MAIL_AGAIN_TITLE)}`, fakePng, "image/png");
+const mailAgainId = (await ur.json()).variants[0].id;
+await asJson(tokenMail, `/puzzles/${mailAgainId}/publish`, { method: "POST", body: { consent: true } });
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${mailAgainId}/approve`, { method: "POST" });
+ok("следующая заявка без галочки снова шлёт письмо",
+  await waitForLog("puzzle", `«${MAIL_AGAIN_TITLE}» опубликовано в библиотеке`), "тема письма не найдена в логе puzzle");
+
 // ───────── прогресс: bulk-список для «Продолжить сборку» над библиотекой
 // (см. план «Продолжить сборку») ─────────
 r = await asJson(tokenA, "/puzzles/progress");

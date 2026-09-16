@@ -47,6 +47,35 @@ a{color:inherit}
   border-bottom:1px solid var(--md-sys-color-outline-variant)}
 .appbar-inner{max-width:76rem;height:100%;margin:0 auto;padding:0 1.1rem;display:flex;align-items:center;gap:1rem}
 .spacer{flex:1}
+/* Кнопка публикации в шапке (см. index.html) — текстовая, а не иконка:
+   единственное действие в шапке, которое иначе терялось бы среди одинаковых
+   значков. На узких экранах подпись прячем и оставляем кружок с иконкой:
+   рядом лежит лого с названием сервиса, и кнопка с текстом выдавливала бы
+   остальную навигацию за край. */
+/* Цифра непрочитанных на кнопке аккаунта. Сидит ВНУТРИ границ кнопки, а не
+   свешивается за угол, как это обычно делают: у .icon-btn стоит
+   overflow:hidden (ради собственной круглой подсветки), и вылезающий бейдж
+   она бы просто обрезала. pointer-events:none — чтобы цифра не перехватывала
+   клик по самой кнопке. Красный — тот же, что у бейджа в модалке
+   (.account-notif-badge), это один и тот же счётчик в двух местах. */
+.appbar-notif-badge{
+  position:absolute;top:.3rem;right:.3rem;min-width:1.05rem;height:1.05rem;padding:0 .25rem;
+  border-radius:var(--md-sys-shape-corner-full);
+  background:var(--md-sys-color-error);color:var(--md-sys-color-on-error);
+  font-size:.66rem;font-weight:800;line-height:1.05rem;text-align:center;pointer-events:none;
+}
+.appbar-notif-badge[hidden]{display:none}
+.appbar-publish{flex:none;white-space:nowrap}
+.appbar-publish .icon{width:1.1rem;height:1.1rem}
+@media(max-width:34rem){
+  .appbar-publish{padding:.5em;border-radius:50%}
+  .appbar-publish #appbarPublishText{display:none}
+  /* Даже свёрнутая в кружок кнопка шире обычной .icon-btn (у неё своя
+     заливка и паддинги) — на 375px шапка из-за неё переставала помещаться и
+     срезала иконку аккаунта у правого края. Поджимаем шаг и поля самой
+     шапки: это дешевле, чем прятать что-то из навигации. */
+  .appbar-inner{gap:.45rem;padding:0 .7rem}
+}
 .auth-area{display:flex;align-items:center;gap:.6rem}
 .auth-user{display:flex;align-items:center;gap:.5rem;font-size:.92rem}
 .auth-user-name{font-weight:600}
@@ -218,6 +247,12 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   padding:.6em 1.3em;font-weight:600;font-size:.92rem;cursor:pointer;
   transition:transform .15s var(--ease-std),box-shadow .15s var(--ease-std),background-color .15s var(--ease-std);
   white-space:nowrap;
+  /* .btn вешается и на <a> (кнопка публикации в шапке, «Опубликовать пазл»
+     на профиле, «Страница пазла» в истории) — браузер подчёркивает такие
+     ссылки по умолчанию, и кнопка выглядела кнопкой с подчёркнутой
+     надписью. Отдельные компоненты гасили это у себя поштучно; правило
+     принадлежит самой .btn — подчёркнутых кнопок не бывает. */
+  text-decoration:none;
 }
 /* .btn{display:inline-flex} у автора-стиля перебивает встроенное правило
    браузера [hidden]{display:none} (то же имя специфичности — выигрывает тот,
@@ -1354,6 +1389,13 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .publish-consent-list{display:block;columns:2;column-gap:1.6rem}
 .publish-consent-list li{margin-bottom:.15rem;break-inside:avoid}
 @media(max-width:36rem){.publish-consent-list{columns:1}}
+/* Галочка про письмо (см. правку «Галочка про письмо») — намеренно НЕ в
+   стиле .upload-consent-check: та крупная и акцентная, потому что ей человек
+   берёт на себя ответственность за контент; эта же — обычная настройка
+   доставки, и выглядеть как второе юридическое согласие ей не нужно. Есть и
+   в модалке публикации, и на странице — стиль общий. */
+.publish-notify-check{display:flex;align-items:flex-start;gap:.55rem;font-size:.86rem;cursor:pointer}
+.publish-notify-check input{margin-top:.15rem;flex:none;width:1rem;height:1rem;accent-color:var(--flame-tip);cursor:pointer}
 .publish-submit{align-self:flex-start;padding-inline:1.8rem}
 .publish-error{padding:0;text-align:left;color:var(--md-sys-color-error)}
 /* <select> под тем же классом (модалка выбора сложности, #difficultySelect)
