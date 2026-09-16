@@ -430,6 +430,8 @@ const EN = {
   "Загрузите фотографию — после проверки модератором она станет пазлом в общей библиотеке, и собрать его смогут все. Комната для этого не нужна.":
     "Upload a photo — after a moderator approves it, it becomes a puzzle in the shared library for everyone. No room needed.",
   "Опубликовать пазл": "Publish a puzzle",
+  "Своя фотография? Теперь её можно опубликовать отсюда — отдельная комната для этого больше не нужна.":
+    "Got your own photo? You can publish it right from here now — no separate room needed.",
   "Прислать результат письмом": "Email me the outcome",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
@@ -2485,6 +2487,11 @@ function renderCategorySuggestBox(signal) {
   return section;
 }
 
+/** Выбранная сортировка библиотеки (см. renderLibrary) — тот же приём и то
+ *  же именование, что у остальных запоминаемых состояний интерфейса
+ *  (puzzle_tools_collapsed и компания, см. bindCollapsibleCluster). */
+const LIBRARY_SORT_KEY = "puzzle_library_sort";
+
 async function renderLibrary(root, signal) {
   // Тот же текст, что в index.html — статичная заглушка ДО отработки JS
   // (см. план «SEO», комментарий там же) — расхождение тут читалось бы
@@ -2607,7 +2614,13 @@ async function renderLibrary(root, signal) {
   // applyView() при смене любого из них, а не дублируем showPage(...) в
   // двух местах с расходящейся логикой.
   let activeCategoryId = null;
-  let sortMode = "random";
+  // Выбранная сортировка переживает уходы со страницы (см. правку «Запоминать
+  // сортировку»): зашёл в пазл, вернулся назад — порядок тот же, что выбрал.
+  // localStorage, а не переменная модуля: тем же способом уже хранятся
+  // состояния свёрнутых кластеров на столе (см. bindCollapsibleCluster), и
+  // так выбор переживает ещё и перезагрузку вкладки. Чужое/испорченное
+  // значение в хранилище молча игнорируем — берём только заведомо известные.
+  let sortMode = localStorage.getItem(LIBRARY_SORT_KEY) === "rating" ? "rating" : "random";
   function applyView() {
     const base = activeCategoryId === null ? allGroups : filterGroupsByCategory(allGroups, activeCategoryId);
     showPage(sortMode === "rating" ? sortGroupsByRating(base) : base);
@@ -2617,10 +2630,21 @@ async function renderLibrary(root, signal) {
   // правку выше, «оценок пока мало»).
   if (allGroups.some(p => p.rating)) {
     $(root, "#librarySortRow").hidden = false;
-    $(root, "#librarySortSelect").addEventListener("change", e => {
+    const select = $(root, "#librarySortSelect");
+    // Восстановленный режим обязательно отражаем в самой выпадайке: иначе
+    // список уже отсортирован по рейтингу, а контрол показывает «Случайный
+    // порядок» — и человек видит расхождение, которое сам не выбирал.
+    select.value = sortMode;
+    select.addEventListener("change", e => {
       sortMode = e.target.value;
+      localStorage.setItem(LIBRARY_SORT_KEY, sortMode);
       applyView();
     }, { signal });
+  } else if (sortMode !== "random") {
+    // Оценок в библиотеке не осталось вовсе — строку не показываем, а
+    // значит и переключить режим обратно негде: молча возвращаемся к
+    // случайному порядку, чтобы сохранённый выбор не работал вслепую.
+    sortMode = "random";
   }
 
   // Одна категория на пазл (см. план «Один пазл — одна категория») —
@@ -2683,6 +2707,10 @@ async function renderLibrary(root, signal) {
 
   applyView();
   root.appendChild(renderCategorySuggestBox(signal));
+  // ВРЕМЕННО, пока про кнопку публикации в шапке никто не знает (см.
+  // onboarding.js, maybeShowHeaderPublishHint) — одноразовый пузырь у самой
+  // кнопки. Удаляется вместе с той функцией, когда перестанет быть нужен.
+  maybeShowHeaderPublishHint(signal);
 }
 
 /** Профиль пользователя (см. план «Категории many-to-many, автор карточки,

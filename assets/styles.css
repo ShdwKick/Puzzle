@@ -343,6 +343,11 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    было бы путаницей. select — .text-input, тот же язык, что у остальных
    select-ов в проекте (см. публикацию/категории), ширина по контенту (нет
    width:100%), тут это к месту — строка и так короткая. */
+/* Та же ловушка, что у .puzzle-page-author-badge ниже: строка по умолчанию
+   помечена hidden и раскрывается, только если хоть у одного пазла есть
+   оценка (см. renderLibrary), но display:flex перебивал бы атрибут — и
+   пустая сортировка висела бы на странице всегда. */
+.library-sort-row[hidden]{display:none}
 .library-sort-row{display:flex;align-items:center;gap:.6rem;margin-bottom:1.2rem;font-size:.9rem;color:var(--md-sys-color-on-surface-variant)}
 .library-sort-row select{font-size:.88rem;padding:.4em .7em}
 .category-chip{
@@ -1137,6 +1142,12 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    странице пазла места достаточно для полноценной плашки, в отличие от
    карточки/превью-модалки (там остался прежний .puzzle-card-author,
    тонкая подпись-ссылка). */
+/* [hidden] обязан побеждать display:inline-flex — иначе у пазла БЕЗ автора
+   (встроенный/добавленный через Admin, uploaderUsername пустой) бейдж
+   остаётся на странице пустой плашкой: сам элемент всегда в разметке, его
+   прячет атрибут (см. renderPuzzlePage). Те же грабли уже ловили на
+   .btn[hidden] и на состояниях зоны загрузки. */
+.puzzle-page-author-badge[hidden]{display:none}
 .puzzle-page-author-badge{
   display:inline-flex;align-items:center;gap:.4em;align-self:flex-start;
   padding:.32em .8em .32em .55em;border-radius:var(--md-sys-shape-corner-full);

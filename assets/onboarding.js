@@ -357,14 +357,23 @@ function maybeShowPublishHint(cardEl, signal) {
 function showPublishHint(btn) {
   if (!shown(btn)) return;
   localStorage.setItem(PUBLISH_HINT_KEY, "1");
+  showHintBubble(btn, t("Понравился результат? Нажмите «⋮» на карточке — там можно опубликовать пазл в общую библиотеку."));
+}
+
+/** Сам пузырь: разметка, позиционирование и все способы его закрыть (крестик,
+ *  клик мимо, клик по самой кнопке, таймаут, плюс перепозиционирование на
+ *  resize). Вынесено из showPublishHint, когда таких подсказок стало больше
+ *  одной — раз уж они отличаются только текстом и ключом в localStorage.
+ *  placement — как у positionTableHint. */
+function showHintBubble(btn, text, placement) {
   const hint = document.createElement("div");
   hint.className = "table-hint";
   hint.setAttribute("role", "status");
   hint.innerHTML =
     `<button class="table-hint-close" type="button" aria-label="${t("Закрыть")}">&times;</button>` +
-    `<p>${t("Понравился результат? Нажмите «⋮» на карточке — там можно опубликовать пазл в общую библиотеку.")}</p>`;
+    `<p>${text}</p>`;
   document.body.appendChild(hint);
-  positionTableHint(hint, btn);
+  positionTableHint(hint, btn, placement);
 
   const close = () => {
     hint.remove();
@@ -373,10 +382,35 @@ function showPublishHint(btn) {
     clearTimeout(autoTimer);
   };
   const onOutside = e => { if (!hint.contains(e.target) && e.target !== btn) close(); };
-  const onResize = () => positionTableHint(hint, btn);
+  const onResize = () => positionTableHint(hint, btn, placement);
   document.addEventListener("pointerdown", onOutside, true);
   addEventListener("resize", onResize);
   hint.querySelector(".table-hint-close").addEventListener("click", close);
   btn.addEventListener("click", close, { once: true });
   const autoTimer = setTimeout(close, 8000);
+}
+
+/**
+ * ВРЕМЕННАЯ подсказка к кнопке «Опубликовать» в шапке (см. правку «Подсказка
+ * к кнопке публикации»): сама возможность выложить свой пазл в обход комнаты
+ * появилась только что, и про неё никто не знает — кнопка новая, а привычки
+ * на неё смотреть ещё нет. Одноразовая на браузер, как и соседние подсказки.
+ * Когда возможность примелькается, эту функцию и её вызов в app.js
+ * (renderLibrary) достаточно удалить целиком — больше она ни за что не
+ * отвечает, общий showHintBubble выше остаётся другим подсказкам.
+ * Показываем только на главной: в шапке кнопка есть всегда, но всплывать
+ * поверх стола, пока человек собирает пазл, — ровно то, чего делать не надо.
+ */
+const HEADER_PUBLISH_HINT_KEY = "puzzle.headerPublishHintSeen";
+
+function maybeShowHeaderPublishHint(signal) {
+  if (localStorage.getItem(HEADER_PUBLISH_HINT_KEY)) return;
+  const btn = document.querySelector(".appbar-publish");
+  if (!shown(btn)) return;
+  const timer = setTimeout(() => {
+    if (!shown(btn)) return;
+    localStorage.setItem(HEADER_PUBLISH_HINT_KEY, "1");
+    showHintBubble(btn, t("Своя фотография? Теперь её можно опубликовать отсюда — отдельная комната для этого больше не нужна."));
+  }, 1500);
+  signal.addEventListener("abort", () => clearTimeout(timer));
 }
