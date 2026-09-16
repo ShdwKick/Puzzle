@@ -3819,8 +3819,19 @@ async function renderTable(root, puzzleId, signal, queryString) {
         return;
       }
       window.PuzzleClusters.stitchGroup(pieces, draggingKeys, CELL, SNAP_TOLERANCE);
-      for (const k of draggingKeys) applyPieceTransform(pieces.get(k));
-      const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const { clusterOf, members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      // Не только draggingKeys: stitchGroup (см. puzzle-clusters.js,
+      // stitchOneGroup — «скрытая неточность неподвижной стороны») при
+      // успешной стыковке может пересчитать x/y всего итогового кластера
+      // целиком, включая уже стоявших соседей, которых этот жест не тащил.
+      // Раньше applyPieceTransform звался только для draggingKeys — те
+      // соседи получали исправленные координаты в pieces.get(k).x/y, но их
+      // CSS transform на экране оставался старым: видимый перекос картинки
+      // на стыке (деталь визуально «прилипла», но не туда, куда её данные
+      // на самом деле показывают) — баг, который сюда и принесли скриншотом.
+      const dirty = new Set();
+      for (const k of draggingKeys) for (const m of members.get(clusterOf.get(k))) dirty.add(m);
+      for (const k of dirty) applyPieceTransform(pieces.get(k));
       const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
       lastClusterEdgeIds = nextIds;
       if (newCount > 0) playConnectSound();
@@ -3845,8 +3856,10 @@ async function renderTable(root, puzzleId, signal, queryString) {
       if (clusterMembersOf(pieces, key).size > 1) return;
       piece.rot = ((piece.rot || 0) + 90) % 360;
       window.PuzzleClusters.stitchGroup(pieces, new Set([key]), CELL, SNAP_TOLERANCE);
-      applyPieceTransform(piece);
-      const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      // См. комментарий в finish() выше — та же «скрытая неточность
+      // неподвижной стороны», поворот-стыковка может задеть чужие пиксели.
+      const { clusterOf, members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      for (const k of members.get(clusterOf.get(key))) applyPieceTransform(pieces.get(k));
       const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
       lastClusterEdgeIds = nextIds;
       if (newCount > 0) playConnectSound();
@@ -5737,20 +5750,33 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         return;
       }
       window.PuzzleClusters.stitchGroup(pieces, groupKeys, CELL, SNAP_TOLERANCE);
-      for (const k of groupKeys) { applyPieceTransform(pieces.get(k)); draggingKeys.delete(k); }
-      const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      for (const k of groupKeys) draggingKeys.delete(k);
+      const { clusterOf, members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      // Не только groupKeys: при успешной стыковке stitchGroup (см.
+      // puzzle-clusters.js, stitchOneGroup — «скрытая неточность неподвижной
+      // стороны») может пересчитать x/y всего итогового кластера, включая
+      // уже стоявших соседей, которых этот жест не тащил — их координаты
+      // МОГЛИ измениться, вопреки тому, что тут раньше считалось. dirty —
+      // полный набор задетых деталей: и локальный transform, и то, что
+      // уходит другим участникам (см. sendGroup ниже), теперь берут именно
+      // его, а не узкий groupKeys — иначе у соседей на экране (и у всех
+      // остальных в комнате) картинка расходится со стыком уже собранного
+      // куска (баг, из-за которого сюда и пришли со скриншотом).
+      const dirty = new Set();
+      for (const k of groupKeys) for (const m of members.get(clusterOf.get(k))) dirty.add(m);
+      for (const k of dirty) applyPieceTransform(pieces.get(k));
       const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
       lastClusterEdgeIds = nextIds;
       if (newCount > 0) playConnectSound();
       updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(members), rows * cols);
       setSelected([]);
-      // >1 детали тащили или стыковка образовала новое ребро — шлём группой
-      // ТОЛЬКО те детали, которых коснулся этот жест (groupKeys — тащенная
-      // группа, включая стыковку соседей внутри неё; сами соседи, к которым
-      // пристыковались, не входят в groupKeys и не пересылаются — их
-      // координаты не менялись), иначе — компактный move одной детали. Не
-      // весь борд: см. разбор гонки group/shuffle в server.js.
-      if (offsets.length > 1 || newCount > 0) sendGroup(groupKeys);
+      // >1 детали тащили, стыковка образовала новое ребро, или стыковка
+      // задела координаты соседей (dirty шире groupKeys) — шлём группой,
+      // иначе — компактный move одной детали. Не весь борд: см. разбор
+      // гонки group/shuffle в server.js — sendGroup всё так же шлёт только
+      // ЗАДЕТЫЕ этим жестом детали (просто dirty теперь честно включает и
+      // соседей, чьи координаты правда изменились), не полный снимок борда.
+      if (dirty.size > 1 || newCount > 0) sendGroup(dirty);
       else sendMove(piece);
     }
     el.addEventListener("pointerup", finish, { signal });
@@ -5768,13 +5794,17 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       if (clusterMembersOf(pieces, key).size > 1) return;
       piece.rot = ((piece.rot || 0) + 90) % 360;
       window.PuzzleClusters.stitchGroup(pieces, new Set([key]), CELL, SNAP_TOLERANCE);
-      applyPieceTransform(piece);
-      const { members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      // См. комментарий в finish() выше — та же «скрытая неточность
+      // неподвижной стороны», поворот-стыковка может задеть чужие пиксели,
+      // и их тоже нужно и перерисовать локально, и разослать остальным.
+      const { clusterOf, members, edges } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+      const dirty = members.get(clusterOf.get(key));
+      for (const k of dirty) applyPieceTransform(pieces.get(k));
       const { nextIds, newCount } = flashClusterEdges(pieces, lastClusterEdgeIds, edges);
       lastClusterEdgeIds = nextIds;
       if (newCount > 0) playConnectSound();
       updateProgressLabel(window.PuzzleClusters.connectedPiecesCount(members), rows * cols);
-      sendGroup(new Set([key]));
+      sendGroup(dirty);
     }, { signal });
   }
 
