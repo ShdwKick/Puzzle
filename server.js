@@ -90,6 +90,11 @@ const CELL = 100; // должно совпадать с CELL в assets/app.js
 // когда понадобится, ограничим строже; пока просто константа-потолок,
 // без претензии на финальный дизайн.
 const MAX_ACTIVE_SESSIONS_PER_ROOM = 5;
+// Потолок одновременно висящих заявок на публикацию у одного человека (см.
+// POST /api/puzzles?publish=1, правка «Публикация в обход комнаты») — очередь
+// модерации разгребается руками, а у прямой публикации нет естественного
+// тормоза в виде «сперва заведи комнату», который был у загрузки в комнату.
+const MAX_PENDING_PUBLISH_PER_USER = 10;
 const SNAP_TOLERANCE = tolerance(CELL);
 // Прогресс = сумма деталей во ВСЕХ кластерах от двух и больше (см.
 // assets/puzzle-clusters.js/connectedPiecesCount), а не поштучный флаг
@@ -573,6 +578,10 @@ const stmt = {
   // то, что уже проставлено через новый одиночный API.
   backfillPuzzleCategory: db.prepare("UPDATE puzzles SET category_id = ? WHERE image_file = ? AND category_id IS NULL"),
   approvedByUploader: db.prepare("SELECT * FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'approved' ORDER BY created_at DESC"),
+  // Сколько заявок этого человека сейчас ждут модератора — по ГРУППАМ
+  // (image_file), не по строкам: один аплоад заводит PIECE_PRESETS строк, но
+  // для модератора это одна карточка (см. MAX_PENDING_PUBLISH_PER_USER).
+  pendingPublishCountByUploader: db.prepare("SELECT COUNT(DISTINCT image_file) AS n FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'pending'"),
 
   insertFeedback: db.prepare(`INSERT INTO feedback (id,message,contact,user_id,username,page_url,created_at) VALUES (?,?,?,?,?,?,?)`),
   // LIMIT 200 — тот же приём, что у /internal/rooms ниже: Admin показывает
@@ -651,6 +660,33 @@ const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<":
  *  через Admin, и при публикации (см. план «Один пазл — одна категория»). */
 function setPuzzleCategory(imageFile, categoryId) {
   stmt.setPuzzleCategoryStmt.run(categoryId || null, imageFile);
+}
+
+/** Категория заявки на публикацию (см. план «Один пазл — одна категория») —
+ *  общая для ДВУХ входов: POST /api/puzzles/:id/publish (фото уже лежит в
+ *  комнате) и прямая публикация без комнаты (POST /api/puzzles?publish=1,
+ *  см. правку «Публикация в обход комнаты») — раньше логика жила только в
+ *  первом, второй бы её продублировал. Возвращает {categoryId, newCategory}
+ *  либо {error} — как отвечать, решает вызывающий (у двух роутов разные
+ *  коды/тела ответа). Правило то же, что и было: непустой newCategoryName
+ *  выигрывает у выбранной существующей (заводит pending-категорию, она
+ *  уходит в ту же очередь модерации категорий); иначе — выбранная
+ *  существующая (только approved: pending ещё не видно в публичном
+ *  GET /api/categories, выбрать её неоткуда); иначе — системная
+ *  «Пользовательские» как страховка для тех, кто не выбрал ничего. */
+function resolvePublishCategory({ newCategoryName, categoryId }, userId) {
+  const fresh = str(newCategoryName, 80);
+  if (fresh) {
+    const id = crypto.randomUUID();
+    stmt.insertCategory.run(id, fresh, makeUniqueSlug(fresh), "pending", userId, 0, now());
+    return { categoryId: id, newCategory: fresh };
+  }
+  if (categoryId) {
+    const cat = stmt.categoryById.get(categoryId);
+    if (!cat || cat.status !== "approved") return { error: "bad category" };
+    return { categoryId: cat.id, newCategory: null };
+  }
+  return { categoryId: USER_CATEGORY_ID, newCategory: null };
 }
 
 // Слаг для /category/:slug (см. план «Прямые ссылки вместо #/ + страница
@@ -913,7 +949,12 @@ function notifyPublishOutcome(puzzle, outcome, reason) {
   if (!puzzle.uploader_email) return;
   const mail = outcome === "approved"
     ? mailTpl.publishApproved({ title: puzzle.title, link: `${PUBLIC_URL}/profile/${encodeURIComponent(puzzle.uploader_user_id)}` })
-    : mailTpl.publishRejected({ title: puzzle.title, reason, link: `${PUBLIC_URL}/room/${encodeURIComponent(puzzle.room_id)}` });
+    // room_id пуст у прямой публикации (см. POST /api/puzzles?publish=1) —
+    // там и ссылка другая, и текст письма (фото после отказа удалено, ждать
+    // его в комнате бессмысленно, см. publishRejected).
+    : mailTpl.publishRejected(puzzle.room_id
+      ? { title: puzzle.title, reason, link: `${PUBLIC_URL}/room/${encodeURIComponent(puzzle.room_id)}` }
+      : { title: puzzle.title, reason, link: `${PUBLIC_URL}/publish`, roomless: true });
   // mailer.send() сама ловит все свои ошибки и возвращает {ok:false},
   // никогда не бросает (см. lib/mailer.js) — тот же fire-and-forget, что и
   // у Auth (там тоже без .catch() на этом вызове).
@@ -1773,11 +1814,20 @@ const server = http.createServer(async (req, res) => {
       if (!puzzle) return json(res, 404, { error: "not found" });
       const body = await readJson(req);
       const reason = str(body.reason, 400) || null;
-      stmt.setModerationRejected.run(reason, puzzle.image_file);
-      adminLog.info("Admin отклонил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, reason });
+      // Фото БЕЗ комнаты — это прямая публикация (см. POST /api/puzzles?publish=1):
+      // отказ для него означает удаление группы, а не просто статус 'rejected'.
+      // Иначе запись осталась бы невидимым сиротой: в общую библиотеку её не
+      // пускает owner_user_id, в комнаты — отсутствующий room_id, и добраться
+      // до неё, чтобы отправить повторно, человеку попросту неоткуда (у фото
+      // из комнаты такой путь есть — оно лежит в своей комнате).
+      const roomless = !puzzle.room_id;
+      if (roomless) forceDeletePuzzleGroup(puzzle);
+      else stmt.setModerationRejected.run(reason, puzzle.image_file);
+      adminLog.info("Admin отклонил публикацию фото", { puzzleId: puzzle.id, title: puzzle.title, reason, roomless, deleted: roomless });
       notifyPublishOutcome(puzzle, "rejected", reason);
-      // См. комментарий у approve выше — тот же пакет для уведомления, room_id
-      // тут ещё на месте (reject, в отличие от approve, его не обнуляет).
+      // См. комментарий у approve выше — тот же пакет для уведомления. Ссылка
+      // зависит от того, куда человеку идти дальше: в комнату, где фото
+      // осталось лежать, или на страницу публикации — загрузить заново.
       return json(res, 200, {
         ok: true,
         uploaderUserId: puzzle.uploader_user_id,
@@ -1785,7 +1835,7 @@ const server = http.createServer(async (req, res) => {
           type: "puzzle.photo_rejected",
           title: `Фото «${puzzle.title}» отклонено`,
           body: reason || null,
-          url: `${PUBLIC_URL}/room/${encodeURIComponent(puzzle.room_id)}`,
+          url: roomless ? `${PUBLIC_URL}/publish` : `${PUBLIC_URL}/room/${encodeURIComponent(puzzle.room_id)}`,
         },
       });
     }
@@ -2254,12 +2304,37 @@ async function api(req, res, url, user) {
   // проверяет загрузку независимо от того, кто её сделал. Публикация в
   // общую библиотеку (POST .../publish) по-прежнему требует настоящего
   // входа — это ограничение отдельное и тут не трогается.
+  // publish=1 — ПРЯМАЯ публикация, в обход комнаты (см. правку «Публикация в
+  // обход комнаты»): раньше единственным путём в общую библиотеку было
+  // «создай комнату → загрузи фото туда → отправь на публикацию», и это
+  // отсекало всех, кому комната не нужна вовсе. Отличия от обычной загрузки:
+  //  • нужен НАСТОЯЩИЙ вход (публикация и так его требовала, см. POST
+  //    .../publish — анониму тут делать нечего);
+  //  • room_id остаётся NULL, room_review_status тоже (это не загрузка в
+  //    комнату, фоновой очереди для неё нет) — фото не видно НИГДЕ, пока
+  //    модерация не одобрит: owner_user_id != NULL держит его вне публичной
+  //    библиотеки (puzzlesPublic), room_id = NULL — вне всех комнат
+  //    (puzzlesForRoom бьёт по room_id = ?);
+  //  • moderation_status сразу 'pending' — то есть заявка уходит в ту же
+  //    очередь публикации, что и из комнаты, и отдельного шага «отправить на
+  //    публикацию» не нужно (иначе фото зависло бы невидимым сиротой, если
+  //    человек закрыл вкладку между двумя запросами).
   if (seg[1] === "puzzles" && seg.length === 2 && m === "POST") {
+    const directPublish = url.searchParams.get("publish") === "1";
+    if (directPublish && !user) return json(res, 401, { error: "unauthorized" });
     const identity = user || getOrCreateAnonIdentity(req, res);
 
     const roomId = str(url.searchParams.get("roomId"), 64);
-    if (!roomId) return json(res, 400, { error: "roomId required" });
-    if (!stmt.roomMember.get(roomId, identity.id)) return json(res, 403, { error: "not a member" });
+    if (!roomId && !directPublish) return json(res, 400, { error: "roomId required" });
+    if (roomId && !stmt.roomMember.get(roomId, identity.id)) return json(res, 403, { error: "not a member" });
+    // Потолок висящих заявок на человека — очередь модерации разгребают
+    // руками, и у прямой публикации (в отличие от загрузки в комнату) нет
+    // естественного тормоза в виде «сперва заведи комнату». Считаем по
+    // группам (image_file), а не строкам: один аплоад — это PIECE_PRESETS
+    // строк, но одна заявка для модератора.
+    if (directPublish && stmt.pendingPublishCountByUploader.get(identity.id).n >= MAX_PENDING_PUBLISH_PER_USER) {
+      return json(res, 429, { error: "too many pending", limit: MAX_PENDING_PUBLISH_PER_USER });
+    }
 
     // Согласие + бан устройства — до чтения тела запроса (дорогой I/O): нет
     // смысла принимать и сохранять байты картинки, если запрос всё равно
@@ -2281,13 +2356,37 @@ async function api(req, res, url, user) {
 
     const width = parseInt(url.searchParams.get("w"), 10) || 0;
     const height = parseInt(url.searchParams.get("h"), 10) || 0;
-    const title = str(url.searchParams.get("title"), 80) || "Мой пазл";
+    // У прямой публикации название ОБЯЗАТЕЛЬНО (см. правку «Название при
+    // публикации обязательно»): пазл едет в общую библиотеку, где название —
+    // это и подпись на карточке, и то, по чему его ищут; безымянные «Мой
+    // пазл» пачками там бесполезны. У загрузки в комнату название как было
+    // необязательным — там фото видит только сам загрузивший и его комната,
+    // и дефолт никому не мешает. Проверяем ДО чтения тела (см. согласие
+    // выше) — нет смысла принимать байты картинки ради 400-го. str() уже
+    // отдаёт null для пустой строки и пробелов.
+    const rawTitle = str(url.searchParams.get("title"), 80);
+    if (directPublish && !rawTitle) return json(res, 400, { error: "title required" });
+    const title = rawTitle || "Мой пазл";
 
     let buf;
     try { buf = await readBody(req, MAX_PHOTO_BYTES); }
     catch (e) { if (e.tooLarge) return json(res, 413, { error: "too large" }); throw e; }
     const mime = sniffImage(buf);
     if (!mime) return json(res, 415, { error: "not an image" });
+
+    // Категорию для прямой публикации разбираем ДО вставки строк: невалидная
+    // (чужая pending/несуществующая) должна отбиться 400-м, не оставив за
+    // собой ни файла, ни половины заявки.
+    let directCategoryId = null, directNewCategory = null;
+    if (directPublish) {
+      const cat = resolvePublishCategory(
+        { newCategoryName: url.searchParams.get("newCategoryName"), categoryId: url.searchParams.get("categoryId") },
+        identity.id,
+      );
+      if (cat.error) return json(res, 400, { error: cat.error });
+      directCategoryId = cat.categoryId;
+      directNewCategory = cat.newCategory;
+    }
 
     const groupId = crypto.randomUUID();
     const file = groupId + PHOTO_MIME[mime];
@@ -2297,9 +2396,22 @@ async function api(req, res, url, user) {
       const { rows, cols } = gridForPieceTarget(total, width, height);
       const id = crypto.randomUUID();
       const seed = crypto.randomInt(1, 2 ** 31 - 1);
-      stmt.insertCustomPuzzle.run(id, title, file, rows, cols, seed, ts, ts, identity.id, roomId, null, null, ts, deviceId, null, identity.id, identity.username || null, identity.name || null, identity.email || null, "pending");
+      // Прямая публикация: room_id/room_review_status — NULL, moderation_status
+      // сразу 'pending', категория проставлена (см. комментарий у publish=1
+      // выше). Загрузка в комнату — как была: room_id есть, заявки на
+      // публикацию нет (moderation_status NULL), room_review_status='pending'.
+      stmt.insertCustomPuzzle.run(
+        id, title, file, rows, cols, seed, ts, ts, identity.id, directPublish ? null : roomId,
+        directPublish ? "pending" : null, null, ts, deviceId, directCategoryId,
+        identity.id, identity.username || null, identity.name || null, identity.email || null,
+        directPublish ? null : "pending",
+      );
       return puzzlePayload(stmt.puzzle.get(id));
     });
+    if (directPublish) {
+      adminLog.info("Фото загружено сразу на публикацию (без комнаты)", { userId: identity.id, title, categoryId: directCategoryId, newCategory: directNewCategory, variants: variants.length });
+      return json(res, 200, { title, variants, moderationStatus: "pending" });
+    }
     adminLog.info("Загружено своё фото", { userId: identity.id, roomId, title, variants: variants.length });
     return json(res, 200, { title, variants });
   }
@@ -2340,29 +2452,14 @@ async function api(req, res, url, user) {
       return json(res, 409, { error: "already " + puzzle.moderation_status });
     }
 
-    // Категория (см. план «Один пазл — одна категория») — ровно одна:
-    // непустой newCategoryName выигрывает у выбранной существующей (создаёт
-    // pending-категорию, уходит на модерацию сразу же); иначе — выбранная
-    // существующая категория (должна быть approved, pending нельзя выбрать —
-    // её ещё не видно в публичном списке, см. GET /api/categories); если не
-    // прислано ни то, ни другое — категория по умолчанию, системная
-    // «Пользовательские» (страховка для тех, кто ничего не выбрал).
-    let newCategory = null;
-    let categoryId = USER_CATEGORY_ID;
-    const newCategoryName = str(body.newCategoryName, 80);
-    if (newCategoryName) {
-      newCategory = { id: crypto.randomUUID(), name: newCategoryName };
-      stmt.insertCategory.run(newCategory.id, newCategoryName, makeUniqueSlug(newCategoryName), "pending", user.id, 0, now());
-      categoryId = newCategory.id;
-    } else if (body.categoryId) {
-      const cat = stmt.categoryById.get(body.categoryId);
-      if (!cat || cat.status !== "approved") return json(res, 400, { error: "bad category" });
-      categoryId = cat.id;
-    }
-    setPuzzleCategory(puzzle.image_file, categoryId);
+    // Категория — общий резолвер с прямой публикацией без комнаты (см.
+    // resolvePublishCategory выше, правило разбора там же).
+    const cat = resolvePublishCategory(body, user.id);
+    if (cat.error) return json(res, 400, { error: cat.error });
+    setPuzzleCategory(puzzle.image_file, cat.categoryId);
 
     stmt.setModerationPending.run(puzzle.image_file);
-    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, categoryId, newCategory: newCategory?.name || null });
+    adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, categoryId: cat.categoryId, newCategory: cat.newCategory });
     return json(res, 200, { ok: true, moderationStatus: "pending" });
   }
 

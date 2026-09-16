@@ -1225,11 +1225,137 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    overflow:auto} в ответ заводил горизонтальный скролл ВНУТРИ модалки —
    тот самый маленький баг с шириной). box-sizing:border-box — без него
    100%+паддинг/border вылезали бы за ту же ширину ещё раз. margin-top у
-   #publishConfirmBtn ниже отделяет блок от кнопки подтверждения. */
+   #publishConfirmBtn ниже отделяет блок от кнопки подтверждения.
+   Селектор по .text-input, а не по конкретным id (#publishNewCategoryName/
+   #publishCategorySelect, как было) — тот же блок теперь есть и на странице
+   прямой публикации (см. renderPublishPage, правка «Публикация в обход
+   комнаты») со своими id, и привязка к id молча оставила бы её без этого
+   width:100% — ровно с тем же вылезающим select'ом. */
 .publish-categories{display:flex;flex-direction:column;gap:.5rem;margin:.9rem 0}
-.publish-categories #publishNewCategoryName,
-.publish-categories #publishCategorySelect{width:100%;box-sizing:border-box}
+.publish-categories .text-input{width:100%;box-sizing:border-box}
 #publishConfirmBtn{margin-top:.9rem}
+
+/* ===================== СТРАНИЦА ПУБЛИКАЦИИ =====================
+   См. renderPublishPage (правка «Дизайн страницы публикации»). До этого
+   страница была голой формой на пустом фоне: системный «Файл не выбран»
+   как главное действие и простыня из десяти запретов первым, что видит
+   глаз. Язык берём уже существующий — градиентный круг с иконкой и
+   акцентная рамка, как у .category-suggest, — ничего нового не изобретаем,
+   просто собираем страницу как обещание результата, а не как анкету. */
+.publish-hero{
+  display:flex;flex-direction:column;align-items:center;text-align:center;gap:.7rem;
+  padding:2.2rem 1.2rem 1.6rem;
+}
+.publish-hero h1{margin:0;font-size:1.9rem}
+.publish-hero p{margin:0;max-width:34rem;color:var(--md-sys-color-on-surface-variant)}
+.publish-hero-icon{
+  display:grid;place-items:center;width:4rem;height:4rem;border-radius:50%;
+  background:linear-gradient(140deg, var(--flame-tip), color-mix(in srgb, var(--flame-tip) 45%, var(--md-sys-color-primary)));
+  color:#0a1408;
+}
+.publish-hero-icon .icon{width:2rem;height:2rem}
+
+/* Три шага — «что произойдёт после кнопки». Сетка auto-fit: на узком
+   экране просто становятся друг под другом, без отдельного media-запроса. */
+.publish-steps{
+  display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.9rem;
+  list-style:none;margin:0 0 1.6rem;padding:0;
+}
+.publish-steps li{
+  display:flex;flex-direction:column;gap:.3rem;
+  padding:1rem 1.1rem;border-radius:var(--md-sys-shape-corner-l);
+  background:var(--md-sys-color-surface-container-low);
+  border:1px solid var(--md-sys-color-outline-variant);
+}
+.publish-steps b{font-size:.95rem}
+.publish-steps span:not(.publish-step-num){font-size:.84rem;color:var(--md-sys-color-on-surface-variant)}
+.publish-step-num{
+  display:grid;place-items:center;width:1.6rem;height:1.6rem;margin-bottom:.2rem;
+  border-radius:50%;background:color-mix(in srgb, var(--flame-tip) 18%, transparent);
+  color:var(--flame-tip);font-size:.8rem;font-weight:800;
+}
+
+/* Плашка «нужен вход» вместо формы (см. renderPublishPage) — тот же язык,
+   что у .publish-card ниже, но с приглушённой иконкой замка: это не ошибка
+   и не запрет, а просто ещё не выполненное условие. */
+.publish-gate{
+  display:flex;flex-direction:column;align-items:center;text-align:center;gap:.8rem;
+  padding:2.4rem 1.6rem;border-radius:var(--md-sys-shape-corner-xl);
+  background:var(--md-sys-color-surface-container-low);
+  border:1px solid var(--md-sys-color-outline-variant);box-shadow:var(--e1);
+}
+.publish-gate h2{margin:0;font-size:1.2rem}
+.publish-gate p{margin:0;max-width:30rem;color:var(--md-sys-color-on-surface-variant)}
+.publish-gate-icon{
+  display:grid;place-items:center;width:3.2rem;height:3.2rem;border-radius:50%;
+  background:color-mix(in srgb, var(--flame-tip) 14%, transparent);color:var(--flame-tip);
+}
+.publish-gate-icon .icon{width:1.6rem;height:1.6rem}
+
+/* Сама форма — карточка-поверхность, а не элементы на голом фоне страницы. */
+.publish-card{
+  display:flex;flex-direction:column;gap:1.2rem;
+  padding:1.6rem;border-radius:var(--md-sys-shape-corner-xl);
+  background:var(--md-sys-color-surface-container-low);
+  border:1px solid var(--md-sys-color-outline-variant);box-shadow:var(--e1);
+}
+.publish-field{display:flex;flex-direction:column;gap:.45rem}
+.publish-field > label{font-size:.88rem;font-weight:650}
+/* Звёздочка обязательного поля — акцентным цветом, чтобы «Название» и
+   «Категория» (необязательная) отличались с одного взгляда, без подписи
+   «обязательно» у каждого поля. */
+.publish-required{color:var(--flame-tip)}
+.publish-field .text-input{width:100%;box-sizing:border-box}
+
+/* Зона выбора/перетаскивания файла. input внутри — visually-hidden, а НЕ
+   display:none: спрятанный display:none input не получает фокус с
+   клавиатуры, и выбрать файл без мыши стало бы невозможно. */
+.publish-drop{
+  position:relative;display:block;cursor:pointer;
+  padding:1.6rem;border-radius:var(--md-sys-shape-corner-l);
+  border:2px dashed color-mix(in srgb, var(--flame-tip) 35%, var(--md-sys-color-outline-variant));
+  background:color-mix(in srgb, var(--flame-tip) 4%, transparent);
+  transition:border-color .15s var(--ease-std),background .15s var(--ease-std);
+}
+.publish-drop:hover,.publish-drop.is-over{
+  border-color:var(--flame-tip);
+  background:color-mix(in srgb, var(--flame-tip) 10%, transparent);
+}
+.publish-drop input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.publish-drop input:focus-visible + .publish-drop-empty{outline:2px solid var(--md-sys-color-primary);outline-offset:6px;border-radius:var(--md-sys-shape-corner-m)}
+/* [hidden] должен побеждать display:flex — см. комментарий у
+   .publish-drop-preview[hidden] ниже, ловушка ровно та же. */
+.publish-drop-empty[hidden]{display:none}
+.publish-drop-empty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:.35rem;color:var(--md-sys-color-on-surface-variant)}
+.publish-drop-empty .icon{width:2.2rem;height:2.2rem;color:var(--flame-tip)}
+.publish-drop-empty b{color:var(--md-sys-color-on-surface);font-size:1rem}
+.publish-drop-empty span{font-size:.84rem}
+/* [hidden] + display:flex — классическая ловушка: свойство автора
+   перебивает браузерное [hidden]{display:none}, и «превью» висело бы пустой
+   рамкой поверх пустого состояния (в проекте на те же грабли уже наступали,
+   см. .btn[hidden] выше). */
+.publish-drop-preview[hidden]{display:none}
+.publish-drop-preview{display:flex;align-items:center;gap:1rem}
+.publish-drop-preview img{
+  width:7rem;height:7rem;flex:none;object-fit:cover;
+  border-radius:var(--md-sys-shape-corner-m);background:var(--md-sys-color-surface-container-high);
+}
+.publish-drop-meta{display:flex;flex-direction:column;gap:.2rem;min-width:0}
+.publish-drop-meta b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.publish-drop-meta span{font-size:.84rem;color:var(--md-sys-color-on-surface-variant)}
+.publish-drop-replace{color:var(--flame-tip);font-weight:600;text-decoration:underline}
+
+/* Список запретов — в две колонки на широком экране: он обязан остаться
+   видимым целиком (это осознанное согласие, прятать его под «показать
+   ещё» нельзя), но простынёй в один столбец он забирал всю страницу.
+   display возвращаем в block: базовый .upload-consent-list — flex-колонка
+   (см. выше), а на flex-контейнере columns не работает вовсе; отступ между
+   пунктами тогда даёт не gap, а margin у самих li. */
+.publish-consent-list{display:block;columns:2;column-gap:1.6rem}
+.publish-consent-list li{margin-bottom:.15rem;break-inside:avoid}
+@media(max-width:36rem){.publish-consent-list{columns:1}}
+.publish-submit{align-self:flex-start;padding-inline:1.8rem}
+.publish-error{padding:0;text-align:left;color:var(--md-sys-color-error)}
 /* <select> под тем же классом (модалка выбора сложности, #difficultySelect)
    — .text-input выше уже задаёт border/padding/цвета, тут только то, что
    специфично для select. Нативную стрелку браузера убираем (appearance:none)
@@ -1562,6 +1688,16 @@ select.text-input{
   border-top:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
   border-left:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
   transform:rotate(45deg);
+}
+/* Пузырь слева от якоря (см. onboarding.js, positionTableHint, placement
+   "left") — хвостик переезжает на правую грань и смотрит вправо: те же две
+   видимые грани повёрнутого квадрата, только верхняя+правая вместо
+   верхней+левой. */
+.table-hint.at-left::before{
+  top:50%;right:-6px;margin-top:-5.5px;
+  border-top:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
+  border-left:0;
+  border-right:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
 }
 .table-hint-close{
   position:absolute;top:2px;right:2px;width:1.6rem;height:1.6rem;border:0;background:transparent;

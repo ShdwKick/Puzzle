@@ -308,9 +308,29 @@ function showTableHint(btn) {
  *  одинаково правильно и у #tableHelpBtn в тулбаре стола, и у кнопки «…»
  *  карточки пазла где угодно в сетке, см. maybeShowPublishHint ниже — общая
  *  функция, не только про стол, несмотря на название). */
-function positionTableHint(hint, btn) {
-  const r = btn.getBoundingClientRect();
+/** placement:
+ *  "below" (по умолчанию) — пузырь под якорем, хвостик вверх. Годится для
+ *    кнопок верхней панели, под которыми пусто.
+ *  "left" — пузырь СЛЕВА от якоря, хвостик вправо, по центру якоря по
+ *    вертикали. Понадобилось для напоминания о подсказках (см. app.js,
+ *    bindHintIdleReminder): его якорь — кнопки в вертикальной плашке у
+ *    правого края, и «под кнопкой» там не пусто, а ровно следующая кнопка
+ *    той же плашки — пузырь ложился прямо на то, о чём рассказывает.
+ *  Если слева места не хватает (узкий экран), сами откатываемся к "below" —
+ *  лучше под якорем, чем уехать за левый край экрана. Класс .at-left
+ *  переключает сторону хвостика в CSS. */
+function positionTableHint(hint, anchor, placement) {
+  const r = anchor.getBoundingClientRect();
   const margin = 8;
+  const w = hint.offsetWidth, h = hint.offsetHeight;
+  if (placement === "left" && r.left >= w + margin * 2) {
+    hint.classList.add("at-left");
+    hint.style.right = (innerWidth - r.left + margin) + "px";
+    const centered = r.top + r.height / 2 - h / 2;
+    hint.style.top = Math.min(Math.max(margin, centered), Math.max(margin, innerHeight - h - margin)) + "px";
+    return;
+  }
+  hint.classList.remove("at-left");
   hint.style.top = (r.bottom + margin) + "px";
   hint.style.right = Math.max(margin, innerWidth - r.right) + "px";
 }

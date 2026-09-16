@@ -795,6 +795,85 @@ ir = await internalCall(ADMIN_KEY, "/internal/moderation/photos");
 const modList = await ir.json();
 ok("удалённое фото пропало из списка модерации", !modList.photos.some(x => x.id === rejectId), JSON.stringify(modList.photos.map(x => x.id)));
 
+// ───────── прямая публикация, в обход комнаты (см. правку «Публикация в
+// обход комнаты», POST /api/puzzles?publish=1) ─────────
+ur = await fetch(PUZZLE + `/api/puzzles?publish=1&w=300&h=400&consent=1&title=${encodeURIComponent("Прямая публикация")}`, {
+  method: "POST", headers: { "Content-Type": "image/png" }, body: fakePng,
+});
+ok("прямая публикация без входа — 401 (анониму публиковать нечего)", ur.status === 401, String(ur.status));
+
+ur = await callRaw(tokenA, `/puzzles?publish=1&w=300&h=400&title=${encodeURIComponent("Без согласия")}`, fakePng, "image/png");
+ok("прямая публикация без consent — 400", ur.status === 400, String(ur.status));
+
+ur = await callRaw(tokenA, `/puzzles?publish=1&w=300&h=400&consent=1&categoryId=${encodeURIComponent("нет-такой-категории")}&title=x`, fakePng, "image/png");
+ok("прямая публикация с несуществующей категорией — 400", ur.status === 400 && (await ur.json()).error === "bad category", String(ur.status));
+
+// Название обязательно именно у ПРЯМОЙ публикации (см. правку «Название при
+// публикации обязательно») — в общей библиотеке безымянные «Мой пазл» никому
+// не помогут; у загрузки в комнату дефолт остаётся.
+ur = await callRaw(tokenA, "/puzzles?publish=1&w=300&h=400&consent=1", fakePng, "image/png");
+ok("прямая публикация без названия — 400", ur.status === 400 && (await ur.json()).error === "title required", String(ur.status));
+
+ur = await callRaw(tokenA, `/puzzles?publish=1&w=300&h=400&consent=1&title=${encodeURIComponent("   ")}`, fakePng, "image/png");
+ok("название из одних пробелов тоже не проходит", ur.status === 400 && (await ur.json()).error === "title required", String(ur.status));
+
+ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&consent=1`, fakePng, "image/png");
+const untitledRoomUpload = await ur.json();
+ok("а загрузка в комнату без названия по-прежнему проходит, с дефолтом",
+  ur.status === 200 && untitledRoomUpload.variants[0].title === "Мой пазл", JSON.stringify(untitledRoomUpload.variants?.[0]?.title));
+
+ur = await callRaw(tokenA, `/puzzles?publish=1&w=300&h=400&consent=1&title=${encodeURIComponent("Прямая публикация")}`, fakePng, "image/png");
+const directUpload = await ur.json();
+ok("прямая публикация — 200 и сразу pending", ur.status === 200 && directUpload.moderationStatus === "pending", JSON.stringify(directUpload));
+const directId = directUpload.variants[0].id;
+ok("прямая публикация завела все варианты сложности", directUpload.variants.length > 1, String(directUpload.variants.length));
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+ok("фото прямой публикации НЕ видно в общей библиотеке до одобрения",
+  !(await ir.json()).some(x => x.id === directId), directId);
+
+r = await asJson(tokenA, `/puzzles?roomId=${roomId}`);
+ok("фото прямой публикации НЕ протекает и в комнаты (room_id пуст)",
+  !r.body.some(x => x.id === directId), JSON.stringify(r.body.map(p => p.id)));
+
+ir = await internalCall(ADMIN_KEY, "/internal/moderation/photos");
+const directQueue = await ir.json();
+const directCard = directQueue.photos.find(x => x.id === directId);
+ok("заявка прямой публикации сразу в очереди модерации публикаций", !!directCard, JSON.stringify(directQueue.photos.map(x => x.id)));
+ok("у карточки прямой публикации нет комнаты", directCard && directCard.roomId === null && directCard.roomTitle === null, JSON.stringify(directCard));
+
+// Отказ по БЕЗКОМНАТНОМУ фото удаляет группу целиком: оставлять его как
+// 'rejected' некуда — в библиотеку не пускает owner_user_id, в комнаты
+// room_id, и добраться до него ради переотправки человеку неоткуда.
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${directId}/reject`, { method: "POST", body: { reason: "тест" } });
+const directRejectBody = await ir.json();
+ok("Admin отклонил прямую публикацию — 200", ir.status === 200, String(ir.status));
+ok("ссылка в уведомлении ведёт на страницу публикации, не на /room/null",
+  directRejectBody.notify.url.endsWith("/publish"), directRejectBody.notify.url);
+
+ir = await internalCall(ADMIN_KEY, "/internal/moderation/photos");
+ok("отклонённое безкомнатное фото удалено, а не висит как rejected",
+  !(await ir.json()).photos.some(x => x.id === directId), directId);
+
+// Одобрение прямой публикации — обычный путь в общую библиотеку.
+ur = await callRaw(tokenA, `/puzzles?publish=1&w=300&h=400&consent=1&title=${encodeURIComponent("Прямая, на одобрение")}`, fakePng, "image/png");
+const directOkUpload = await ur.json();
+const directOkId = directOkUpload.variants[0].id;
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${directOkId}/approve`, { method: "POST" });
+ok("Admin одобрил прямую публикацию — 200", ir.status === 200, String(ir.status));
+ir = await fetch(PUZZLE + "/api/puzzles");
+const directPublicRow = (await ir.json()).find(x => x.id === directOkId);
+ok("одобренная прямая публикация видна в общей библиотеке без входа", !!directPublicRow, directOkId);
+// Атрибуция и категория сверяются с тем, что отдал САМ аплоад, а не с
+// внешними константами: одобрение обнуляет owner_user_id/room_id, но
+// uploader_* и категорию трогать не должно — это тут и проверяется.
+ok("у неё сохранилась атрибуция автора (одобрение её не трогает)",
+  directPublicRow && directPublicRow.uploaderUserId && directPublicRow.uploaderUserId === directOkUpload.variants[0].uploaderUserId,
+  JSON.stringify(directPublicRow));
+ok("и категория, проставленная при загрузке, пережила одобрение",
+  directPublicRow && directPublicRow.categoryId === directOkUpload.variants[0].categoryId,
+  JSON.stringify({ after: directPublicRow && directPublicRow.categoryId, atUpload: directOkUpload.variants[0].categoryId }));
+
 // Бан устройства — куём собственный device-id (не тот, что реально выдал
 // бы сервер) и баним его напрямую в Auth, чтобы не гонять полноценный вход
 // ради одной cookie. Дальше используем как реальный bh_device — сервер не

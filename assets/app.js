@@ -392,6 +392,45 @@ const EN = {
   "Сортировка:": "Sort:",
   "Случайный порядок": "Random order",
   "По рейтингу": "By rating",
+  "Опубликовать свой пазл": "Publish your own puzzle",
+  "Любимая фотография станет пазлом, который смогут собрать все — бесплатно и без регистрации.":
+    "Turn a favourite photo into a puzzle anyone can solve — free, no sign-up required.",
+  "Загрузите фото": "Upload a photo",
+  "Сервис сам нарежет его на фигурные детали — все уровни сложности сразу.":
+    "We'll cut it into jigsaw pieces — every difficulty level at once.",
+  "Мы проверим": "We review it",
+  "Модерация занимает немного времени, результат придёт письмом.":
+    "Moderation takes a little while; we'll email you the outcome.",
+  "Пазл в библиотеке": "Your puzzle goes live",
+  "С вашим именем автора — его увидят и соберут все.":
+    "Credited to you — everyone can find and solve it.",
+  "Перетащите фото сюда": "Drop a photo here",
+  "или нажмите, чтобы выбрать — JPEG, PNG или WebP": "or click to pick one — JPEG, PNG or WebP",
+  "Выбрать другое фото": "Choose a different photo",
+  "Например, «Закат на даче»": "For example, \"Sunset at the cabin\"",
+  "Придумайте название — по нему пазл найдут в библиотеке.": "Give it a title — that's how people will find it in the library.",
+  "МБ": "MB",
+  "КБ": "KB",
+  "Публиковать могут только вошедшие": "Publishing requires an account",
+  "У каждого пазла в общей библиотеке есть автор — поэтому для публикации нужен вход. Собирать пазлы можно и без него.":
+    "Every puzzle in the shared library has an author, so publishing needs a sign-in. Solving puzzles doesn't.",
+  "Войти и опубликовать": "Sign in and publish",
+  "Загрузите фотографию — после проверки она станет пазлом в общей библиотеке. Публиковать могут только вошедшие: у каждого пазла есть автор.":
+    "Upload a photo and it becomes a puzzle in the shared library once reviewed. Publishing requires signing in — every puzzle has an author.",
+  "Нельзя публиковать фото, которые относятся к следующим категориям:": "Photos in these categories can't be published:",
+  "Отправлено на модерацию": "Sent for review",
+  "Мы проверим фото и пришлём письмо с результатом. После одобрения пазл появится в общей библиотеке.":
+    "We'll review the photo and email you the outcome. Once approved, the puzzle appears in the shared library.",
+  "Опубликовать ещё одно": "Publish another one",
+  "Мои публикации": "My published puzzles",
+  "Слишком много заявок ждут проверки — дождитесь результата по предыдущим.":
+    "Too many submissions are awaiting review — wait for the earlier ones first.",
+  "Загрузка с этого устройства недоступна.": "Uploads from this device are not available.",
+  "Не удалось отправить — попробуйте ещё раз.": "Couldn't submit — please try again.",
+  "Хотите опубликовать свой пазл?": "Want to publish your own puzzle?",
+  "Загрузите фотографию — после проверки модератором она станет пазлом в общей библиотеке, и собрать его смогут все. Комната для этого не нужна.":
+    "Upload a photo — after a moderator approves it, it becomes a puzzle in the shared library for everyone. No room needed.",
+  "Опубликовать пазл": "Publish a puzzle",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -1332,6 +1371,34 @@ async function uploadPuzzlePhoto(file, title, roomId) {
   if (!res.ok) throw new Error(data.error || "upload failed");
   invalidatePuzzlesCache(); // библиотека изменилась — старый кэш врёт
   trackGoal("photo_uploaded");
+  return data;
+}
+
+/** Загрузка фото СРАЗУ на публикацию, в обход комнаты (см. server.js,
+ *  POST /api/puzzles?publish=1, правка «Публикация в обход комнаты») — один
+ *  запрос вместо двух (загрузка + отправка на модерацию): промежуточного
+ *  состояния «фото уже загружено, но заявка ещё не создана» не бывает вовсе,
+ *  а значит нечему и зависнуть, если человек закроет вкладку. Требует
+ *  настоящего входа (auth.fetch, не roomFetch): публикация анониму недоступна
+ *  и раньше. Согласие тут одно, но СТРОГОЕ — форма показывает полный список
+ *  (TIER_A + TIER_B), как и модалка публикации. */
+async function uploadAndPublishPhoto(file, title, { categoryId, newCategoryName } = {}) {
+  const { blob, width, height } = await shrinkForPuzzle(file);
+  // Без подстановки «Мой пазл», как у загрузки в комнату: для публикации
+  // название обязательно (см. server.js, «title required») — дефолт тут
+  // только замаскировал бы пустое поле безымянной карточкой в общей
+  // библиотеке. Форма не даёт отправить пустое, сервер перепроверяет сам.
+  const qs = new URLSearchParams({ w: String(width), h: String(height), title, consent: "1", publish: "1" });
+  if (categoryId) qs.set("categoryId", categoryId);
+  if (newCategoryName) qs.set("newCategoryName", newCategoryName);
+  const res = await auth.fetch(`/api/puzzles?${qs}`, {
+    method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "upload failed");
+  invalidatePuzzlesCache();
+  trackGoal("photo_uploaded");
+  trackGoal("photo_submitted", { source: "directPublish" });
   return data;
 }
 
@@ -2595,10 +2662,279 @@ async function renderProfile(root, userId, signal) {
   if (!data.puzzles.length) {
     $(root, "#puzzleGrid").outerHTML = `<p class="state-note">${t("Пока ничего не опубликовано.")}</p>`;
     $(root, ".pager").remove();
+    root.appendChild(renderPublishCta(signal));
     return;
   }
   const showPage = mountPuzzleGridPager($(root, "#puzzleGrid"), $(root, ".pager"), signal);
   showPage(groupPuzzles(data.puzzles));
+  // Приглашение опубликовать своё — под сеткой, в обеих ветках (в том числе
+  // на пустом профиле выше): человек уже смотрит на чужие публикации, это
+  // самый уместный момент предложить выложить своё (см. renderPublishCta).
+  root.appendChild(renderPublishCta(signal));
+}
+
+/** Страница прямой публикации (см. server.js, POST /api/puzzles?publish=1,
+ *  правка «Публикация в обход комнаты») — одна форма вместо прежнего пути
+ *  «создай комнату → загрузи туда фото → отправь на публикацию»: комната
+ *  нужна для СОВМЕСТНОЙ сборки, а тому, кто просто хочет поделиться своей
+ *  картинкой со всеми, она была лишним шагом. Согласие тут одно, но сразу
+ *  строгое (TIER_A + TIER_B, тот же список, что в модалке публикации): фото
+ *  едет в общую библиотеку, а не в приватную комнату, промежуточного
+ *  «мягкого» состояния у него не бывает. Гостю формы не показываем вовсе —
+ *  сервер всё равно отобьёт 401 (публикация всегда требовала входа), тот же
+ *  приём, что у renderCategorySuggestBox. */
+async function renderPublishPage(root, signal) {
+  // Шапка — не сухой .library-head, как у списочных страниц: сюда приходят
+  // не «посмотреть список», а сделать что-то своё, и страница должна этого
+  // хотеть (см. правку «Дизайн страницы публикации»). Отсюда крупная иконка
+  // в фирменном градиенте (тот же приём, что у .category-suggest) и три
+  // шага «что дальше» — без них форма читалась как служебная анкета: файл,
+  // поля, простыня запретов.
+  root.innerHTML = `
+    <section class="publish-hero">
+      <div class="publish-hero-icon">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      </div>
+      <h1>${t("Опубликовать свой пазл")}</h1>
+      <p>${t("Любимая фотография станет пазлом, который смогут собрать все — бесплатно и без регистрации.")}</p>
+    </section>
+    <ol class="publish-steps">
+      <li><span class="publish-step-num">1</span><b>${t("Загрузите фото")}</b><span>${t("Сервис сам нарежет его на фигурные детали — все уровни сложности сразу.")}</span></li>
+      <li><span class="publish-step-num">2</span><b>${t("Мы проверим")}</b><span>${t("Модерация занимает немного времени, результат придёт письмом.")}</span></li>
+      <li><span class="publish-step-num">3</span><b>${t("Пазл в библиотеке")}</b><span>${t("С вашим именем автора — его увидят и соберут все.")}</span></li>
+    </ol>
+    <div id="publishPageBody"></div>`;
+  const body = $(root, "#publishPageBody");
+
+  // Гостю — не форма, а честная плашка про вход (сервер всё равно отобьёт
+  // 401, см. POST /api/puzzles?publish=1): дать заполнить всё и уронить на
+  // отправке было бы худшим из вариантов. Карточкой в стиле остальной
+  // страницы, а не узкой полоской .guest-note — рядом с новой шапкой и
+  // шагами та смотрелась бы случайным элементом с другой страницы.
+  if (!auth.isAuthenticated()) {
+    const gate = document.createElement("section");
+    gate.className = "publish-gate";
+    gate.innerHTML = `
+      <div class="publish-gate-icon">
+        <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      </div>
+      <h2>${t("Публиковать могут только вошедшие")}</h2>
+      <p>${t("У каждого пазла в общей библиотеке есть автор — поэтому для публикации нужен вход. Собирать пазлы можно и без него.")}</p>`;
+    const btn = document.createElement("button");
+    btn.className = "btn filled"; btn.type = "button";
+    btn.textContent = t("Войти и опубликовать");
+    btn.addEventListener("click", () => auth.login(), { signal });
+    gate.appendChild(btn);
+    body.appendChild(gate);
+    return;
+  }
+
+  // Категории — как в модалке публикации: только approved (pending ещё не
+  // видно в публичном GET /api/categories), пустая опция = системные
+  // «Пользовательские». Список не критичен — если не загрузился, форма
+  // остаётся рабочей, просто без выбора категории.
+  let categories = [];
+  try { categories = await getCategories(); } catch { categories = []; }
+  if (signal.aborted) return;
+
+  // Файл выбирается через большую зону-подложку (label вокруг спрятанного
+  // input): штатный <input type="file"> с «Файл не выбран» — единственная
+  // серая системная деталь на всей странице, и именно она была тут главным
+  // действием. Сам input не display:none, а visually-hidden (см. CSS,
+  // .publish-drop input) — иначе он выпал бы из фокуса с клавиатуры.
+  body.innerHTML = `
+    <form class="publish-card" id="publishPageForm">
+      <label class="publish-drop" id="publishDrop">
+        <input type="file" id="publishPageFile" accept="image/*" required>
+        <div class="publish-drop-empty" id="publishDropEmpty">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v13"/></svg>
+          <b>${t("Перетащите фото сюда")}</b>
+          <span>${t("или нажмите, чтобы выбрать — JPEG, PNG или WebP")}</span>
+        </div>
+        <div class="publish-drop-preview" id="publishDropPreview" hidden>
+          <img alt="" id="publishDropThumb">
+          <div class="publish-drop-meta">
+            <b id="publishDropName"></b>
+            <span id="publishDropSize"></span>
+            <span class="publish-drop-replace">${t("Выбрать другое фото")}</span>
+          </div>
+        </div>
+      </label>
+
+      <div class="publish-field">
+        <label for="publishPageTitle">${t("Название")} <span class="publish-required">*</span></label>
+        <input class="text-input" id="publishPageTitle" type="text" maxlength="80" required placeholder="${t("Например, «Закат на даче»")}">
+      </div>
+
+      <div class="publish-field publish-categories">
+        <label ${categories.length ? `for="publishPageCategory"` : ""}>${t("Категория")}</label>
+        ${categories.length ? `<select class="text-input" id="publishPageCategory">
+          <option value="">${t("Без категории (по умолчанию — «Пользовательские»)")}</option>
+          ${categories.map(c => `<option value="${c.id}">${categoryDisplayName(c)}</option>`).join("")}
+        </select>` : ""}
+        <input class="text-input" id="publishPageNewCategory" type="text" maxlength="80" placeholder="${t("Предложить новую категорию (пойдёт на модерацию) — необязательно")}">
+      </div>
+
+      <div class="upload-consent">
+        <p class="upload-consent-title">${t("Нельзя публиковать фото, которые относятся к следующим категориям:")}</p>
+        <ul class="upload-consent-list publish-consent-list">${[...PROHIBITED_TIER_A, ...PROHIBITED_TIER_B].map(c => `<li>${t(c)}</li>`).join("")}</ul>
+        <label class="upload-consent-check">
+          <input type="checkbox" id="publishPageConsent" required>
+          ${t("Я подтверждаю согласие с правилами публикации и беру на себя ответственность за это фото")}
+        </label>
+      </div>
+
+      <button class="btn filled publish-submit" type="submit">${t("Отправить на модерацию")}</button>
+      <p class="state-note publish-error" id="publishPageError" hidden></p>
+    </form>`;
+
+  const form = $(body, "#publishPageForm");
+  const errEl = $(body, "#publishPageError");
+  const fileInput = $(form, "#publishPageFile");
+  const dropEl = $(form, "#publishDrop");
+
+  // Превью выбранного файла — objectURL обязательно отзываем: и при замене
+  // файла, и при уходе со страницы (abort), иначе блоб висит в памяти до
+  // перезагрузки вкладки.
+  let previewUrl = null;
+  function showPreview(file) {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = file ? URL.createObjectURL(file) : null;
+    $(form, "#publishDropEmpty").hidden = !!file;
+    $(form, "#publishDropPreview").hidden = !file;
+    if (!file) return;
+    $(form, "#publishDropThumb").src = previewUrl;
+    $(form, "#publishDropName").textContent = file.name;
+    const mb = file.size / 1024 / 1024;
+    $(form, "#publishDropSize").textContent = mb >= 1 ? `${mb.toFixed(1)} ${t("МБ")}` : `${Math.max(1, Math.round(file.size / 1024))} ${t("КБ")}`;
+  }
+  signal.addEventListener("abort", () => { if (previewUrl) URL.revokeObjectURL(previewUrl); });
+  fileInput.addEventListener("change", () => showPreview(fileInput.files[0] || null), { signal });
+
+  // Перетаскивание — на ту же зону. dragover обязателен с preventDefault,
+  // иначе браузер не считает зону приёмником и просто откроет картинку
+  // вместо drop. Кладём файл в сам input через DataTransfer, чтобы дальше
+  // всё работало ровно как при обычном выборе (включая required у формы).
+  dropEl.addEventListener("dragover", e => { e.preventDefault(); dropEl.classList.add("is-over"); }, { signal });
+  dropEl.addEventListener("dragleave", () => dropEl.classList.remove("is-over"), { signal });
+  dropEl.addEventListener("drop", e => {
+    e.preventDefault();
+    dropEl.classList.remove("is-over");
+    const file = e.dataTransfer?.files?.[0];
+    if (!file || !file.type.startsWith("image/")) return;
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    fileInput.files = dt.files;
+    showPreview(file);
+  }, { signal });
+  form.addEventListener("submit", async e => {
+    e.preventDefault();
+    errEl.hidden = true;
+    const file = $(form, "#publishPageFile").files[0];
+    if (!file) { errEl.textContent = t("Выберите файл"); errEl.hidden = false; return; }
+    // required у поля отсекает пустое, но не строку из одних пробелов —
+    // её браузер считает заполненной, а мы дальше делаем trim(), и на
+    // сервер ушло бы пустое название (он такое отобьёт, но ругаться на это
+    // лучше здесь же, у поля, а не ответом 400).
+    const titleEl = $(form, "#publishPageTitle");
+    const title = titleEl.value.trim();
+    if (!title) {
+      errEl.textContent = t("Придумайте название — по нему пазл найдут в библиотеке.");
+      errEl.hidden = false;
+      titleEl.focus();
+      return;
+    }
+    const submitBtn = $(form, "button[type=submit]");
+    submitBtn.disabled = true;
+    try {
+      await uploadAndPublishPhoto(file, title, {
+        categoryId: $(form, "#publishPageCategory")?.value || "",
+        newCategoryName: $(form, "#publishPageNewCategory").value.trim(),
+      });
+      if (signal.aborted) return;
+      const userId = auth.getUser()?.id;
+      body.innerHTML = "";
+      const done = document.createElement("section");
+      done.className = "category-suggest";
+      done.innerHTML = `
+        <div class="category-suggest-icon">
+          <svg class="icon" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+        </div>
+        <h2>${t("Отправлено на модерацию")}</h2>
+        <p>${t("Мы проверим фото и пришлём письмо с результатом. После одобрения пазл появится в общей библиотеке.")}</p>`;
+      const row = document.createElement("div");
+      row.className = "bar";
+      const again = document.createElement("button");
+      again.className = "btn outlined sm"; again.type = "button";
+      again.textContent = t("Опубликовать ещё одно");
+      // Перерисовываем ту же страницу, а не navigate("/publish") — иначе в
+      // историю легла бы вторая запись того же самого пути, и «назад» просто
+      // возвращало бы на эту же страницу. Ошибку тут ловим сами: route(),
+      // который обычно это делает, к прямому вызову отношения не имеет.
+      again.addEventListener("click", () => {
+        renderPublishPage(root, signal).catch(() => {
+          body.innerHTML = `<p class="state-note">${t("Что-то пошло не так — обновите страницу.")}</p>`;
+        });
+      }, { signal });
+      row.appendChild(again);
+      if (userId) {
+        const mine = document.createElement("a");
+        mine.className = "btn filled sm";
+        mine.href = `/profile/${encodeURIComponent(userId)}`;
+        mine.textContent = t("Мои публикации");
+        row.appendChild(mine);
+      }
+      done.appendChild(row);
+      body.appendChild(done);
+    } catch (err) {
+      errEl.textContent = err.message === "not an image" ? t("Файл не похож на изображение (JPEG/PNG/WebP).")
+        : err.message === "too large" ? t("Файл слишком большой даже после сжатия.")
+        : err.message === "too many pending" ? t("Слишком много заявок ждут проверки — дождитесь результата по предыдущим.")
+        : err.message === "title required" ? t("Придумайте название — по нему пазл найдут в библиотеке.")
+        : err.message === "device banned" ? t("Загрузка с этого устройства недоступна.")
+        : t("Не удалось отправить — попробуйте ещё раз.");
+      errEl.hidden = false;
+      submitBtn.disabled = false;
+    }
+  }, { signal });
+}
+
+/** Блок-приглашение опубликовать своё (см. правку «Публикация в обход
+ *  комнаты») — на странице профиля автора: человек уже смотрит на чужие
+ *  опубликованные пазлы, это ровно тот момент, когда уместно предложить
+ *  выложить своё. Показываем на ЛЮБОМ профиле, включая свой, — текст
+ *  одинаково читается и как «выложи тоже», и как «выложи ещё».
+ *  Гостю сразу говорим про вход и ведём в него, а не на /publish: страница
+ *  публикации всё равно встретит его плашкой «нужен вход» (см.
+ *  renderPublishPage), и лишний переход в тупик тут ни к чему. Вошедшему —
+ *  обычная <a href="/publish">, её перехватывает общая делегация кликов
+ *  роутера (см. ниже по файлу), свой listener не нужен. */
+function renderPublishCta(signal) {
+  const guest = !auth.isAuthenticated();
+  const section = document.createElement("section");
+  section.className = "category-suggest";
+  section.innerHTML = `
+    <div class="category-suggest-icon">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    </div>
+    <h2>${t("Хотите опубликовать свой пазл?")}</h2>
+    <p>${guest
+      ? t("Загрузите фотографию — после проверки она станет пазлом в общей библиотеке. Публиковать могут только вошедшие: у каждого пазла есть автор.")
+      : t("Загрузите фотографию — после проверки модератором она станет пазлом в общей библиотеке, и собрать его смогут все. Комната для этого не нужна.")}</p>`;
+  if (guest) {
+    const btn = document.createElement("button");
+    btn.className = "btn filled sm"; btn.type = "button";
+    btn.textContent = t("Войти и опубликовать");
+    btn.addEventListener("click", () => auth.login(), { signal });
+    section.appendChild(btn);
+  } else {
+    const link = document.createElement("a");
+    link.className = "btn filled sm";
+    link.href = "/publish";
+    link.textContent = t("Опубликовать пазл");
+    section.appendChild(link);
+  }
+  return section;
 }
 
 /** Дефолтные title/description — дословно как в index.html и в
@@ -3231,7 +3567,11 @@ function bindHintIdleReminder(root, stage, isSolved, signal) {
       `<button class="table-hint-close" type="button" aria-label="${t("Закрыть")}">&times;</button>` +
       `<p>${t("Не знаете, что делать дальше? Тут есть подсказки.")}</p>`;
     document.body.appendChild(bubble);
-    positionTableHint(bubble, btn);
+    // Якорь — ВСЯ плашка подсказок, не отдельная кнопка, и слева от неё (см.
+    // onboarding.js, positionTableHint): плашка вертикальная, у правого края,
+    // и «под кнопкой» там стоит следующая кнопка той же плашки — пузырь
+    // ложился ровно на те кнопки, про которые рассказывает.
+    positionTableHint(bubble, $(root, ".hint-widgets") || btn, "left");
     $(bubble, ".table-hint-close").addEventListener("click", poke);
     setHintAttention(root, true);
   }
@@ -6016,6 +6356,7 @@ function route() {
     : pathname === "/rooms" ? renderRoomsList(root, signal)
     : tableMatch ? renderTable(root, decodeURIComponent(tableMatch[1]), signal, location.search)
     : profileMatch ? renderProfile(root, decodeURIComponent(profileMatch[1]), signal)
+    : pathname === "/publish" ? renderPublishPage(root, signal)
     : pathname === "/categories" ? renderCategories(root, signal)
     : categoryMatch ? renderCategoryPage(root, decodeURIComponent(categoryMatch[1]), signal)
     : puzzleMatch ? renderPuzzlePage(root, decodeURIComponent(puzzleMatch[1]), signal)
