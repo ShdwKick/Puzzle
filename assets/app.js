@@ -1080,15 +1080,20 @@ async function renderPuzzlePage(root, id, signal) {
   // победы»), сюда — не блокирует остальную страницу, звёзды появляются
   // сразу, сводка — когда придёт число.
   const ratingSummaryEl = $(root, "#puzzlePageRatingSummary");
+  // Одна отрисовка на два случая: первая загрузка и обновление сразу после
+  // того, как человек сам поставил оценку (см. buildRatingWidget/onRated) —
+  // иначе сводка над звёздами продолжала бы показывать прежнее среднее,
+  // хотя оценка уже учтена.
+  function paintRatingSummary(rating) {
+    if (signal.aborted || !rating || !rating.count) return;
+    ratingSummaryEl.hidden = false;
+    ratingSummaryEl.innerHTML = `★ <b>${rating.average.toFixed(1)}</b> · ${rating.count} ${tn(rating.count, ["оценка", "оценки", "оценок"], ["rating", "ratings"])}`;
+  }
   roomFetch(`/api/puzzles/${encodeURIComponent(variants[0].id)}/rating`)
     .then(r => r.ok ? r.json() : null)
-    .then(rating => {
-      if (signal.aborted || !rating || !rating.count) return;
-      ratingSummaryEl.hidden = false;
-      ratingSummaryEl.innerHTML = `★ <b>${rating.average.toFixed(1)}</b> · ${rating.count} ${tn(rating.count, ["оценка", "оценки", "оценок"], ["rating", "ratings"])}`;
-    })
+    .then(paintRatingSummary)
     .catch(() => {});
-  $(root, "#puzzlePageRate").appendChild(buildRatingWidget(variants[0], signal));
+  $(root, "#puzzlePageRate").appendChild(buildRatingWidget(variants[0], signal, paintRatingSummary));
 
   // Похожие пазлы той же категории — реальные внутренние ссылки, страница
   // не должна быть тупиком для посетителя/краулера. Своя группа исключена
@@ -4656,7 +4661,11 @@ function bindResultShareButton(btn, getShareData) {
  *  пазл переигрывают), шлёт PUT при клике, не блокирует ничего вокруг —
  *  ошибка сети тут не критична, просто тихо не сохранится. roomFetch (не
  *  auth.fetch) — оценивать можно и без входа, как и саму сборку. */
-function buildRatingWidget(puzzle, signal) {
+/** onRated({average, count}) — необязательный колбэк для мест, где рядом
+ *  показана СВОДКА оценок (страница пазла): без него она оставалась бы со
+ *  старым числом до перезагрузки, хотя свежее приходит прямо в ответе на PUT
+ *  (см. server.js) — отдельный запрос ради этого не нужен. */
+function buildRatingWidget(puzzle, signal, onRated) {
   const wrap = document.createElement("div");
   wrap.className = "win-rating";
   const label = document.createElement("p");
@@ -4693,12 +4702,21 @@ function buildRatingWidget(puzzle, signal) {
     paint(value);
     note.hidden = true;
     try {
-      await roomFetch(`/api/puzzles/${encodeURIComponent(puzzle.id)}/rating`, {
+      const res = await roomFetch(`/api/puzzles/${encodeURIComponent(puzzle.id)}/rating`, {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating: value }),
       });
       trackGoal("rating_submitted", { value });
       note.textContent = t("Спасибо за оценку!");
       note.hidden = false;
+      // Новые среднее/количество — из ответа на сам PUT, без второго запроса.
+      const data = await res.json().catch(() => null);
+      if (data && typeof data.average === "number") {
+        onRated?.(data);
+        // Карточки в библиотеке несут то же среднее (см. puzzlePayload/
+        // rating), а список лежит в кэше — без сброса вернувшийся в
+        // библиотеку увидел бы на карточке старую цифру.
+        invalidatePuzzlesCache();
+      }
     } catch { /* тихо — оценка не критична, окно не блокируем */ }
   }
 
