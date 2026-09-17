@@ -1709,7 +1709,7 @@ const server = http.createServer(async (req, res) => {
         const categoryName = categoryId ? (stmt.categoryById.get(categoryId)?.name || null) : null;
         const alt = str(body.pexelsAlt, 4000);
         try {
-          const generated = alt ? await gigachat.titleFromText(alt, categoryName) : await gigachat.titleFromImage(buf, mime);
+          const generated = alt ? await gigachat.titleFromText(alt, categoryName) : await gigachat.titleFromImage(buf, mime, categoryName);
           title = generated.ru;
           titleEn = generated.en;
         } catch (e) {
@@ -2049,12 +2049,15 @@ const server = http.createServer(async (req, res) => {
     // пишет в puzzles; применение — отдельный вызов POST .../title выше,
     // тем же путём, что и ручное переименование. Разделены нарочно: Admin
     // должен показать предложение и подождать подтверждения, а не менять
-    // название по одному клику. Два режима (см. правку «Кнопка GigaChat по
-    // фото + тексту в модалке пазла»): по умолчанию titleFromText — у
+    // название по одному клику. Два режима: по умолчанию titleFromText — у
     // существующего в библиотеке пазла название уже есть, пересказать его
     // дешевле и точнее, чем смотреть на картинку (см. правку «Короткие
-    // названия пазлов»); body.mode==="image" — titleFromImageAndText, когда
-    // старое название болванка и по фото точнее.
+    // названия пазлов»); body.mode==="image" — titleFromImage, когда старое
+    // название болванка и по фото точнее. Во втором режиме старое название
+    // НЕ передаётся вовсе (см. правку «По фото — без старого названия»):
+    // раньше туда уходил и текст, и модель цеплялась за болванку, вместо
+    // того чтобы смотреть на снимок — то есть режим «по фото» фактически
+    // оставался тем же пересказом старого названия.
     const puzzleSuggestMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/title\/suggest$/);
     if (puzzleSuggestMatch && req.method === "POST") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
@@ -2073,7 +2076,7 @@ const server = http.createServer(async (req, res) => {
         if (body.mode === "image") {
           const mime = MIME[path.extname(puzzle.image_file).toLowerCase()] || "image/jpeg";
           const buf = fs.readFileSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file));
-          ({ ru, en } = await gigachat.titleFromImageAndText(buf, mime, puzzle.title, categoryName));
+          ({ ru, en } = await gigachat.titleFromImage(buf, mime, categoryName));
         } else {
           ({ ru, en } = await gigachat.titleFromText(puzzle.title, categoryName));
         }

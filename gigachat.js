@@ -11,13 +11,16 @@
  *
  *   const giga = require("./gigachat")({ authKey, scope, model });
  *   const { ru, en } = await giga.titleFromText(oldTitle, categoryName);
- *   const { ru, en } = await giga.titleFromImage(buffer, "image/jpeg");
+ *   const { ru, en } = await giga.titleFromImage(buffer, "image/jpeg", categoryName);
  *
  * Дешевле и точнее оказался текстовый путь (см. правку) — по фото модель не
  * знает места съёмки и придумывает общее «Mountain landscape» вместо
  * «Kyrgyz Mountain Range», да и картинка — это лишних ~2000 токенов на
- * запрос против ~150 у текста. titleFromImage — фолбэк на случай, когда
- * старого текста для пересказа вообще нет (свежий импорт с Pexels без alt).
+ * запрос против ~150 у текста. Зато titleFromImage не зависит от старого
+ * названия вовсе (см. правку «По фото — без старого названия»): смотрит
+ * только на саму фотографию, поэтому и годится там, где старого текста нет
+ * (свежий импорт с Pexels без alt), и там, где он есть, но мешает — модель
+ * цеплялась за болванку вроде «Города #1» вместо того, что реально на фото.
  *
  * Ключ живёт только в окружении сервера, в браузер не попадает никогда —
  * ходит в GigaChat сам сервис.
@@ -58,11 +61,14 @@ const TEXT_PROMPT = (oldTitle, category) => `Сейчас у пазла в ка�
 Придумай по смыслу этого текста короткое новое название — на русском и на английском.
 ${RULES_TAIL()}`;
 
-const VISION_PROMPT = () => `Придумай короткое название для пазла по этой фотографии — на русском и на английском.
-${RULES_TAIL()}`;
-
-const VISION_TEXT_PROMPT = (oldTitle, category) => `Придумай короткое название для пазла по этой фотографии — на русском и на английском.
-Старое название с фотостока (может подсказать деталь, которую не видно на самом фото — например место съёмки): "${oldTitle}"
+// Старое название сюда НЕ передаётся сознательно (см. правку «По фото — без
+// старого названия»): когда просят придумать название по фотографии, ответ
+// должен исходить из самой фотографии. Пока старый текст был в этом же
+// промпте, модель за него цеплялась и пересказывала болванку («Города #1»)
+// вместо того, что на снимке. Категория остаётся — это не название, а
+// контекст каталога, он помогает выбрать регистр темы.
+const VISION_PROMPT = category => `Придумай короткое название для пазла по этой фотографии — на русском и на английском.
+Смотри только на саму фотографию.
 Категория пазла: "${category || "не указана"}"
 ${RULES_TAIL()}`;
 
@@ -170,29 +176,17 @@ module.exports = function createGigaChat(options = {}) {
     return normalizeTitle(extractJson(text));
   }
 
-  /** Название по самой фотографии — только когда текста для пересказа нет
-   *  вообще (свежий импорт с Pexels без alt). */
-  async function titleFromImage(buffer, mime) {
+  /** Название по САМОЙ фотографии — старое название не участвует вовсе (см.
+   *  VISION_PROMPT выше). Дороже titleFromText на ~2000 токенов картинки,
+   *  зато не наследует мусор из прежнего названия. */
+  async function titleFromImage(buffer, mime, category) {
     if (!enabled) throw new Error("GigaChat не настроен");
     const fileId = await uploadImage(buffer, mime);
-    const { text } = await ask([{ role: "user", content: VISION_PROMPT(), attachments: [fileId] }]);
+    const { text } = await ask([{ role: "user", content: VISION_PROMPT(category), attachments: [fileId] }]);
     return normalizeTitle(extractJson(text));
   }
 
-  /** Название по фотографии И старому тексту вместе (см. правку «Кнопка
-   *  GigaChat по фото + тексту в модалке пазла») — дороже titleFromText
-   *  (та же лишняя ~2000 токенов картинки, см. шапку файла), но полезно,
-   *  когда старое название болванка/малоинформативно: модель видит саму
-   *  сцену и может опереться на текст только за деталями, которых на фото
-   *  не видно (место съёмки и т.п.). */
-  async function titleFromImageAndText(buffer, mime, oldTitle, category) {
-    if (!enabled) throw new Error("GigaChat не настроен");
-    const fileId = await uploadImage(buffer, mime);
-    const { text } = await ask([{ role: "user", content: VISION_TEXT_PROMPT(oldTitle, category), attachments: [fileId] }]);
-    return normalizeTitle(extractJson(text));
-  }
-
-  return { enabled, titleFromText, titleFromImage, titleFromImageAndText };
+  return { enabled, titleFromText, titleFromImage };
 };
 
 /** ru/en — обязательные непустые строки, до 80 символов (лимит title у
