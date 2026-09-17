@@ -1709,7 +1709,7 @@ const server = http.createServer(async (req, res) => {
         const categoryName = categoryId ? (stmt.categoryById.get(categoryId)?.name || null) : null;
         const alt = str(body.pexelsAlt, 4000);
         try {
-          const generated = alt ? await gigachat.titleFromText(alt, categoryName) : await gigachat.titleFromImage(buf, mime, categoryName);
+          const generated = alt ? await gigachat.titleFromText(alt, categoryName) : await gigachat.titleFromImage(buf, mime);
           title = generated.ru;
           titleEn = generated.en;
         } catch (e) {
@@ -2053,11 +2053,11 @@ const server = http.createServer(async (req, res) => {
     // существующего в библиотеке пазла название уже есть, пересказать его
     // дешевле и точнее, чем смотреть на картинку (см. правку «Короткие
     // названия пазлов»); body.mode==="image" — titleFromImage, когда старое
-    // название болванка и по фото точнее. Во втором режиме старое название
-    // НЕ передаётся вовсе (см. правку «По фото — без старого названия»):
-    // раньше туда уходил и текст, и модель цеплялась за болванку, вместо
-    // того чтобы смотреть на снимок — то есть режим «по фото» фактически
-    // оставался тем же пересказом старого названия.
+    // название болванка и по фото точнее. Во втором режиме в GigaChat не
+    // уходит НИКАКОЙ текст — ни название, ни категория (см. правку «По фото
+    // — только фото» в gigachat.js): и то и другое модель пересказывала
+    // вместо того, чтобы смотреть на снимок, а у импортированных без alt
+    // название и вовсе склеено из имени категории.
     const puzzleSuggestMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/title\/suggest$/);
     if (puzzleSuggestMatch && req.method === "POST") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
@@ -2076,7 +2076,7 @@ const server = http.createServer(async (req, res) => {
         if (body.mode === "image") {
           const mime = MIME[path.extname(puzzle.image_file).toLowerCase()] || "image/jpeg";
           const buf = fs.readFileSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file));
-          ({ ru, en } = await gigachat.titleFromImage(buf, mime, categoryName));
+          ({ ru, en } = await gigachat.titleFromImage(buf, mime));
         } else {
           ({ ru, en } = await gigachat.titleFromText(puzzle.title, categoryName));
         }
