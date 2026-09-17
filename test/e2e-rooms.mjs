@@ -874,6 +874,43 @@ ok("и категория, проставленная при загрузке, �
   directPublicRow && directPublicRow.categoryId === directOkUpload.variants[0].categoryId,
   JSON.stringify({ after: directPublicRow && directPublicRow.categoryId, atUpload: directOkUpload.variants[0].categoryId }));
 
+// ───────── пометка «не для детей» (см. правку «Возрастное подтверждение»):
+// заявку кладёт автор, решение — за модератором, помеченное не попадает в
+// поисковые поверхности ─────────
+ok("по умолчанию пометки нет", directPublicRow.notForKids === false, JSON.stringify(directPublicRow.notForKids));
+
+ur = await callRaw(tokenA, `/puzzles?publish=1&w=300&h=400&consent=1&notForKids=1&title=${encodeURIComponent("Полотно с обнажённой натурой")}`, fakePng, "image/png");
+const artUpload = await ur.json();
+const artId = artUpload.variants[0].id;
+ok("галочка автора при публикации ставит пометку сразу", artUpload.variants[0].notForKids === true, JSON.stringify(artUpload.variants[0]));
+
+// Модератор — последнее слово: снимает и ставит обратно.
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${artId}/not-for-kids`, { method: "POST", body: { notForKids: false } });
+ok("модератор может снять пометку — 200", ir.status === 200 && (await ir.json()).notForKids === false, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos`);
+ok("в очереди модерации видно текущее состояние пометки",
+  (await ir.json()).photos.find(x => x.id === artId)?.notForKids === false, artId);
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${artId}/not-for-kids`, { method: "POST", body: { notForKids: true } });
+ok("и поставить обратно — 200", ir.status === 200 && (await ir.json()).notForKids === true, String(ir.status));
+
+ir = await internalCall("", `/internal/puzzles/${artId}/not-for-kids`, { method: "POST", body: { notForKids: false } });
+ok("без ключа админа пометку не переключить — 403", ir.status === 403, String(ir.status));
+
+// Пометка — атрибут ГРУППЫ: должна стоять на всех вариантах сложности разом.
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${artId}/approve`, { method: "POST" });
+ok("помеченный пазл одобряется как обычный", ir.status === 200, String(ir.status));
+r = await asJson(tokenA, "/puzzles");
+const artRows = r.body.filter(x => artUpload.variants.some(v => v.id === x.id));
+ok("пометка стоит на всех вариантах сложности группы",
+  artRows.length > 1 && artRows.every(x => x.notForKids === true), JSON.stringify(artRows.map(x => x.notForKids)));
+
+// Поисковые поверхности: краулеру подтверждать возраст нечем, поэтому
+// помеченного там быть не должно (см. server.js — sitemap и снимок категории).
+const sitemap = await (await fetch(PUZZLE + "/sitemap.xml")).text();
+ok("помеченный пазл не попал в sitemap.xml", !artRows.some(x => sitemap.includes(`/puzzle/${x.id}`)), "");
+ok("а обычный — попал", sitemap.includes(`/puzzle/${directOkId}`) || sitemap.includes("/puzzle/"), "");
+
 // Бан устройства — куём собственный device-id (не тот, что реально выдал
 // бы сервер) и баним его напрямую в Auth, чтобы не гонять полноценный вход
 // ради одной cookie. Дальше используем как реальный bh_device — сервер не

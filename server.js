@@ -288,6 +288,16 @@ try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_name TEXT"); } catch {}
 // не уходит, без ошибки.
 try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_email TEXT"); } catch {}
 
+// «Не для детей» (см. правку «Возрастное подтверждение») — пазл показывается
+// в сетке размытым, картинка открывается только после подтверждения возраста
+// (см. assets/app.js). Ставит МОДЕРАТОР при проверке публикации; галочка
+// автора в форме — только заявка, она кладёт сюда начальное значение, но
+// последнее слово за Admin (см. /internal/puzzles/:id/not-for-kids ниже).
+// 0 по умолчанию — всё, что уже опубликовано, остаётся как было.
+// Атрибут ГРУППЫ (image_file), как и всё остальное, общее у вариантов
+// сложности одной картинки.
+try { db.exec("ALTER TABLE puzzles ADD COLUMN not_for_kids INTEGER NOT NULL DEFAULT 0"); } catch {}
+
 // Хочет ли автор письмо о результате модерации (см. правку «Галочка про
 // письмо») — 1 по умолчанию, чтобы поведение уже загруженного не менялось
 // задним числом. Уведомление в аккаунте (Admin → Auth /internal/notifications,
@@ -595,6 +605,8 @@ const stmt = {
   // проставляется отдельным UPDATE'ом по группе (как и всё остальное, что
   // общее у вариантов сложности одной картинки).
   setNotifyEmail: db.prepare("UPDATE puzzles SET notify_email = ? WHERE image_file = ?"),
+  // Пометка «не для детей» — по группе, как и категория/статус модерации.
+  setNotForKids: db.prepare("UPDATE puzzles SET not_for_kids = ? WHERE image_file = ?"),
 
   insertFeedback: db.prepare(`INSERT INTO feedback (id,message,contact,user_id,username,page_url,created_at) VALUES (?,?,?,?,?,?,?)`),
   // LIMIT 200 — тот же приём, что у /internal/rooms ниже: Admin показывает
@@ -935,6 +947,9 @@ function puzzlePayload(p, ratingCache) {
     // карточка сейчас показывает только среднее, но задел на «(N)» рядом
     // остаётся, если понадобится позже.
     rating: rating || null,
+    // «Не для детей» (см. правку «Возрастное подтверждение») — клиент по
+    // этому флагу размывает превью и просит подтвердить возраст.
+    notForKids: !!p.not_for_kids,
   };
 }
 
@@ -1348,7 +1363,10 @@ function categoriesListHtml() {
  *  строк по одной и той же формуле — результат совпадает сам по себе, это
  *  не отдельно согласуемая логика, которую можно нечаянно рассинхронизировать. */
 function categoryPuzzlesListHtml(category) {
-  const rows = stmt.categoryPuzzles.all(category.id);
+  // Помеченные «не для детей» не попадают и в статичный снимок категории
+  // (см. sitemap.xml выше — та же причина: краулеру нечем подтвердить
+  // возраст, а картинка тут идёт прямо в <img> исходного HTML).
+  const rows = stmt.categoryPuzzles.all(category.id).filter(r => !r.not_for_kids);
   const groups = new Map(); // image_file -> { firstRow, lightestId }
   for (const row of rows) {
     let g = groups.get(row.image_file);
@@ -1785,6 +1803,10 @@ const server = http.createServer(async (req, res) => {
             roomId: row.room_id, roomTitle: room ? room.title : null,
             createdAt: row.created_at, consentAt: row.consent_at,
             moderationStatus: row.moderation_status, moderationReason: row.moderation_reason,
+            // Чтобы Admin показал текущее состояние переключателя (см. правку
+            // «Возрастное подтверждение») — в очередь могло прийти уже с
+            // заявкой автора.
+            notForKids: !!row.not_for_kids,
             variants: 0,
           });
         }
@@ -1858,6 +1880,22 @@ const server = http.createServer(async (req, res) => {
         },
       });
     }
+    // Пометка «не для детей» (см. правку «Возрастное подтверждение») — решение
+    // МОДЕРАТОРА, отдельным вызовом, а не частью approve: её ставят и снимают
+    // и до одобрения (в очереди), и потом, уже по опубликованному пазлу, если
+    // недоглядели. Ключ — группа (image_file), как у категории и статуса.
+    const notForKidsMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/not-for-kids$/);
+    if (notForKidsMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(notForKidsMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      const body = await readJson(req);
+      const value = body.notForKids ? 1 : 0;
+      stmt.setNotForKids.run(value, puzzle.image_file);
+      adminLog.info("Admin изменил пометку «не для детей»", { puzzleId: puzzle.id, title: puzzle.title, notForKids: !!value });
+      return json(res, 200, { ok: true, notForKids: !!value });
+    }
+
     const modDeleteMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)$/);
     if (modDeleteMatch && req.method === "DELETE") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
@@ -2169,6 +2207,11 @@ const server = http.createServer(async (req, res) => {
       // если он легче уже сохранённого — см. цикл ниже).
       const puzzleUrlByImage = new Map();
       for (const row of stmt.puzzlesPublic.all()) {
+        // Помеченные «не для детей» (см. правку «Возрастное подтверждение»)
+        // в sitemap не идут: в выдаче они встали бы рядом с детскими
+        // категориями, а подтверждения возраста у краулера нет и быть не
+        // может — размытие живёт только в интерфейсе.
+        if (row.not_for_kids) continue;
         const existing = puzzleUrlByImage.get(row.image_file);
         const pieces = row.grid_rows * row.grid_cols;
         if (!existing || pieces < existing.pieces) puzzleUrlByImage.set(row.image_file, { id: row.id, pieces });
@@ -2414,7 +2457,7 @@ async function api(req, res, url, user) {
     const file = groupId + PHOTO_MIME[mime];
     fs.writeFileSync(path.join(PUZZLE_PHOTO_DIR, file), buf);
     const ts = now();
-    const variants = PIECE_PRESETS.map(total => {
+    const variantIds = PIECE_PRESETS.map(total => {
       const { rows, cols } = gridForPieceTarget(total, width, height);
       const id = crypto.randomUUID();
       const seed = crypto.randomInt(1, 2 ** 31 - 1);
@@ -2428,15 +2471,26 @@ async function api(req, res, url, user) {
         identity.id, identity.username || null, identity.name || null, identity.email || null,
         directPublish ? null : "pending",
       );
-      return puzzlePayload(stmt.puzzle.get(id));
+      return id;
     });
+
+    // Групповые флаги — ДО сборки payload'ов: они ставятся отдельными
+    // UPDATE'ами (в insertCustomPuzzle этих колонок нет), и если собрать
+    // ответ раньше, клиент получит строки без них. На этом уже попались:
+    // notForKids уезжал в ответе как false, хотя в базе стоял (поймал тест).
+    let wantsEmail = true;
     if (directPublish) {
       // Письмо о результате — по галочке (см. правку «Галочка про письмо»);
-      // notifyEmail=0 её снимает, всё остальное (включая уведомление в
-      // аккаунте) не меняется. Колонка по умолчанию 1, поэтому пишем только
-      // при явном отказе.
-      const wantsEmail = url.searchParams.get("notifyEmail") !== "0";
+      // колонка по умолчанию 1, поэтому пишем только при явном отказе.
+      wantsEmail = url.searchParams.get("notifyEmail") !== "0";
       if (!wantsEmail) stmt.setNotifyEmail.run(0, file);
+      // Заявка автора «не для детей» — то же, что и на пути публикации из
+      // комнаты (см. POST .../publish): начальное значение, решает модератор.
+      if (url.searchParams.get("notForKids") === "1") stmt.setNotForKids.run(1, file);
+    }
+
+    const variants = variantIds.map(id => puzzlePayload(stmt.puzzle.get(id)));
+    if (directPublish) {
       adminLog.info("Фото загружено сразу на публикацию (без комнаты)", { userId: identity.id, title, categoryId: directCategoryId, newCategory: directNewCategory, variants: variants.length, notifyEmail: wantsEmail });
       return json(res, 200, { title, variants, moderationStatus: "pending", notifyEmail: wantsEmail });
     }
@@ -2492,6 +2546,14 @@ async function api(req, res, url, user) {
     // прошлый выбор не должен молча переезжать на новую заявку.
     const wantsEmail = body.notifyEmail !== false;
     stmt.setNotifyEmail.run(wantsEmail ? 1 : 0, puzzle.image_file);
+
+    // Заявка автора «это не для детей» (см. правку «Возрастное
+    // подтверждение») — ставим как НАЧАЛЬНОЕ значение, чтобы до проверки
+    // картинка уже была прикрыта; окончательно решает модератор в Admin
+    // (POST /internal/puzzles/:id/not-for-kids). Обратное — снятие галочки —
+    // ничего не сбрасывает: если модератор уже пометил группу, повторная
+    // отправка без галочки не должна её «отбеливать».
+    if (body.notForKids) stmt.setNotForKids.run(1, puzzle.image_file);
 
     stmt.setModerationPending.run(puzzle.image_file);
     adminLog.info("Фото отправлено на публикацию", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, categoryId: cat.categoryId, newCategory: cat.newCategory, notifyEmail: wantsEmail });

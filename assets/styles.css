@@ -427,6 +427,41 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   overflow:hidden;border-radius:var(--md-sys-shape-corner-l) var(--md-sys-shape-corner-l) 0 0;
 }
 .puzzle-card-thumb img{width:100%;height:100%;object-fit:cover}
+/* «Не для детей» (см. правку «Возрастное подтверждение») — размывается ТОЛЬКО
+   сама картинка: класс висит на .puzzle-card-thumb, но фильтр применяется к
+   вложенной <img>, иначе замылилась бы и плашка поверх неё. Заметный радиус
+   (18px) — чтобы сюжет действительно не читался, а не «почти видно».
+   transition — чтобы после подтверждения возраста картинка проявлялась, а не
+   дёргалась (класс снимается на месте, без перерисовки сетки). */
+.puzzle-card-thumb.is-blurred img{filter:blur(18px);transform:scale(1.06);transition:filter .3s var(--ease-std)}
+.puzzle-card-agegate{
+  position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);
+  padding:.35em .9em;border-radius:var(--md-sys-shape-corner-full);
+  background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 86%, transparent);
+  color:var(--md-sys-color-inverse-on-surface);
+  font-size:.78rem;font-weight:700;white-space:nowrap;pointer-events:none;
+}
+.puzzle-page-image.is-blurred{filter:blur(24px);transition:filter .3s var(--ease-std)}
+/* Модалка подтверждения возраста. Всё по центру одной колонкой: тут короткий
+   вопрос и два равнозначных ответа, а не форма — левый край и разведённые по
+   углам кнопки читались бы как «служебное окно». Значок 18+ вместо иконки:
+   он и есть само сообщение, объяснять картинкой нечего. Тёплый акцент
+   (--flame-tip) вместо красного: это не ошибка и не запрет, а развилка. */
+.age-modal{
+  position:relative;max-width:22rem;
+  display:flex;flex-direction:column;align-items:center;text-align:center;gap:.7rem;
+  padding:2.2rem 1.6rem 1.6rem;
+}
+.age-modal h2{margin:0;font-size:1.15rem}
+.age-modal p{margin:0;color:var(--md-sys-color-on-surface-variant)}
+.age-modal .bar{justify-content:center;gap:.6rem;margin-top:.4rem;width:100%}
+.age-modal-badge{
+  display:grid;place-items:center;width:3.4rem;height:3.4rem;border-radius:50%;
+  background:color-mix(in srgb, var(--flame-tip) 16%, transparent);
+  border:2px solid color-mix(in srgb, var(--flame-tip) 55%, transparent);
+  color:var(--flame-tip);font-size:1.05rem;font-weight:800;letter-spacing:-.02em;
+}
+.age-modal-close{position:absolute;top:.4rem;right:.4rem}
 /* top-LEFT, не right — правый верхний угол занят кнопкой «…» (.card-menu-wrap,
    см. ниже), которая теперь есть почти на каждой карточке библиотеки. */
 .puzzle-card-badge{
@@ -1407,6 +1442,10 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    в модалке публикации, и на странице — стиль общий. */
 .publish-notify-check{display:flex;align-items:flex-start;gap:.55rem;font-size:.86rem;cursor:pointer}
 .publish-notify-check input{margin-top:.15rem;flex:none;width:1rem;height:1rem;accent-color:var(--flame-tip);cursor:pointer}
+/* Приписка приглушённым — только там, где она объясняет ПОСЛЕДСТВИЕ выбора
+   (галочка «не для детей»: картинка будет размыта). У галочки про письмо
+   такую подпись убрали как лишнюю — см. правку. */
+.publish-notify-hint{color:var(--md-sys-color-on-surface-variant)}
 .publish-submit{align-self:flex-start;padding-inline:1.8rem}
 .publish-error{padding:0;text-align:left;color:var(--md-sys-color-error)}
 /* <select> под тем же классом (модалка выбора сложности, #difficultySelect)

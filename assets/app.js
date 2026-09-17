@@ -31,7 +31,13 @@ const PROHIBITED_TIER_A = [
   "чужие личные документы (паспорт, карты, переписка) без согласия владельца",
 ];
 const PROHIBITED_TIER_B = [
-  "любая обнажённость, не только откровенная порнография",
+  // Исключение для искусства (см. правку «Возрастное подтверждение») — до
+  // него правило запрещало вообще любую обнажённость, то есть отсекало и
+  // музейную живопись со скульптурой, чего оно не имело в виду. Пускаем
+  // только этот класс и только с пометкой «Не для детей» (её ставит
+  // модератор, картинка в сетке размыта до подтверждения возраста); всё
+  // остальное — по-прежнему нет.
+  "обнажённость — кроме произведений искусства (живопись, скульптура): их публикуем с пометкой «Не для детей»",
   "жестокость и шокирующий контент, даже нереалистичный",
   "чужой копирайт без разрешения правообладателя",
   "узнаваемые люди без явного согласия на публичный показ",
@@ -77,6 +83,78 @@ function applyTheme(theme) {
  * отсутствующий перевод просто молча показывает русский оригинал, а не
  * падает. Новые пары добавляются перед строкой EN_END ниже. */
 const LANG_KEY = "puzzle_lang";
+
+/* ───────────────── «Не для детей»: подтверждение возраста ─────────────────
+ * Пазлы с пометкой (см. server.js, not_for_kids — ставит модератор) приходят
+ * в общих списках как обычные, но их превью размыто до тех пор, пока человек
+ * один раз не подтвердит возраст. Подтверждение общее на все такие пазлы и
+ * живёт в localStorage этого браузера — то же место и тот же характер, что у
+ * остальных настроек интерфейса (см. LIBRARY_SORT_KEY и компанию).
+ *
+ * ЧЕСТНО о границах: это НЕ защита доступа. Размытие снимается в DevTools, а
+ * сам файл лежит по прямой ссылке /uploads/… и отдаётся без проверок — как и
+ * у всех, кто делает такую кнопку. Задача ровно одна: не показать врасплох в
+ * общей сетке тому, кто этого не ждёт. Поэтому такие пазлы ещё и исключены из
+ * sitemap.xml и серверных снимков категорий (см. server.js) — там подтвердить
+ * возраст некому. */
+const AGE_OK_KEY = "puzzle_age_confirmed";
+const ageConfirmedListeners = new Set();
+
+function isAgeConfirmed() {
+  return localStorage.getItem(AGE_OK_KEY) === "1";
+}
+
+/** Спрашивает подтверждение, если его ещё нет. Возвращает true, если можно
+ *  показывать (подтвердили сейчас или раньше). Один раз подтвердили — все
+ *  подписчики (сетки, страница пазла) снимают размытие у себя сами, без
+ *  перезагрузки: ради этого ageConfirmedListeners. */
+async function ensureAgeConfirmed() {
+  if (isAgeConfirmed()) return true;
+  const ok = await askAgeConfirm();
+  if (!ok) return false;
+  localStorage.setItem(AGE_OK_KEY, "1");
+  for (const fn of ageConfirmedListeners) { try { fn(); } catch { /* один сломанный подписчик не должен ломать остальные */ } }
+  // Подписки одноразовые по своей природе: подтверждение больше не снимется,
+  // а новые карточки после него уже не размываются и не подписываются вовсе
+  // (см. isAgeConfirmed в buildCard) — держать закрытия на удалённые узлы
+  // незачем.
+  ageConfirmedListeners.clear();
+  return true;
+}
+
+function onAgeConfirmed(fn, signal) {
+  ageConfirmedListeners.add(fn);
+  signal?.addEventListener("abort", () => ageConfirmedListeners.delete(fn));
+}
+
+/** Модалка «вам есть 18?» — статичная разметка в index.html (как и остальные
+ *  модалки), поэтому Promise: вызывающему нужно дождаться ответа, а кнопки
+ *  живут вне его кода. Отказ и закрытие крестиком/фоном — одно и то же, «нет»,
+ *  ничего не запоминаем: передумает — спросим снова. */
+function askAgeConfirm() {
+  return new Promise(resolve => {
+    const backdrop = document.getElementById("ageModalBackdrop");
+    const yes = document.getElementById("ageModalYes");
+    const no = document.getElementById("ageModalNo");
+    const close = document.getElementById("ageModalClose");
+    const done = answer => {
+      yes.removeEventListener("click", onYes);
+      no.removeEventListener("click", onNo);
+      close.removeEventListener("click", onNo);
+      backdrop.removeEventListener("click", onBackdrop);
+      closeModal("ageModalBackdrop");
+      resolve(answer);
+    };
+    const onYes = () => done(true);
+    const onNo = () => done(false);
+    const onBackdrop = e => { if (e.target === backdrop) done(false); };
+    yes.addEventListener("click", onYes);
+    no.addEventListener("click", onNo);
+    close.addEventListener("click", onNo);
+    backdrop.addEventListener("click", onBackdrop);
+    openModal("ageModalBackdrop");
+  });
+}
 function getLang() {
   return localStorage.getItem(LANG_KEY) === "en" ? "en" : "ru";
 }
@@ -190,7 +268,8 @@ const EN = {
   "реальное насилие, жестокость, материалы, пропагандирующие терроризм": "real violence, cruelty, material promoting terrorism",
   "экстремистская символика, разжигание ненависти по признаку расы, религии, национальности, пола, ориентации": "extremist symbols, hate speech based on race, religion, nationality, gender, or orientation",
   "чужие личные документы (паспорт, карты, переписка) без согласия владельца": "someone else's personal documents (passport, cards, correspondence) without the owner's consent",
-  "любая обнажённость, не только откровенная порнография": "any nudity, not just explicit pornography",
+  "обнажённость — кроме произведений искусства (живопись, скульптура): их публикуем с пометкой «Не для детей»":
+    "nudity — except in artworks (paintings, sculpture): those are published marked \"Not for kids\"",
   "жестокость и шокирующий контент, даже нереалистичный": "cruelty and shocking content, even unrealistic",
   "чужой копирайт без разрешения правообладателя": "someone else's copyrighted work without the rights holder's permission",
   "узнаваемые люди без явного согласия на публичный показ": "recognizable people without explicit consent to be shown publicly",
@@ -433,6 +512,12 @@ const EN = {
   "Своя фотография? Теперь её можно опубликовать отсюда — отдельная комната для этого больше не нужна.":
     "Got your own photo? You can publish it right from here now — no separate room needed.",
   "Прислать результат письмом": "Email me the outcome",
+  "Не для детей": "Not for kids",
+  "Это произведение искусства с обнажённой натурой": "This is an artwork featuring nudity",
+  "— пометим «Не для детей», в сетке будет размыто": "— we'll mark it \"Not for kids\" and blur it in the grid",
+  "Этот пазл не предназначен для детей. Вам есть 18 лет?": "This puzzle isn't meant for children. Are you 18 or older?",
+  "Мне нет 18": "I'm under 18",
+  "Мне есть 18": "I'm 18 or older",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 function applyLangButton() {
@@ -496,6 +581,12 @@ function applyStaticTranslations() {
   byId("publishNewCategoryName", el => { el.placeholder = t("Предложить новую категорию (пойдёт на модерацию) — необязательно"); });
   byId("appbarPublishText", el => { el.textContent = t("Опубликовать"); });
   byId("publishNotifyEmailText", el => { el.textContent = t("Прислать результат письмом"); });
+  byId("publishNotForKidsText", el => { el.textContent = t("Это произведение искусства с обнажённой натурой"); });
+  byId("publishNotForKidsHint", el => { el.textContent = t("— пометим «Не для детей», в сетке будет размыто"); });
+  byId("ageModalTitle", el => { el.textContent = t("Не для детей"); });
+  byId("ageModalText", el => { el.textContent = t("Этот пазл не предназначен для детей. Вам есть 18 лет?"); });
+  byId("ageModalNo", el => { el.textContent = t("Мне нет 18"); });
+  byId("ageModalYes", el => { el.textContent = t("Мне есть 18"); });
   document.querySelectorAll('.modal-backdrop .icon-btn[aria-label="Закрыть"]').forEach(el => { el.setAttribute("aria-label", t("Закрыть")); });
 
   // Футер — вне #app, живёт постоянно (см. план «Футер»).
@@ -933,6 +1024,17 @@ async function renderPuzzlePage(root, id, signal) {
 
   const img = $(root, "#puzzlePageImage");
   img.src = p.imageUrl; img.alt = displayTitle;
+  // Сюда можно попасть и прямой ссылкой, минуя сетку с её размытием (см.
+  // buildCard), поэтому спрашиваем и здесь. Не блокируем рендер страницы:
+  // название, категория, рейтинг видны сразу, размыта только картинка —
+  // ровно как на карточке.
+  if (p.notForKids && !isAgeConfirmed()) {
+    // Класс — на саму <img>, не на .puzzle-page-media: в том же блоке лежит
+    // статистика сборки, размывать её незачем.
+    img.classList.add("is-blurred");
+    onAgeConfirmed(() => img.classList.remove("is-blurred"), signal);
+    ensureAgeConfirmed();
+  }
   $(root, "#puzzlePageTitle").textContent = displayTitle;
 
   if (category) {
@@ -1066,7 +1168,12 @@ async function renderPuzzlePage(root, id, signal) {
     bindShareButton(shareBtn, () => `${location.origin}/puzzle/${encodeURIComponent(variants[0].id)}`);
   }
 
-  $(root, "#puzzlePagePlayBtn").addEventListener("click", () => {
+  $(root, "#puzzlePagePlayBtn").addEventListener("click", async () => {
+    // Сесть за стол — то же, что открыть картинку: детали и есть она. Пока
+    // возраст не подтверждён, не пускаем (см. правку «Возрастное
+    // подтверждение»): отказ не запоминается, поэтому на следующий такой
+    // пазл вопрос задаётся заново.
+    if (p.notForKids && !await ensureAgeConfirmed()) return;
     const variant = variants[choice.idx] || variants[0];
     const asymmetric = $(root, "#puzzlePageAsymmetric").checked;
     const rotate = $(root, "#puzzlePageRotate").checked;
@@ -1132,6 +1239,7 @@ async function openPublishModal(id, title, onDone, source) {
   // выше), иначе снятая в прошлый раз незаметно перенеслась бы на следующее
   // фото.
   document.getElementById("publishNotifyEmail").checked = true;
+  document.getElementById("publishNotForKids").checked = false;
   document.getElementById("publishNewCategoryName").value = "";
   document.getElementById("publishError").hidden = true;
   // Категория — одиночный выбор через <select> (см. план «Один пазл — одна
@@ -1169,10 +1277,11 @@ document.getElementById("publishConfirmBtn").addEventListener("click", async () 
   const categoryId = categorySelect ? categorySelect.value : "";
   const newCategoryName = document.getElementById("publishNewCategoryName").value.trim();
   const notifyEmail = document.getElementById("publishNotifyEmail").checked;
+  const notForKids = document.getElementById("publishNotForKids").checked;
   const btn = document.getElementById("publishConfirmBtn");
   btn.disabled = true;
   try {
-    await publishPuzzle(id, { categoryId, newCategoryName, notifyEmail });
+    await publishPuzzle(id, { categoryId, newCategoryName, notifyEmail, notForKids });
     trackGoal("photo_submitted", { source: source || "unknown" });
     closeModal("publishModalBackdrop");
     pendingPublishId = null;
@@ -1397,7 +1506,7 @@ async function uploadPuzzlePhoto(file, title, roomId) {
  *  настоящего входа (auth.fetch, не roomFetch): публикация анониму недоступна
  *  и раньше. Согласие тут одно, но СТРОГОЕ — форма показывает полный список
  *  (TIER_A + TIER_B), как и модалка публикации. */
-async function uploadAndPublishPhoto(file, title, { categoryId, newCategoryName, notifyEmail } = {}) {
+async function uploadAndPublishPhoto(file, title, { categoryId, newCategoryName, notifyEmail, notForKids } = {}) {
   const { blob, width, height } = await shrinkForPuzzle(file);
   // Без подстановки «Мой пазл», как у загрузки в комнату: для публикации
   // название обязательно (см. server.js, «title required») — дефолт тут
@@ -1409,6 +1518,9 @@ async function uploadAndPublishPhoto(file, title, { categoryId, newCategoryName,
   // Отправляем параметр только при отказе от письма: на сервере колонка по
   // умолчанию 1, и «ничего не прислали» = «как обычно, письмом».
   if (notifyEmail === false) qs.set("notifyEmail", "0");
+  // Заявка автора «не для детей» (см. server.js) — как и с письмом, шлём
+  // только явное «да»: по умолчанию пометки нет.
+  if (notForKids) qs.set("notForKids", "1");
   const res = await auth.fetch(`/api/puzzles?${qs}`, {
     method: "POST", headers: { "Content-Type": blob.type || "image/jpeg" }, body: blob,
   });
@@ -1447,7 +1559,7 @@ async function deletePuzzle(id) {
 /** Отправка своего фото на публикацию в общую библиотеку (см. план
  *  «Модерация загруженных фото») — отдельное, более строгое согласие, не то
  *  же самое, что consent=1 при обычной загрузке в комнату. */
-async function publishPuzzle(id, { categoryId, newCategoryName, notifyEmail } = {}) {
+async function publishPuzzle(id, { categoryId, newCategoryName, notifyEmail, notForKids } = {}) {
   const res = await auth.fetch(`/api/puzzles/${encodeURIComponent(id)}/publish`, {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -1457,6 +1569,8 @@ async function publishPuzzle(id, { categoryId, newCategoryName, notifyEmail } = 
       // false — явный отказ от письма (см. правку «Галочка про письмо»);
       // undefined оставляет серверное поведение по умолчанию (письмо шлём).
       notifyEmail: notifyEmail === false ? false : undefined,
+      // Только явное «да» — пометку ставит модератор, см. server.js.
+      notForKids: notForKids ? true : undefined,
     }),
   });
   const data = await res.json().catch(() => ({}));
@@ -2130,6 +2244,23 @@ function buildCard(p, opts = {}) {
   // Vitals, и для позиций в поиске) — если бы она тоже грузилась лениво,
   // это ЗАМЕДЛИЛО бы LCP, а не ускорило страницу.
   if (!opts.eager) img.loading = "lazy";
+  // «Не для детей» (см. правку «Возрастное подтверждение») — размываем ТОЛЬКО
+  // картинку, название и всё остальное на карточке видно как обычно. Клик по
+  // такой карточке сперва спрашивает возраст (см. обработчик ниже), а после
+  // подтверждения все размытые карточки на странице открываются разом —
+  // подписываемся на общее событие, чтобы не перерисовывать сетку целиком.
+  if (p.notForKids) {
+    const thumb = $(node, ".puzzle-card-thumb");
+    const unblur = () => thumb.classList.remove("is-blurred");
+    if (!isAgeConfirmed()) {
+      thumb.classList.add("is-blurred");
+      const badge = document.createElement("span");
+      badge.className = "puzzle-card-agegate";
+      badge.textContent = t("Не для детей");
+      thumb.appendChild(badge);
+      onAgeConfirmed(unblur, opts.signal);
+    }
+  }
   $(node, ".puzzle-card-title").textContent = puzzleDisplayTitle(p);
   // Кнопка «За стол» — статичный текст в самом <template> (index.html),
   // ей нужен t() тут: шаблон клонируется заново на каждую карточку, но
@@ -2206,8 +2337,9 @@ function buildCard(p, opts = {}) {
   // вместо превью-модалки») — «За стол» переехало на саму страницу пазла
   // (renderPuzzlePage), клик по карточке теперь сразу ведёт туда.
   if (opts.roomId) {
-    playBtn.addEventListener("click", e => {
+    playBtn.addEventListener("click", async e => {
       e.stopPropagation(); // не даём всплыть до клика по card ниже — то же самое действие делать дважды незачем
+      if (p.notForKids && !await ensureAgeConfirmed()) return;
       if (variants.length > 1) openDifficultyModal(puzzleDisplayTitle(p), variants, onPlay);
       else onPlay(variants[0]);
     });
@@ -2231,7 +2363,12 @@ function buildCard(p, opts = {}) {
   // keydown с фокусed вложенной кнопки/ссылки тоже всплывает сюда, открытие
   // не должно случаться поверх их действия.
   const isCardPreviewTarget = e => !e.target.closest("button") && !e.target.closest(".puzzle-card-author");
-  const openCard = () => {
+  const openCard = async () => {
+    // Открыть пазл с пометкой — то же, что посмотреть картинку: и превью, и
+    // страница, и сам стол показывают её целиком (детали — это она и есть),
+    // поэтому спрашиваем возраст здесь, один раз на всё (см.
+    // ensureAgeConfirmed). Отказались — просто остаёмся в сетке.
+    if (p.notForKids && !await ensureAgeConfirmed()) return;
     if (opts.roomId) openPuzzlePreviewModal(p, { variants, onPlay });
     else navigate(`/puzzle/${encodeURIComponent(variants[0].id)}`);
   };
@@ -2294,6 +2431,10 @@ function buildCard(p, opts = {}) {
       else addToRoom(roomId, variants[0]);
     }
     items.push({ label: t("+ В комнату"), onClick: async menuEl => {
+      // Добавить к себе в комнату — тоже за подтверждением возраста: иначе
+      // помеченный пазл попал бы за стол в обход размытия (см. правку
+      // «Возрастное подтверждение»).
+      if (p.notForKids && !await ensureAgeConfirmed()) { closeCardMenu(); return; }
       // Подменяем содержимое меню списком комнат вместо того, чтобы сразу
       // закрыться (тот же приём, что renderAddToMenu в Movies) — второй
       // клик уже выбирает конкретную комнату.
@@ -2379,7 +2520,7 @@ function mountPuzzleGridPager(gridEl, pagerEl, signal) {
     const pageItems = items.slice(start, start + PUZZLE_PAGE_SIZE);
 
     gridEl.innerHTML = "";
-    const cards = pageItems.map((p, i) => { const node = buildCard(p, { eager: page === 0 && i === 0 }); gridEl.appendChild(node); return { p, node }; });
+    const cards = pageItems.map((p, i) => { const node = buildCard(p, { eager: page === 0 && i === 0, signal }); gridEl.appendChild(node); return { p, node }; });
     for (const { p, node } of cards) applyBadge(node, p);
 
     const showPager = items.length > PUZZLE_PAGE_SIZE;
@@ -2877,6 +3018,11 @@ async function renderPublishPage(root, signal) {
       </div>
 
       <label class="publish-notify-check">
+        <input type="checkbox" id="publishPageNotForKids">
+        <span>${t("Это произведение искусства с обнажённой натурой")} <span class="publish-notify-hint">${t("— пометим «Не для детей», в сетке будет размыто")}</span></span>
+      </label>
+
+      <label class="publish-notify-check">
         <input type="checkbox" id="publishPageNotifyEmail" checked>
         <span>${t("Прислать результат письмом")}</span>
       </label>
@@ -2948,6 +3094,7 @@ async function renderPublishPage(root, signal) {
         categoryId: $(form, "#publishPageCategory")?.value || "",
         newCategoryName: $(form, "#publishPageNewCategory").value.trim(),
         notifyEmail: $(form, "#publishPageNotifyEmail").checked,
+        notForKids: $(form, "#publishPageNotForKids").checked,
       });
       if (signal.aborted) return;
       const userId = auth.getUser()?.id;

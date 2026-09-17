@@ -583,6 +583,31 @@
      .modal-head плавает поверх картинки, видимое название — под ней в
      .difficulty-caption. Плитки уровней (#difficultyGrid) заполняет и
      подсвечивает выбранную openDifficultyModal — вместо прежнего <select>. -->
+<!-- ===================== ПОДТВЕРЖДЕНИЕ ВОЗРАСТА =====================
+     Для пазлов с пометкой «Не для детей» (см. server.js, not_for_kids —
+     ставит модератор): превью размыто, пока человек один раз не подтвердит
+     возраст. Подтверждение общее на все такие пазлы и запоминается в
+     браузере (см. AGE_OK_KEY в app.js). Это не проверка документов и не
+     защита доступа — просто «не показывать врасплох», см. комментарий в
+     app.js. -->
+<div class="modal-backdrop hidden" id="ageModalBackdrop">
+  <div class="modal age-modal" role="dialog" aria-modal="true" aria-labelledby="ageModalTitle">
+    <!-- Крестик — абсолютом в углу, а не в .modal-head: заголовок тут по
+         центру, и обычная флекс-шапка сдвигала бы его влево. Закрыть = «мне
+         нет 18», отдельного смысла у крестика нет. -->
+    <button class="icon-btn age-modal-close" id="ageModalClose" aria-label="Закрыть">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+    <div class="age-modal-badge" aria-hidden="true">18+</div>
+    <h2 id="ageModalTitle">Не для детей</h2>
+    <p id="ageModalText">Этот пазл не предназначен для детей. Вам есть 18 лет?</p>
+    <div class="bar">
+      <button class="btn outlined" id="ageModalNo" type="button">Мне нет 18</button>
+      <button class="btn filled" id="ageModalYes" type="button">Мне есть 18</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-backdrop hidden" id="difficultyModalBackdrop">
   <div class="modal" role="dialog" aria-modal="true" aria-labelledby="difficultyModalTitle">
     <div class="modal-head">
@@ -646,6 +671,13 @@
          письмо»). Уведомление в аккаунте приходит в любом случае, поэтому
          снятая галочка не оставляет человека без ответа, см. notifyPublishOutcome
          в server.js. -->
+    <!-- Заявка автора «не для детей» (см. правку «Возрастное подтверждение»):
+         пометку ставит модератор, эта галочка — только сигнал ему и начальное
+         значение, чтобы до проверки картинка уже была прикрыта. -->
+    <label class="publish-notify-check">
+      <input type="checkbox" id="publishNotForKids">
+      <span><span id="publishNotForKidsText">Это произведение искусства с обнажённой натурой</span> <span class="publish-notify-hint" id="publishNotForKidsHint">— пометим «Не для детей», в сетке будет размыто</span></span>
+    </label>
     <label class="publish-notify-check">
       <input type="checkbox" id="publishNotifyEmail" checked>
       <span id="publishNotifyEmailText">Прислать результат письмом</span>
