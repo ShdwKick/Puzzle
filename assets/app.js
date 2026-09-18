@@ -317,6 +317,8 @@ const EN = {
   "Не удалось загрузить категорию — обновите страницу.": "Couldn't load the category — please refresh the page.",
   "Добавил:": "Added by:",
   "На модерации": "Under review",
+  "Эти пазлы видите только вы — в библиотеке они появятся после проверки.":
+    "Only you can see these — they'll appear in the library once reviewed.",
   "Опубликовано": "Published",
   "Отклонено:": "Rejected:",
   "без причины": "no reason given",
@@ -513,8 +515,8 @@ const EN = {
     "Got your own photo? You can publish it right from here now — no separate room needed.",
   "Прислать результат письмом": "Email me the outcome",
   "Не для детей": "Not for kids",
-  "Это произведение искусства с обнажённой натурой": "This is an artwork featuring nudity",
-  "— пометим «Не для детей», в сетке будет размыто": "— we'll mark it \"Not for kids\" and blur it in the grid",
+  "Это не для детей": "This isn't for children",
+  "— пометим пазл, в сетке он будет размыт до подтверждения возраста": "— we'll flag the puzzle; it stays blurred in the grid until age is confirmed",
   "Этот пазл не предназначен для детей. Вам есть 18 лет?": "This puzzle isn't meant for children. Are you 18 or older?",
   "Мне нет 18": "I'm under 18",
   "Мне есть 18": "I'm 18 or older",
@@ -581,8 +583,8 @@ function applyStaticTranslations() {
   byId("publishNewCategoryName", el => { el.placeholder = t("Предложить новую категорию (пойдёт на модерацию) — необязательно"); });
   byId("appbarPublishText", el => { el.textContent = t("Опубликовать"); });
   byId("publishNotifyEmailText", el => { el.textContent = t("Прислать результат письмом"); });
-  byId("publishNotForKidsText", el => { el.textContent = t("Это произведение искусства с обнажённой натурой"); });
-  byId("publishNotForKidsHint", el => { el.textContent = t("— пометим «Не для детей», в сетке будет размыто"); });
+  byId("publishNotForKidsText", el => { el.textContent = t("Это не для детей"); });
+  byId("publishNotForKidsHint", el => { el.textContent = t("— пометим пазл, в сетке он будет размыт до подтверждения возраста"); });
   byId("ageModalTitle", el => { el.textContent = t("Не для детей"); });
   byId("ageModalText", el => { el.textContent = t("Этот пазл не предназначен для детей. Вам есть 18 лет?"); });
   byId("ageModalNo", el => { el.textContent = t("Мне нет 18"); });
@@ -2026,6 +2028,8 @@ document.getElementById("accountNotificationsToggle").addEventListener("click", 
   const expanded = btn.getAttribute("aria-expanded") === "true";
   btn.setAttribute("aria-expanded", String(!expanded));
   list.hidden = expanded;
+  // Раскрыли — значит увидели: гасим показанное (см. markShownNotificationsRead).
+  if (!expanded) markShownNotificationsRead();
 });
 
 // Обратная связь в футере (см. правку «Форма обратной связи в футере») —
@@ -2112,24 +2116,52 @@ async function refreshNotificationsBadge() {
   if (mine) setNotificationsCount(mine.filter(n => !n.readAt).length);
 }
 
+/** Что сейчас показано в списке и ещё не помечено прочитанным — гасим их
+ *  разом, когда человек РАСКРЫЛ колокольчик (см. accountNotificationsToggle):
+ *  список грузится вместе с модалкой, ещё свёрнутым, и считать это
+ *  «просмотром» было бы нечестно — цифра обнулялась бы, ничего не показав. */
+let pendingNotificationIds = [];
+
+/** Пометить прочитанными всё, что сейчас на экране. Из списка они пропадут
+ *  при следующем открытии, а не сию секунду: убирать строки прямо под
+ *  курсором, пока человек их читает, — худшее из возможных поведений. */
+function markShownNotificationsRead() {
+  const ids = pendingNotificationIds;
+  if (!ids.length) return;
+  pendingNotificationIds = [];
+  // По одному id, а не read-all: общий список Auth делится между сервисами,
+  // и read-all погасил бы чужие уведомления, которых Puzzle даже не
+  // показывает (см. fetchPuzzleNotifications — фильтр по префиксу типа).
+  Promise.all(ids.map(id =>
+    auth.fetch(`${auth.authBase}/api/notifications/${encodeURIComponent(id)}/read`, { method: "POST" }).catch(() => null)
+  )).then(() => refreshNotificationsBadge());
+}
+
 async function loadAccountNotifications() {
   const list = document.getElementById("accountNotificationsList");
   list.innerHTML = `<p class="state-note">${t("Загрузка…")}</p>`;
+  pendingNotificationIds = []; // на экране пока ничего — не гасим прошлую пачку
   const mine = await fetchPuzzleNotifications();
   if (!mine) {
     list.innerHTML = `<p class="state-note">${t("Не удалось загрузить уведомления.")}</p>`;
     return;
   }
-  setNotificationsCount(mine.filter(n => !n.readAt).length);
-  if (!mine.length) {
+  // Показываем ТОЛЬКО непрочитанные (см. правку «Уведомления исчезают после
+  // просмотра»): прочитанное уходит навсегда, архива уведомлений у сервиса
+  // нет и не планируется — это разовые «вам ответили по такой-то заявке», а
+  // не переписка. Сами записи в Auth остаются (readAt проставлен), удалять
+  // чужие строки Puzzle не берётся.
+  const unreadOnly = mine.filter(n => !n.readAt);
+  setNotificationsCount(unreadOnly.length);
+  pendingNotificationIds = unreadOnly.map(n => n.id);
+  if (!unreadOnly.length) {
     list.innerHTML = `<p class="state-note">${t("Нет уведомлений")}</p>`;
     return;
   }
   list.innerHTML = "";
-  for (const n of mine) {
-    const unread = !n.readAt;
+  for (const n of unreadOnly) {
     const item = document.createElement(n.url ? "a" : "div");
-    item.className = "notification-item" + (unread ? " unread" : "");
+    item.className = "notification-item unread";
     if (n.url) { item.href = n.url; item.target = "_blank"; item.rel = "noopener"; }
     const title = document.createElement("p");
     title.className = "notification-title";
@@ -2140,16 +2172,6 @@ async function loadAccountNotifications() {
       body.className = "notification-body";
       body.textContent = n.body;
       item.appendChild(body);
-    }
-    if (unread) {
-      item.addEventListener("click", () => {
-        // Цифру в шапке пересчитываем ПОСЛЕ ответа сервера, а не оптимистично:
-        // прочитанность живёт в Auth, и если запрос не дошёл, честнее оставить
-        // счётчик прежним, чем показать ноль, который не сохранился.
-        auth.fetch(`${auth.authBase}/api/notifications/${encodeURIComponent(n.id)}/read`, { method: "POST" })
-          .then(() => refreshNotificationsBadge())
-          .catch(() => {});
-      }, { once: true });
     }
     list.appendChild(item);
   }
@@ -2372,13 +2394,22 @@ function buildCard(p, opts = {}) {
     if (opts.roomId) openPuzzlePreviewModal(p, { variants, onPlay });
     else navigate(`/puzzle/${encodeURIComponent(variants[0].id)}`);
   };
-  node.setAttribute("role", "button");
-  node.tabIndex = 0;
-  node.addEventListener("click", e => { if (isCardPreviewTarget(e)) openCard(); });
-  node.addEventListener("keydown", e => {
-    if (!isCardPreviewTarget(e)) return;
-    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(); }
-  });
+  // openable:false — карточка только показывает (см. блок «На модерации» в
+  // renderProfile): открывать там нечего, свой ещё не одобренный пазл вне
+  // комнаты всё равно упрётся в «Пазлы из своих фото собираются только в
+  // комнатах» (renderTable). Меню «…» при этом остаётся — отозвать заявку
+  // удалением оттуда как раз можно.
+  if (opts.openable === false) {
+    node.classList.add("is-inert");
+  } else {
+    node.setAttribute("role", "button");
+    node.tabIndex = 0;
+    node.addEventListener("click", e => { if (isCardPreviewTarget(e)) openCard(); });
+    node.addEventListener("keydown", e => {
+      if (!isCardPreviewTarget(e)) return;
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openCard(); }
+    });
+  }
 
   // Второстепенные действия — одно меню «…» (см. renderCardMenu выше,
   // реверанс Movies) вместо отдельных кнопок, которые не влезали в узкую
@@ -2866,12 +2897,21 @@ async function renderLibrary(root, signal) {
 async function renderProfile(root, userId, signal) {
   root.innerHTML = `
     <div class="library-head" id="profileHead"><h1>${t("Загружаем…")}</h1></div>
+    <section class="profile-pending" id="profilePending" hidden>
+      <h2>${t("На модерации")}</h2>
+      <p class="state-note">${t("Эти пазлы видите только вы — в библиотеке они появятся после проверки.")}</p>
+      <div class="puzzle-grid" id="profilePendingGrid"></div>
+    </section>
     <div class="puzzle-grid" id="puzzleGrid"><p class="state-note">${t("Загружаем…")}</p></div>
     ${PAGER_HTML()}`;
 
   let data;
   try {
-    const res = await fetch(`/api/users/${encodeURIComponent(userId)}/puzzles`);
+    // roomFetch, а не голый fetch: ждущие модерации заявки сервер отдаёт
+    // только самому автору, а узнать его он может только по токену (см.
+    // /api/users/:id/puzzles). Гостю roomFetch шлёт обычный fetch — чужой
+    // профиль как открывался без входа, так и открывается.
+    const res = await roomFetch(`/api/users/${encodeURIComponent(userId)}/puzzles`);
     if (!res.ok) throw new Error("profile fetch failed");
     data = await res.json();
   } catch {
@@ -2884,6 +2924,19 @@ async function renderProfile(root, userId, signal) {
   headEl.innerHTML = data.username
     ? `<h1>${t("Пазлы, опубликованные")} ${data.username}</h1>`
     : `<h1>${t("Профиль")}</h1><p>${t("Пользователь ничего не опубликовал.")}</p>`;
+
+  // Свои заявки, по которым модератор ещё не ответил (см. правку «На
+  // модерации в „Моих публикациях“») — отдельным блоком НАД одобренными, а
+  // не вперемешку с ними: это разные вещи, и человек сюда заходит как раз
+  // посмотреть, что стало с отправленным. Сервер отдаёт непустой pending
+  // только владельцу профиля, отдельной проверки тут не нужно.
+  const pendingGroups = groupPuzzles(data.pending || []);
+  if (pendingGroups.length) {
+    const pendingBox = $(root, "#profilePending");
+    const pendingGrid = $(root, "#profilePendingGrid");
+    for (const g of pendingGroups) pendingGrid.appendChild(buildCard(g, { signal, openable: false }));
+    pendingBox.hidden = false;
+  }
 
   if (!data.puzzles.length) {
     $(root, "#puzzleGrid").outerHTML = `<p class="state-note">${t("Пока ничего не опубликовано.")}</p>`;
@@ -3019,7 +3072,7 @@ async function renderPublishPage(root, signal) {
 
       <label class="publish-notify-check">
         <input type="checkbox" id="publishPageNotForKids">
-        <span>${t("Это произведение искусства с обнажённой натурой")} <span class="publish-notify-hint">${t("— пометим «Не для детей», в сетке будет размыто")}</span></span>
+        <span>${t("Это не для детей")} <span class="publish-notify-hint">${t("— пометим пазл, в сетке он будет размыт до подтверждения возраста")}</span></span>
       </label>
 
       <label class="publish-notify-check">
@@ -5778,13 +5831,28 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   // updatePresence ниже), а не гадаем заново на каждое сообщение: иначе
   // один и тот же гость мог бы получить разные номера в чате и в presence.
   let latestPresenceLabels = new Map();
+  // Счётчики для целей Метрики по чату (см. trackGoal) — все три цели
+  // одноразовые/накопительные в пределах одного захода за стол: интересует
+  // «сколько человек вообще дошли до чата», а не «сколько раз дёрнули
+  // кнопку», поэтому повторные открытия панели цель больше не шлют.
+  let chatOpenTracked = false, chatSentCount = 0, chatGotReply = false, chatDialogTracked = false;
+  function trackChatDialog() {
+    if (chatDialogTracked || !chatSentCount || !chatGotReply) return;
+    chatDialogTracked = true;
+    trackGoal("chat_dialog");
+  }
   function setChatPopoverOpen(open) {
     chatPopover.classList.toggle("hidden", !open);
     chatBtn.setAttribute("aria-expanded", String(open));
     if (open) {
+      const hadUnread = unreadCount > 0;
       unreadCount = 0; chatUnread.hidden = true; chatMessagesEl.scrollTop = chatMessagesEl.scrollHeight;
       // Открыли — значит только что смотрим на него, не притушенный.
       chatWidget.classList.remove("chat-unfocused");
+      if (!chatOpenTracked) {
+        chatOpenTracked = true;
+        trackGoal("chat_opened", { unread: hadUnread ? "1+" : "0" });
+      }
     }
   }
   chatBtn.addEventListener("click", e => {
@@ -5805,6 +5873,10 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     if (empty) empty.remove();
     const label = latestPresenceLabels.get(msg.from.id) || roomMemberLabels([msg.from], "id")[0];
     const mine = myIdentity && msg.from.id === myIdentity.id;
+    // Чужое сообщение — единственный признак, что за столом не монолог;
+    // сервер шлёт chat всем, включая автора, поэтому именно !mine (см.
+    // цель chat_dialog в trackGoal).
+    if (!mine) { chatGotReply = true; trackChatDialog(); }
     const row = document.createElement("div");
     row.className = "chat-message " + (mine ? "own" : "other");
     const meta = document.createElement("div");
@@ -5839,7 +5911,9 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     const text = chatInput.value.trim();
     if (!text) return;
     socket.send({ type: "chat", text });
-    trackGoal("chat_message_sent");
+    chatSentCount++;
+    trackGoal("chat_message_sent", { ordinal: chatSentCount === 1 ? "1" : chatSentCount <= 5 ? "2-5" : "6+" });
+    trackChatDialog();
     chatInput.value = "";
   }, { signal });
 
@@ -6541,7 +6615,14 @@ function trackPageview() {
  *  саму комнату), room_invite_copied (клик по коду или по «Скопировать
  *  ссылку» в комнате, несёт {method: "code"|"link"}), chat_message_sent
  *  (сабмит формы чата за столом комнаты — само сообщение не пишется в цель,
- *  только факт отправки), rating_submitted (звёздный рейтинг пазла, несёт
+ *  только факт отправки; несёт {ordinal: "1"|"2-5"|"6+"} — номер сообщения
+ *  в этом заходе за стол, чтобы отличать «написал одну строчку» от
+ *  переписки), chat_opened (первое за заход открытие панели чата, несёт
+ *  {unread: "0"|"1+"} — открыли сами или потому что прилетело сообщение;
+ *  повторные открытия молчат, цель считает людей, а не клики) и chat_dialog
+ *  (один раз за заход, когда в этом столе и отправили своё сообщение, и
+ *  получили чужое — то есть чат не остался монологом; вместе три цели дают
+ *  воронку открыл → написал → поговорили), rating_submitted (звёздный рейтинг пазла, несёт
  *  {value: 1..5}), photo_submitted (заявка на публикацию — само одобрение
  *  проходит уже в Admin, откуда клиент не видит момент; несёт {source} —
  *  через какую именно кнопку отправили: "win"/"cardMenu"/"puzzlePreview"/

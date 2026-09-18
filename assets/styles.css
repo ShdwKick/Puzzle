@@ -417,6 +417,26 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    не браузерный дефолт кнопки. */
 .puzzle-card:hover{transform:translateY(-2px);box-shadow:var(--e2)}
 .puzzle-card:focus-visible{outline:2px solid var(--md-sys-color-primary);outline-offset:2px}
+/* Карточка без открытия (см. buildCard, openable:false — блок «На
+   модерации» в профиле): показывает, но никуда не ведёт — курсор и подъём
+   при наведении обещали бы клик, которого нет. Меню «…» внутри работает
+   как обычно, поэтому карточку не гасим целиком. */
+.puzzle-card.is-inert{cursor:default}
+.puzzle-card.is-inert:hover{transform:none;box-shadow:var(--e1)}
+/* Свои заявки на модерации над сеткой одобренного (см. renderProfile) —
+   визуально отдельный блок, а не ещё один ряд той же сетки: иначе
+   непроверенное читалось бы как уже опубликованное. */
+.profile-pending{
+  margin:0 0 1.6rem;padding:1rem;border-radius:var(--md-sys-shape-corner-l);
+  background:var(--md-sys-color-surface-container-low);
+  border:1px dashed var(--md-sys-color-outline-variant);
+}
+.profile-pending h2{margin:0 0 .2rem;font-size:1.05rem}
+.profile-pending .state-note{margin:0 0 .9rem;padding:0;text-align:left}
+/* Явно, на будущее: стоит кому-нибудь дописать сюда display — и встроенное
+   [hidden]{display:none} браузера молча проиграет (тот же баг-класс, что у
+   .btn[hidden]/.library-sort-row[hidden] выше, ловленный тут уже не раз). */
+.profile-pending[hidden]{display:none}
 /* Скругление верхних углов — теперь СВОЁ (border-radius + overflow:hidden
    именно на превью), не унаследованное от overflow:hidden всей карточки:
    картинка edge-to-edge всё ещё должна обрезаться по углам, но выпадающее

@@ -1270,6 +1270,86 @@ ok("удалённой категории больше нет в публичн�
 ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${categorizedPuzzleId}`, { method: "DELETE" });
 ok("уборка: тестовая картинка с категорией удалена", ir.status === 200, String(ir.status));
 
+// ───────── временное скрытие пазла из библиотеки (см. правку «Временно
+// скрыть пазл») — мягкая альтернатива удалению: из публичных списков
+// пропадает, но рейтинг/прогресс/прямая ссылка остаются ─────────
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "Кандидат на скрытие", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: categoryA.id },
+});
+const hideUpload = await ir.json();
+const hideId = hideUpload.variants[0].id;
+const hideVariantIds = hideUpload.variants.map(v => v.id);
+
+// Оценка ДО скрытия — главная причина, по которой скрытие вообще нужно
+// отдельно от удаления: удаление унесло бы её вместе с группой.
+r = await asJson(tokenA, `/puzzles/${hideId}/rating`, { method: "PUT", body: { rating: 5 } });
+ok("оценка выставлена до скрытия", r.status === 200 && r.body.count === 1, JSON.stringify(r.body));
+
+const categoryPageBefore = await (await fetch(PUZZLE + `/category/${encodeURIComponent(categoryASlug)}`)).text();
+ok("до скрытия пазл есть в SSR-снимке своей категории", categoryPageBefore.includes(`/puzzle/${hideId}`), hideId);
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles");
+ok("в списке Admin пазл по умолчанию не скрыт",
+  (await ir.json()).puzzles.find(x => x.id === hideId)?.hidden === false, hideId);
+
+ir = await internalCall("", `/internal/puzzles/${hideId}/hidden`, { method: "POST", body: { hidden: true } });
+ok("скрыть без ключа админа нельзя — 403", ir.status === 403, String(ir.status));
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${hideId}/hidden`, { method: "POST", body: { hidden: true } });
+const hideBody = await ir.json();
+ok("скрытие — 200, отдаёт момент скрытия",
+  ir.status === 200 && hideBody.hidden === true && typeof hideBody.hiddenAt === "number", JSON.stringify(hideBody));
+
+// Скрытие — атрибут ГРУППЫ: пропасть должны ВСЕ уровни сложности разом,
+// иначе карточка осталась бы в сетке, просто с меньшим выбором.
+ir = await fetch(PUZZLE + "/api/puzzles");
+const libAfterHide = await ir.json();
+ok("скрытого пазла нет в библиотеке — ни одного из вариантов",
+  !libAfterHide.some(p => hideVariantIds.includes(p.id)), JSON.stringify(libAfterHide.filter(p => hideVariantIds.includes(p.id)).map(p => p.id)));
+
+const sitemapAfterHide = await (await fetch(PUZZLE + "/sitemap.xml")).text();
+ok("скрытого пазла нет в sitemap.xml", !hideVariantIds.some(x => sitemapAfterHide.includes(`/puzzle/${x}`)), "");
+
+const categoryPageAfter = await (await fetch(PUZZLE + `/category/${encodeURIComponent(categoryASlug)}`)).text();
+ok("скрытого пазла нет и в SSR-снимке категории", !categoryPageAfter.includes(`/puzzle/${hideId}`), "");
+
+// Прямая ссылка продолжает работать — иначе порвались бы комнаты, куда его
+// уже добавили, и чужие закладки. Но с noindex: из выдачи он должен уйти.
+ir = await fetch(PUZZLE + `/puzzle/${hideId}`);
+const hiddenPageHtml = await ir.text();
+ok("страница скрытого пазла всё ещё открывается — 200", ir.status === 200, String(ir.status));
+ok("но отдаётся с noindex", hiddenPageHtml.includes('name="robots"') && hiddenPageHtml.includes("noindex"), "");
+
+r = await asJson(tokenA, `/puzzles/${hideId}`);
+ok("API самого пазла по прямой ссылке тоже работает", r.status === 200, String(r.status));
+
+r = await asJson(tokenA, `/puzzles/${hideId}/rating`);
+ok("рейтинг скрытие пережил — не потерян", r.status === 200 && r.body.count === 1 && r.body.mine === 5, JSON.stringify(r.body));
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles");
+const adminRowHidden = (await ir.json()).puzzles.find(x => x.id === hideId);
+ok("Admin скрытый пазл по-прежнему видит (иначе нечем вернуть)",
+  adminRowHidden && adminRowHidden.hidden === true, JSON.stringify(adminRowHidden));
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${hideId}/hidden`, { method: "POST", body: { hidden: true } });
+ok("повторное скрытие не сдвигает момент скрытия (счётчик «сколько уже висит»)",
+  (await ir.json()).hiddenAt === hideBody.hiddenAt, String(hideBody.hiddenAt));
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${hideId}/hidden`, { method: "POST", body: { hidden: false } });
+ok("возврат в библиотеку — 200, отметка снята",
+  ir.status === 200 && (await ir.json()).hidden === false, String(ir.status));
+
+ir = await fetch(PUZZLE + "/api/puzzles");
+const libAfterUnhide = await ir.json();
+ok("после возврата все варианты снова в библиотеке",
+  hideVariantIds.every(x => libAfterUnhide.some(p => p.id === x)), String(libAfterUnhide.filter(p => hideVariantIds.includes(p.id)).length));
+ok("и рейтинг на карточке тот же, что был до скрытия",
+  libAfterUnhide.find(p => p.id === hideId)?.rating?.count === 1,
+  JSON.stringify(libAfterUnhide.find(p => p.id === hideId)?.rating));
+
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${hideId}`, { method: "DELETE" });
+ok("уборка: кандидат на скрытие удалён", ir.status === 200, String(ir.status));
+
 // ───────── публикация и категория: одна на пазл (см. план «Один пазл —
 // одна категория») — три ветки: выбрана существующая, предложена новая,
 // не выбрано ничего (дефолт «Пользовательские») ─────────
@@ -1349,6 +1429,42 @@ const emptyProfileData = await ir.json();
 ok("профиль без публикаций — 200 с пустым списком, а не 404",
   ir.status === 200 && emptyProfileData.username === null && Array.isArray(emptyProfileData.puzzles) && emptyProfileData.puzzles.length === 0,
   JSON.stringify(emptyProfileData));
+
+// ───────── «На модерации» в своих публикациях (см. правку с тем же
+// названием): свои ждущие заявки автор видит на своей странице, чужой
+// профиль остаётся витриной только одобренного ─────────
+ur = await callRaw(tokenA, `/puzzles?publish=1&w=300&h=400&consent=1&title=${encodeURIComponent("Ждёт проверки")}`, fakePng, "image/png");
+const waitingUpload = await ur.json();
+const waitingId = waitingUpload.variants[0].id;
+
+ir = await fetch(PUZZLE + `/api/users/${userIdA}/puzzles`);
+const profileAnon = await ir.json();
+ok("гость на чужом профиле ждущих модерации не видит вовсе",
+  Array.isArray(profileAnon.pending) && profileAnon.pending.length === 0, JSON.stringify(profileAnon.pending));
+ok("и в основном списке профиля их тоже нет",
+  !profileAnon.puzzles.some(x => x.id === waitingId), waitingId);
+
+r = await asJson(tokenB, `/users/${userIdA}/puzzles`);
+ok("другой вошедший пользователь чужие заявки тоже не видит",
+  r.status === 200 && r.body.pending.length === 0, JSON.stringify(r.body.pending));
+
+r = await asJson(tokenA, `/users/${userIdA}/puzzles`);
+ok("сам автор видит свою заявку в отдельном блоке pending",
+  r.status === 200 && r.body.pending.some(x => x.id === waitingId), JSON.stringify(r.body.pending.map(x => x.id)));
+ok("но не вперемешку с одобренными — в puzzles её нет",
+  !r.body.puzzles.some(x => x.id === waitingId), waitingId);
+ok("у карточки заявки статус pending — по нему клиент рисует «На модерации»",
+  r.body.pending.find(x => x.id === waitingId)?.moderationStatus === "pending",
+  JSON.stringify(r.body.pending.find(x => x.id === waitingId)?.moderationStatus));
+
+// Одобрение переносит карточку из pending в основной список — та же
+// строка, просто с другим статусом (см. setModerationApproved).
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${waitingId}/approve`, { method: "POST" });
+ok("Admin одобрил ждущую заявку — 200", ir.status === 200, String(ir.status));
+r = await asJson(tokenA, `/users/${userIdA}/puzzles`);
+ok("после одобрения заявка ушла из pending и появилась среди опубликованных",
+  !r.body.pending.some(x => x.id === waitingId) && r.body.puzzles.some(x => x.id === waitingId),
+  JSON.stringify({ pending: r.body.pending.length, published: r.body.puzzles.length }));
 
 ir = await internalCall(ADMIN_KEY, `/internal/moderation/categories/${newPendingCategory.id}/approve`, { method: "POST" });
 ok("Admin одобрил новую категорию — 200", ir.status === 200, String(ir.status));
@@ -1508,6 +1624,45 @@ await asJson(tokenMail, `/puzzles/${mailAgainId}/publish`, { method: "POST", bod
 ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${mailAgainId}/approve`, { method: "POST" });
 ok("следующая заявка без галочки снова шлёт письмо",
   await waitForLog("puzzle", `«${MAIL_AGAIN_TITLE}» опубликовано в библиотеке`), "тема письма не найдена в логе puzzle");
+
+// ───────── судьба письма видна в ЖУРНАЛЕ Admin, а не только в stdout
+// контейнера (см. правку «Почему не пришло письмо»): разбирательство
+// «уведомление в аккаунте есть, письма нет» упиралось в то, что все исходы
+// notifyPublishOutcome были молчаливыми ─────────
+// Отсутствие ключа должно быть видно СРАЗУ при старте, а не только когда
+// кто-то не дождался письма: тестовое окружение как раз без RESEND_API_KEY.
+ok("без RESEND_API_KEY сервис предупреждает об этом при старте",
+  await waitForLog("puzzle", "Не задан RESEND_API_KEY", 1500), "предупреждения нет в выводе puzzle");
+
+ir = await internalCall(ADMIN_KEY, "/internal/logs?limit=1000");
+const mailLogs = (await ir.json()).logs.filter(x => x.message.includes("Письмо о модерации"));
+ok("исход письма попадает в /internal/logs — теперь его видно во вкладке «Логи»",
+  mailLogs.length > 0, String(mailLogs.length));
+// В тестовом окружении RESEND_API_KEY не задан — ровно тот случай, что был
+// на проде: отправки нет, и журнал обязан сказать об этом прямо.
+ok("без RESEND_API_KEY журнал пишет, что письмо НЕ отправлено, и называет причину",
+  mailLogs.some(x => x.level === "warn" && x.message.includes("НЕ отправлено") && x.message.includes("RESEND_API_KEY")),
+  JSON.stringify(mailLogs.map(x => x.message).slice(0, 4)));
+ok("снятая галочка тоже объяснена в журнале, а не молча",
+  mailLogs.some(x => x.message.includes("автор снял галочку") && x.meta?.title === NO_MAIL_TITLE),
+  JSON.stringify(mailLogs.filter(x => x.message.includes("галочку")).map(x => x.meta)));
+ok("адрес автора в журнал не пишем — там только id/название/исход",
+  !mailLogs.some(x => JSON.stringify(x).includes("mailtest@example.com")), "почта утекла в журнал");
+
+// Аккаунт БЕЗ почты (danil заведён без неё) — третий молчаливый исход:
+// письму просто некуда идти, и это тоже должно быть сказано.
+const NO_EMAIL_TITLE = "Фото от автора без почты (тест)";
+r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комната автора без почты" } });
+const noEmailRoomId = r.body.id;
+ur = await callRaw(tokenA, `/puzzles?roomId=${noEmailRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent(NO_EMAIL_TITLE)}`, fakePng, "image/png");
+const noEmailId = (await ur.json()).variants[0].id;
+await asJson(tokenA, `/puzzles/${noEmailId}/publish`, { method: "POST", body: { consent: true } });
+ir = await internalCall(ADMIN_KEY, `/internal/moderation/photos/${noEmailId}/approve`, { method: "POST" });
+ok("одобрение заявки от автора без почты — 200", ir.status === 200, String(ir.status));
+ir = await internalCall(ADMIN_KEY, "/internal/logs?limit=1000");
+ok("отсутствие почты у автора журнал тоже объясняет",
+  (await ir.json()).logs.some(x => x.message.includes("не было почты в аккаунте") && x.meta?.title === NO_EMAIL_TITLE),
+  NO_EMAIL_TITLE);
 
 // ───────── прогресс: bulk-список для «Продолжить сборку» над библиотекой
 // (см. план «Продолжить сборку») ─────────

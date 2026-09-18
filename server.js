@@ -298,6 +298,20 @@ try { db.exec("ALTER TABLE puzzles ADD COLUMN uploader_email TEXT"); } catch {}
 // сложности одной картинки.
 try { db.exec("ALTER TABLE puzzles ADD COLUMN not_for_kids INTEGER NOT NULL DEFAULT 0"); } catch {}
 
+// Скрытие из библиотеки (см. правку «Временно скрыть пазл») — мягкая
+// альтернатива удалению, на случай «пока уберём, потом решим»: строка,
+// рейтинг (puzzle_ratings по image_file), прогресс сборки и уже начатые
+// сеансы за столом остаются нетронутыми — пазл лишь пропадает из всех
+// ПУБЛИЧНЫХ СПИСКОВ (библиотека, категории, профиль автора, «продолжить
+// сборку», sitemap и SSR-снимки). Прямая ссылка /puzzle/:id продолжает
+// работать (иначе рвались бы комнаты, куда его уже добавили, и чужие
+// закладки), но отдаётся с noindex — см. serveApp. Для контента, который
+// НЕЛЬЗЯ оставлять, есть удаление и forceDeletePuzzleGroup, это не замена
+// им. Время, а не 0/1: «временная мера» — значит хочется видеть, сколько
+// она уже длится (NULL = виден, как и всё остальное *_at в схеме).
+// Атрибут ГРУППЫ (image_file), как и категория/модерация/«не для детей».
+try { db.exec("ALTER TABLE puzzles ADD COLUMN hidden_at INTEGER"); } catch {}
+
 // Хочет ли автор письмо о результате модерации (см. правку «Галочка про
 // письмо») — 1 по умолчанию, чтобы поведение уже загруженного не менялось
 // задним числом. Уведомление в аккаунте (Admin → Auth /internal/notifications,
@@ -479,6 +493,10 @@ const stmt = {
   // (см. план) — только публичные пазлы (owner_user_id IS NULL): свои фото,
   // загруженные в комнату, вне контекста той комнаты не открываются вообще
   // (renderTable отбивает их отдельно), в этом списке им делать нечего.
+  // Скрытые (hidden_at) тоже: полоса «Продолжить» стоит прямо над сеткой
+  // библиотеки — пазл, которого в сетке нет, не должен висеть над ней.
+  // Сама строка прогресса при этом не трогается и вернётся, как только
+  // пазл покажут обратно — в том и смысл скрытия вместо удаления.
   // idx_progress_user (см. схему) покрывает WHERE user_id = ?.
   progressInFlight: db.prepare(`
     SELECT pp.puzzle_id, pp.pieces_placed, pp.pieces_total, pp.updated_at,
@@ -486,9 +504,15 @@ const stmt = {
     FROM puzzle_progress pp
     JOIN puzzles p ON p.id = pp.puzzle_id
     WHERE pp.user_id = ? AND pp.completed_at IS NULL AND pp.pieces_placed > 0 AND p.owner_user_id IS NULL
+      AND p.hidden_at IS NULL
     ORDER BY pp.updated_at DESC`),
 
   puzzlesPublic:  db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL ORDER BY sort_order, created_at"),
+  // То же самое, но без скрытых (см. ALTER TABLE hidden_at выше) — именно
+  // этот вариант идёт во ВСЁ публичное: библиотеку и sitemap. Сырой
+  // puzzlesPublic остаётся для Admin (/internal/puzzles) — ему как раз
+  // нужно видеть скрытые, иначе их нечем было бы вернуть обратно.
+  puzzlesPublicVisible: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL AND hidden_at IS NULL ORDER BY sort_order, created_at"),
   // СВОИ ФОТО ИМЕННО ЭТОЙ КОМНАТЫ (room_id, видны сразу по факту загрузки —
   // не все фото владельца по всем его комнатам, см. комментарий у ALTER
   // TABLE room_id выше) + библиотечные пазлы, ЯВНО добавленные в эту
@@ -551,16 +575,21 @@ const stmt = {
   // группе ещё до одобрения публикации (см. план «Один пазл — одна
   // категория», привязка идёт сразу при /publish), считать её тут
   // преждевременно.
+  // hidden_at IS NULL — скрытый пазл не должен ни считаться в «(N)» рядом с
+  // категорией, ни удерживать саму категорию в списке: если скрыть в ней
+  // последний пазл, категория исчезает так же, как если бы его удалили
+  // (см. categoriesListHtml, «не показываем категорию с 0 пазлов»). То же
+  // относится к обложке и списку ниже.
   categoryPublicPuzzleCount: db.prepare(`
     SELECT COUNT(DISTINCT p.image_file) AS n FROM puzzles p
-    WHERE p.category_id = ? AND p.owner_user_id IS NULL`),
+    WHERE p.category_id = ? AND p.owner_user_id IS NULL AND p.hidden_at IS NULL`),
   // Обложка категории (см. план «Обложка категории») — первый пазл в том же
   // порядке, что и сама библиотека (ORDER BY sort_order, created_at, см.
   // puzzlesPublic) — тем же порядком group[0] в клиентском groupPuzzles
   // (assets/app.js), просто без похода за всем списком целиком.
   categoryFirstImage: db.prepare(`
     SELECT p.image_file FROM puzzles p
-    WHERE p.category_id = ? AND p.owner_user_id IS NULL
+    WHERE p.category_id = ? AND p.owner_user_id IS NULL AND p.hidden_at IS NULL
     ORDER BY p.sort_order, p.created_at LIMIT 1`),
   // Полный список пазлов категории для SSR /category/:slug (см. правку
   // «SSR для категорий») — тот же owner_user_id IS NULL фильтр видимости,
@@ -568,7 +597,7 @@ const stmt = {
   // порядок, что у puzzlesPublic (важно — от него зависит нумерация
   // «Категория #N», см. categoryPuzzlesListHtml).
   categoryPuzzles: db.prepare(`
-    SELECT * FROM puzzles WHERE category_id = ? AND owner_user_id IS NULL
+    SELECT * FROM puzzles WHERE category_id = ? AND owner_user_id IS NULL AND hidden_at IS NULL
     ORDER BY sort_order, created_at`),
   insertCategory: db.prepare("INSERT INTO categories (id, name, slug, status, created_by, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   setCategorySlug: db.prepare("UPDATE categories SET slug = ? WHERE id = ?"),
@@ -595,7 +624,15 @@ const stmt = {
   // — WHERE category_id IS NULL делает миграцию идемпотентной, не трогает
   // то, что уже проставлено через новый одиночный API.
   backfillPuzzleCategory: db.prepare("UPDATE puzzles SET category_id = ? WHERE image_file = ? AND category_id IS NULL"),
-  approvedByUploader: db.prepare("SELECT * FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'approved' ORDER BY created_at DESC"),
+  // hidden_at IS NULL — профиль автора такой же публичный список, как
+  // библиотека и категория: скрытый пазл не должен оставаться видимым в
+  // обход общего правила только потому, что зашли со стороны автора.
+  approvedByUploader: db.prepare("SELECT * FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'approved' AND hidden_at IS NULL ORDER BY created_at DESC"),
+  // Заявки того же автора, по которым модератор ещё не ответил (см. правку
+  // «На модерации в „Моих публикациях“») — отдаются ТОЛЬКО ему самому, см.
+  // /api/users/:id/puzzles. hidden_at тут не при чём: скрывать можно лишь
+  // то, что уже в библиотеке.
+  pendingByUploader: db.prepare("SELECT * FROM puzzles WHERE uploader_user_id = ? AND moderation_status = 'pending' ORDER BY created_at DESC"),
   // Сколько заявок этого человека сейчас ждут модератора — по ГРУППАМ
   // (image_file), не по строкам: один аплоад заводит PIECE_PRESETS строк, но
   // для модератора это одна карточка (см. MAX_PENDING_PUBLISH_PER_USER).
@@ -607,6 +644,10 @@ const stmt = {
   setNotifyEmail: db.prepare("UPDATE puzzles SET notify_email = ? WHERE image_file = ?"),
   // Пометка «не для детей» — по группе, как и категория/статус модерации.
   setNotForKids: db.prepare("UPDATE puzzles SET not_for_kids = ? WHERE image_file = ?"),
+  // Скрытие из библиотеки (см. ALTER TABLE hidden_at выше) — тоже по группе:
+  // прятать один уровень сложности отдельно от остальных бессмысленно, для
+  // пользователя это одна карточка.
+  setHidden: db.prepare("UPDATE puzzles SET hidden_at = ? WHERE image_file = ?"),
 
   insertFeedback: db.prepare(`INSERT INTO feedback (id,message,contact,user_id,username,page_url,created_at) VALUES (?,?,?,?,?,?,?)`),
   // LIMIT 200 — тот же приём, что у /internal/rooms ниже: Admin показывает
@@ -979,8 +1020,19 @@ function notifyPublishOutcome(puzzle, outcome, reason) {
   // уведомлением в аккаунте (его создаёт Admin через Auth, см. notify в
   // ответах approve/reject — от этого флага оно не зависит), письма просто
   // не будет. Старые строки — 1 по умолчанию, поведение не меняется.
-  if (!puzzle.notify_email) return;
-  if (!puzzle.uploader_email) return;
+  // Почему письма не было — должно быть видно во вкладке «Логи» Admin, а не
+  // только в stdout контейнера (см. lib/mailer.js — она пишет в console, а
+  // туда админ не ходит). Ровно из-за этого пробела разбирательство «в логах
+  // уведомление есть, письма нет» упёрлось в догадки: все четыре исхода
+  // раньше были молчаливыми. Сам адрес в журнал НЕ пишем — чужая почта в
+  // логе не нужна, достаточно факта «есть/нет».
+  const mailLog = { puzzleId: puzzle.id, title: puzzle.title, outcome };
+  if (!puzzle.notify_email) {
+    return adminLog.info("Письмо о модерации не отправляем — автор снял галочку при отправке", mailLog);
+  }
+  if (!puzzle.uploader_email) {
+    return adminLog.info("Письмо о модерации не отправляем — у автора не было почты в аккаунте на момент загрузки", mailLog);
+  }
   const mail = outcome === "approved"
     ? mailTpl.publishApproved({ title: puzzle.title, link: `${PUBLIC_URL}/profile/${encodeURIComponent(puzzle.uploader_user_id)}` })
     // room_id пуст у прямой публикации (см. POST /api/puzzles?publish=1) —
@@ -992,7 +1044,25 @@ function notifyPublishOutcome(puzzle, outcome, reason) {
   // mailer.send() сама ловит все свои ошибки и возвращает {ok:false},
   // никогда не бросает (см. lib/mailer.js) — тот же fire-and-forget, что и
   // у Auth (там тоже без .catch() на этом вызове).
-  mailer.send({ to: puzzle.uploader_email, subject: mail.subject, html: mail.html, text: mail.text });
+  mailer.send({ to: puzzle.uploader_email, subject: mail.subject, html: mail.html, text: mail.text })
+    .then(r => {
+      if (r && r.ok) return adminLog.info("Письмо о модерации отправлено", mailLog);
+      // Причина — из самого мейлера (см. lib/mailer.js, поле reason): все три
+      // случая внешние по отношению к коду, и в журнале должно быть написано,
+      // какой именно, иначе остаётся только гадать. «Нет ключа» — ровно то,
+      // на чём прод простоял: RESEND_API_KEY не прокидывался в контейнер
+      // (см. docker-compose.prod.yml).
+      if (r && r.reason === "no_api_key") {
+        return adminLog.warn("Письмо о модерации НЕ отправлено — на сервере не задан RESEND_API_KEY (проверьте .env рядом с docker-compose.prod.yml)", mailLog);
+      }
+      if (r && r.reason === "http") {
+        // Самая частая причина ошибки Resend — домен из MAIL_FROM не
+        // подтверждён у него в аккаунте; текст ответа кладём рядом.
+        return adminLog.warn(`Письмо о модерации НЕ отправлено — Resend ответил ${r.status}`, { ...mailLog, detail: r.detail || null });
+      }
+      adminLog.warn("Письмо о модерации НЕ отправлено — не достучались до Resend", { ...mailLog, detail: (r && r.detail) || null });
+    })
+    .catch(e => adminLog.warn("Письмо о модерации НЕ отправлено — сбой мейлера", { ...mailLog, message: e.message }));
 }
 
 function forceDeletePuzzleGroup(puzzle) {
@@ -1177,6 +1247,18 @@ function newJoinCode() { // дословно из Trip/server.js
   return code;
 }
 
+// Письма о результате модерации (см. notifyPublishOutcome/lib/mailer.js) —
+// НЕ обязательны для работы сервиса, поэтому предупреждение, а не exit(1),
+// как у AUTH_ISSUER ниже. Но сказать об этом надо прямо и при старте: без
+// ключа отправка молча превращается в строчку в stdout, а снаружи это
+// выглядит как «уведомление в аккаунте пришло, письма нет» — прод так и
+// простоял, пока RESEND_API_KEY не прокидывался в контейнер (см.
+// docker-compose.prod.yml). Ключ тут только проверяется на пустоту, само
+// значение никуда не печатается.
+if (!process.env.RESEND_API_KEY) {
+  console.error("[!] Не задан RESEND_API_KEY — письма о результате модерации отправляться НЕ будут (уведомление в аккаунте автор всё равно получит). Ключ кладут в .env рядом с docker-compose.prod.yml, тот же, что у Trip и Auth.");
+}
+
 // ───────────────────────── авторизация ─────────────────────────
 if (!AUTH_ISSUER) {
   console.error("Не задан AUTH_ISSUER — без него нечем проверять токены. Укажите адрес auth-сервиса, напр. AUTH_ISSUER=https://auth.burninghouse.ru");
@@ -1293,7 +1375,13 @@ const pluralPieces = n => pluralRu(n, "деталь", "детали", "дета�
 
 const DEFAULT_OG_IMAGE = `${PUBLIC_URL}/assets/og-image.png`;
 
-function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement, image }) {
+function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement, image, noindex }) {
+  // Скрытый из библиотеки пазл (см. ALTER TABLE hidden_at) по прямой ссылке
+  // открывается — но в индексе ему делать нечего: из sitemap он уже выпал,
+  // а сам по себе выпасть из выдачи может только по noindex. Вставляем
+  // перед </head>, а не через replaceAll по существующему тегу — robots в
+  // index.html нет вовсе (по умолчанию индексируется всё).
+  if (noindex) html = html.replace("</head>", `  <meta name="robots" content="noindex, follow">\n</head>`);
   if (title) html = html.replaceAll(DEFAULT_TITLE, title);
   if (description) html = html.replaceAll(DEFAULT_DESCRIPTION, description);
   // Канонический URL встречается 3 раза байт-в-байт (canonical, og:url,
@@ -1460,6 +1548,7 @@ function serveApp(res, pathname, isHead) {
     <p>${pieces} ${pluralPieces(pieces)} — собирайте онлайн бесплатно, без регистрации и скачивания.</p>
   </div>`,
             image: `${PUBLIC_URL}${imageUrlFor(puzzle.image_file)}`,
+            noindex: !!puzzle.hidden_at,
           });
         }
       }
@@ -1687,6 +1776,9 @@ const server = http.createServer(async (req, res) => {
           groups.set(row.image_file, {
             id: row.id, title: row.title, imageUrl: `/uploads/${row.image_file}`, variants: 0,
             createdAt: row.created_at, categoryId: row.category_id || null,
+            // Скрытые (см. ALTER TABLE hidden_at) в этом списке ОСТАЮТСЯ —
+            // Admin единственное место, откуда их можно вернуть обратно.
+            hidden: !!row.hidden_at, hiddenAt: row.hidden_at || null,
           });
         }
         groups.get(row.image_file).variants++;
@@ -1894,6 +1986,26 @@ const server = http.createServer(async (req, res) => {
       stmt.setNotForKids.run(value, puzzle.image_file);
       adminLog.info("Admin изменил пометку «не для детей»", { puzzleId: puzzle.id, title: puzzle.title, notForKids: !!value });
       return json(res, 200, { ok: true, notForKids: !!value });
+    }
+
+    // Скрыть/вернуть пазл в библиотеку (см. ALTER TABLE hidden_at) —
+    // обратимо, в отличие от DELETE ниже, и ничего не разрушает: ни рейтинг,
+    // ни прогресс, ни сеансы за столом. Отдельный роут, а не флаг в PATCH
+    // названия/категории: это решение другого рода (видимость, не данные) и
+    // зовётся из другого места интерфейса.
+    const hiddenMatch = p.match(/^\/internal\/puzzles\/([\w-]+)\/hidden$/);
+    if (hiddenMatch && req.method === "POST") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const puzzle = stmt.puzzle.get(hiddenMatch[1]);
+      if (!puzzle) return json(res, 404, { error: "not found" });
+      const body = await readJson(req);
+      // Повторное скрытие уже скрытого НЕ обновляет метку времени — иначе
+      // «сколько уже висит скрытым» обнулялось бы от случайного двойного
+      // клика, а ради этого числа время тут и хранится.
+      const hiddenAt = body.hidden ? (puzzle.hidden_at || now()) : null;
+      stmt.setHidden.run(hiddenAt, puzzle.image_file);
+      adminLog.info("Admin изменил видимость пазла в библиотеке", { puzzleId: puzzle.id, title: puzzle.title, hidden: !!hiddenAt });
+      return json(res, 200, { ok: true, hidden: !!hiddenAt, hiddenAt });
     }
 
     const modDeleteMatch = p.match(/^\/internal\/moderation\/photos\/([\w-]+)$/);
@@ -2206,7 +2318,7 @@ const server = http.createServer(async (req, res) => {
       // внутри группы решает только Map (первый увиденный ряд остаётся,
       // если он легче уже сохранённого — см. цикл ниже).
       const puzzleUrlByImage = new Map();
-      for (const row of stmt.puzzlesPublic.all()) {
+      for (const row of stmt.puzzlesPublicVisible.all()) {
         // Помеченные «не для детей» (см. правку «Возрастное подтверждение»)
         // в sitemap не идут: в выдаче они встали бы рядом с детскими
         // категориями, а подтверждения возраста у краулера нет и быть не
@@ -2329,10 +2441,21 @@ async function api(req, res, url, user) {
   if (userPuzzlesMatch) {
     const rows = stmt.approvedByUploader.all(seg[2]);
     const ratingCache = new Map();
+    // Ждущие модерации — ТОЛЬКО самому автору и только на своей странице
+    // (см. правку «На модерации в „Моих публикациях“»): чужой профиль —
+    // публичная витрина одобренного, непроверенное фото там показывать
+    // нельзя ни при каких условиях. Раньше человек, отправив заявку, не
+    // видел её вообще нигде до ответа модератора — и не понимал, дошла ли.
+    const pending = user && user.id === seg[2]
+      ? stmt.pendingByUploader.all(seg[2]).map(p => puzzlePayload(p, ratingCache))
+      : [];
     return json(res, 200, {
-      username: rows[0]?.uploader_username || null,
+      // username/name — из одобренных, а если их ещё нет, из ждущих: у
+      // автора самой первой заявки иначе был бы безымянный профиль.
+      username: rows[0]?.uploader_username || (user && user.id === seg[2] ? user.username : null) || null,
       name: rows[0]?.uploader_name || null,
       puzzles: rows.map(p => puzzlePayload(p, ratingCache)),
+      pending,
     });
   }
 
@@ -2353,7 +2476,7 @@ async function api(req, res, url, user) {
       return json(res, 200, stmt.puzzlesForRoom.all(roomId, roomId).map(p => puzzlePayload(p, roomRatingCache)));
     }
     const libraryRatingCache = new Map();
-    return json(res, 200, stmt.puzzlesPublic.all().map(p => puzzlePayload(p, libraryRatingCache)));
+    return json(res, 200, stmt.puzzlesPublicVisible.all().map(p => puzzlePayload(p, libraryRatingCache)));
   }
 
   // Загрузка своего фото и генерация пазла из него — см. README «Свои фото».
