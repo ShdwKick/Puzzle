@@ -645,15 +645,33 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    стоит в базовых стилях выше, так что не страшно, если 100vw чуть шире
    реальной области просмотра из-за полосы прокрутки — обрежет, а не породит
    горизонтальный скролл страницы. */
+/* Подвал сайта на столе не показываем вовсе (класс ставит route() в app.js)
+   — стол и так во весь экран, а подвал под ним делал страницу длиннее
+   экрана: доска уезжала от случайного свайпа. display:none, а не удаление
+   из разметки — ссылки остаются в HTML для краулера; сам /table/:id в
+   sitemap и не ходит (туда идёт /puzzle/:id, у которого подвал на месте). */
+body.on-table .bh-footer{display:none}
 .table-screen{
   display:flex;flex-direction:column;gap:.8rem;height:calc(100dvh - 4.6rem);
+  /* Отрицательные margin'ы съедают padding самой main.content (22.4px
+     сверху и 64px снизу) — иначе стол высотой во весь экран плюс эти
+     отступы делают страницу длиннее экрана, и доска уезжает от случайного
+     свайпа. К подвалу отношения не имеют (он скрыт правилом выше) —
+     проверено замером: без margin-bottom страница оставалась на 54px
+     длиннее экрана ровно на величину padding-bottom main.content. */
   margin-top:-1.4rem;margin-bottom:-4rem;
   width:100vw;margin-left:calc(50% - 50vw);margin-right:calc(50% - 50vw);
 }
-.table-toolbar{display:flex;align-items:center;gap:.8rem;padding:.7rem 1.1rem;flex-wrap:wrap}
-.table-toolbar .spacer{flex:1}
-.table-progress{font-size:.88rem;color:var(--md-sys-color-on-surface-variant)}
-.table-progress b{color:var(--md-sys-color-on-surface)}
+/* .table-toolbar (полоса с названием, счётчиком и «?» над доской) убрана
+   совсем — см. правку «Стол без шапки». Счётчик переехал в .zoom-controls
+   (нижний правый угол), «?» туда же, название пазла осталось только в
+   <title> вкладки и на странице пазла: на столе оно ничего не решало, а
+   полоса через весь экран отъедала высоту доски. */
+.table-progress{
+  font-size:.82rem;font-weight:700;line-height:1;text-align:center;
+  color:var(--md-sys-color-on-surface);
+  padding:.3rem .1rem .35rem;font-variant-numeric:tabular-nums;
+}
 
 .table-stage{
   position:relative;flex:1;overflow:hidden;touch-action:none;cursor:grab;
@@ -1781,7 +1799,10 @@ select.text-input{
    переподключается (см. connectRoomSocket), подсказка не должна выглядеть
    тревожно ярче, чем оно того стоит. */
 .table-progress.offline{color:var(--md-sys-color-error)}
-.table-progress.offline::before{content:"переподключение… ";font-weight:600}
+/* В углу рядом с кнопками масштаба на слово «переподключение…» нет ширины
+   (раньше счётчик жил в широкой шапке) — значок вместо него, а сам смысл
+   уходит в title (см. connectRoomSocket, onClose/onOpen в app.js). */
+.table-progress.offline::before{content:"⟳ ";font-weight:600}
 /* connectRoomSocket сдаётся после MAX_ATTEMPTS — сообщение поверх стола,
    а не в потоке (пазл-мир под ним — сплошь position:absolute). */
 .table-give-up{
@@ -1868,6 +1889,15 @@ select.text-input{
    "left") — хвостик переезжает на правую грань и смотрит вправо: те же две
    видимые грани повёрнутого квадрата, только верхняя+правая вместо
    верхней+левой. */
+/* Пузырь НАД якорем (см. positionTableHint, ветка «под кнопкой места нет»)
+   — хвостик переезжает на нижнюю грань и смотрит вниз: те же две видимые
+   грани повёрнутого квадрата, только нижняя+правая вместо верхней+левой. */
+.table-hint.at-above::before{
+  top:auto;bottom:-6px;
+  border-top:0;border-left:0;
+  border-bottom:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
+  border-right:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
+}
 .table-hint.at-left::before{
   top:50%;right:-6px;margin-top:-5.5px;
   border-top:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
@@ -1884,7 +1914,6 @@ select.text-input{
 /* ===================== СОСТОЯНИЯ ЗАГРУЗКИ/ОШИБКИ ===================== */
 .state-note{padding:2.4rem 1rem;text-align:center;color:var(--md-sys-color-on-surface-variant)}
 
-@media (max-width: 30rem){
-  .table-toolbar{padding:.6rem .8rem}
-  .table-progress{display:none}
-}
+/* Раньше тут .table-progress{display:none} — счётчик прятали на узком
+   экране, потому что он не влезал в шапку. Шапки больше нет, в углу он
+   помещается и на телефоне, поэтому правило убрано. */

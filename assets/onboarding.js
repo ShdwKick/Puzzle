@@ -286,7 +286,11 @@ function showTableHint(btn) {
     `<button class="table-hint-close" type="button" aria-label="${t("Закрыть")}">&times;</button>` +
     `<p>${t("Не знаете, с чего начать? Нажмите «?» — покажем, как тут всё устроено.")}</p>`;
   document.body.appendChild(hint);
-  positionTableHint(hint, btn);
+  // "left" — по той же причине, что у напоминания о подсказках: с тех пор,
+  // как шапка стола убрана (см. правку «Стол без шапки»), #tableHelpBtn
+  // стоит в нижнем правом углу ВНУТРИ плашки масштаба, и «под кнопкой» там
+  // ровно следующая кнопка той же плашки — пузырь ложился прямо на неё.
+  positionTableHint(hint, btn, "left");
 
   const close = () => {
     hint.remove();
@@ -295,7 +299,7 @@ function showTableHint(btn) {
     clearTimeout(autoTimer);
   };
   const onOutside = e => { if (!hint.contains(e.target) && e.target !== btn) close(); };
-  const onResize = () => positionTableHint(hint, btn);
+  const onResize = () => positionTableHint(hint, btn, "left");
   document.addEventListener("pointerdown", onOutside, true);
   addEventListener("resize", onResize);
   hint.querySelector(".table-hint-close").addEventListener("click", close);
@@ -331,7 +335,14 @@ function positionTableHint(hint, anchor, placement) {
     return;
   }
   hint.classList.remove("at-left");
-  hint.style.top = (r.bottom + margin) + "px";
+  // Под якорем места может не быть вовсе — #tableHelpBtn с тех пор, как
+  // шапка стола убрана (см. правку «Стол без шапки»), живёт в НИЖНЕМ правом
+  // углу, и «под кнопкой» там уже за краем экрана. Тогда переворачиваем
+  // пузырь наверх, хвостиком вниз (.at-above в styles.css).
+  const below = r.bottom + margin;
+  const fitsBelow = below + h <= innerHeight - margin;
+  hint.classList.toggle("at-above", !fitsBelow);
+  hint.style.top = (fitsBelow ? below : Math.max(margin, r.top - h - margin)) + "px";
   hint.style.right = Math.max(margin, innerWidth - r.right) + "px";
 }
 

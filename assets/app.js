@@ -3921,12 +3921,6 @@ function bindHintIdleReminder(root, stage, isSolved, signal) {
 async function renderTable(root, puzzleId, signal, queryString) {
   root.innerHTML = `
     <div class="table-screen">
-      <div class="table-toolbar">
-        <strong id="tableTitle"></strong>
-        <div class="spacer"></div>
-        <span class="table-progress" id="tableProgress"></span>
-        <button class="icon-btn" id="tableHelpBtn" type="button" title="${t("Обучение")}" aria-label="${t("Обучение")}">?</button>
-      </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
         <div class="marquee-select" id="marqueeSelect" hidden></div>
@@ -3979,7 +3973,16 @@ async function renderTable(root, puzzleId, signal, queryString) {
             </button>
           </div>
         </div>
+        <!-- Счётчик и «?» переехали сюда из шапки стола, а сама шапка убрана
+             совсем (см. правку «Стол без шапки»): полоса через весь экран
+             ради двух элементов съедала высоту доски, особенно заметно на
+             телефоне. Счётчик теперь без пояснения («0/48», не «0/48 деталей
+             собрано») — в углу рядом с масштабом он читается и так, а
+             длинная строка тут не поместилась бы. Оба живут в той же
+             плашке, что кнопки масштаба — новый угол заводить не стали. -->
         <div class="zoom-controls">
+          <span class="table-progress" id="tableProgress"></span>
+          <button class="btn outlined icon" id="tableHelpBtn" type="button" title="${t("Обучение")}" aria-label="${t("Обучение")}">?</button>
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="${t("Приблизить")}" aria-label="${t("Приблизить")}">+</button>
           <button class="btn outlined icon" id="zoomResetBtn" type="button" title="${t("Показать всё")}" aria-label="${t("Показать всё")}">⤢</button>
           <button class="btn outlined icon" id="zoomOutBtn" type="button" title="${t("Отдалить")}" aria-label="${t("Отдалить")}">−</button>
@@ -4040,7 +4043,6 @@ async function renderTable(root, puzzleId, signal, queryString) {
     stage.innerHTML = `<p class="state-note">${t("Пазлы из своих фото собираются только в комнатах.")} <a class="btn text sm" href="/rooms">${t("К комнатам")}</a></p>`;
     return;
   }
-  $(root, "#tableTitle").textContent = puzzleDisplayTitle(puzzle);
   trackGoal("puzzle_started", { pieces: puzzle.gridRows * puzzle.gridCols });
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
@@ -4548,10 +4550,12 @@ async function renderTable(root, puzzleId, signal, queryString) {
   let saveTimer = null;
   let announced = !!(saved && saved.completedAt);
   function updateProgressLabel(placed, total) {
-    progressEl.innerHTML = "";
-    const b = document.createElement("b");
-    b.textContent = `${placed}/${total}`;
-    progressEl.append(b, document.createTextNode(getLang() === "en" ? " pieces placed" : " деталей собрано"));
+    // Только числа (см. правку «Стол без шапки») — пояснение «деталей
+    // собрано» уехало в title: в углу рядом с кнопками масштаба на него нет
+    // ширины, а «0/48» и так однозначно читается. title оставляет смысл
+    // доступным и мыши, и скринридеру.
+    progressEl.textContent = `${placed}/${total}`;
+    progressEl.title = getLang() === "en" ? `${placed} of ${total} pieces placed` : `Собрано ${placed} из ${total} деталей`;
   }
   function scheduleSave() {
     clearTimeout(saveTimer);
@@ -5640,12 +5644,6 @@ async function renderRoomJoin(root, code, signal) {
 async function renderRoomTable(root, roomId, sessionId, signal) {
   root.innerHTML = `
     <div class="table-screen">
-      <div class="table-toolbar">
-        <strong id="tableTitle"></strong>
-        <div class="spacer"></div>
-        <span class="table-progress" id="tableProgress"></span>
-        <button class="icon-btn" id="tableHelpBtn" type="button" title="${t("Обучение")}" aria-label="${t("Обучение")}">?</button>
-      </div>
       <div class="table-stage" id="stage">
         <div class="table-world" id="world"></div>
         <div class="marquee-select" id="marqueeSelect" hidden></div>
@@ -5763,7 +5761,16 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
             </div>
           </div>
         </div>
+        <!-- Счётчик и «?» переехали сюда из шапки стола, а сама шапка убрана
+             совсем (см. правку «Стол без шапки»): полоса через весь экран
+             ради двух элементов съедала высоту доски, особенно заметно на
+             телефоне. Счётчик теперь без пояснения («0/48», не «0/48 деталей
+             собрано») — в углу рядом с масштабом он читается и так, а
+             длинная строка тут не поместилась бы. Оба живут в той же
+             плашке, что кнопки масштаба — новый угол заводить не стали. -->
         <div class="zoom-controls">
+          <span class="table-progress" id="tableProgress"></span>
+          <button class="btn outlined icon" id="tableHelpBtn" type="button" title="${t("Обучение")}" aria-label="${t("Обучение")}">?</button>
           <button class="btn outlined icon" id="zoomInBtn" type="button" title="${t("Приблизить")}" aria-label="${t("Приблизить")}">+</button>
           <button class="btn outlined icon" id="zoomResetBtn" type="button" title="${t("Показать всё")}" aria-label="${t("Показать всё")}">⤢</button>
           <button class="btn outlined icon" id="zoomOutBtn" type="button" title="${t("Отдалить")}" aria-label="${t("Отдалить")}">−</button>
@@ -5815,7 +5822,6 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     return;
   }
   const puzzle = session.puzzle;
-  $(root, "#tableTitle").textContent = puzzleDisplayTitle(puzzle);
   trackGoal("puzzle_started", { pieces: puzzle.gridRows * puzzle.gridCols });
 
   const rows = puzzle.gridRows, cols = puzzle.gridCols;
@@ -6255,10 +6261,12 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   bindCollapsibleCluster($(root, "#hintToggleBtn"), $(root, "#hintBtnGroup"), "puzzle_hints_collapsed", signal);
 
   function updateProgressLabel(placed, total) {
-    progressEl.innerHTML = "";
-    const b = document.createElement("b");
-    b.textContent = `${placed}/${total}`;
-    progressEl.append(b, document.createTextNode(getLang() === "en" ? " pieces placed" : " деталей собрано"));
+    // Только числа (см. правку «Стол без шапки») — пояснение «деталей
+    // собрано» уехало в title: в углу рядом с кнопками масштаба на него нет
+    // ширины, а «0/48» и так однозначно читается. title оставляет смысл
+    // доступным и мыши, и скринридеру.
+    progressEl.textContent = `${placed}/${total}`;
+    progressEl.title = getLang() === "en" ? `${placed} of ${total} pieces placed` : `Собрано ${placed} из ${total} деталей`;
   }
   function updatePresence(members) {
     const list = members || [];
@@ -6617,8 +6625,15 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   const socket = connectRoomSocket({
     roomId, sessionId, signal,
     onMessage: handleSocketMessage,
+    // Само слово «переподключение…» в углу больше не помещается (см.
+    // .table-progress.offline в styles.css — там теперь значок «⟳»),
+    // поэтому пояснение уходит в title; updateProgressLabel перепишет его
+    // обратно на обычное при первом же sync после восстановления связи.
     onOpen: () => { progressEl.classList.remove("offline"); },
-    onClose: () => { progressEl.classList.add("offline"); },
+    onClose: () => {
+      progressEl.classList.add("offline");
+      progressEl.title = getLang() === "en" ? "Reconnecting to the table…" : "Переподключение к столу…";
+    },
     onGiveUp: () => {
       progressEl.classList.remove("offline");
       stage.insertAdjacentHTML("beforeend", getLang() === "en"
@@ -6729,6 +6744,15 @@ function route() {
   if (currentRouteAbort) currentRouteAbort.abort();
   currentRouteAbort = new AbortController();
   const signal = currentRouteAbort.signal;
+
+  // Стол занимает экран целиком (см. .table-screen — height:100dvh минус
+  // шапка), и общий подвал сайта под ним только добавлял странице лишнюю
+  // прокрутку: доска уезжала вверх от случайного свайпа, особенно на
+  // телефоне. Прячем его на обоих столах классом на <body> — ссылки
+  // остаются в разметке для краулера, а сама страница перестаёт быть длиннее
+  // экрана. Переключаем именно тут, в одной точке для всех маршрутов, чтобы
+  // класс гарантированно снимался при уходе со стола.
+  document.body.classList.toggle("on-table", !!(tableMatch || roomTableMatch));
 
   // Сброс title/description перед КАЖДЫМ переходом — без этого вкладка
   // сохраняла бы заголовок категории после клиентского перехода, скажем,
