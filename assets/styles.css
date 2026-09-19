@@ -757,7 +757,20 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    top:0 + свой transform) — outlineEl держится вровень с деталью только
    потому, что несёт тот же transform (см. applyPieceTransform), сама по
    себе никак не привязана к разметке детали. */
-.piece-outline-overlay{position:absolute;left:0;top:0}
+/* display:none по умолчанию — это САМАЯ дорогая вещь на большом столе, и не
+   из-за рисования: у .piece-outline-halo/-accent ниже stroke-width и
+   stroke-dasharray заданы как calc(N / var(--cam-scale)), а --cam-scale
+   переписывается на .table-world при КАЖДОМ движении камеры (см.
+   applyWorldTransform в app.js). Пока обводки висели в DOM с opacity:0, любая
+   панорама заставляла браузер пересчитывать и перерисовывать 2×N путей — на
+   999 деталях кадр панорамы стоил ~53 мс (≈19 fps) даже на десктопе; с
+   display:none — 5.9 мс. Отсюда и лаги на бюджетных телефонах, про которые
+   пришла жалоба. Показываем ровно в двух состояниях, где обводка и нужна
+   (см. селекторы .hint-glow/.selected ниже) — opacity у самих путей остаётся
+   как было и продолжает отвечать за плавное появление. */
+.piece-outline-overlay{position:absolute;left:0;top:0;display:none}
+.piece.hint-glow + .piece-outline-overlay,
+.piece.selected + .piece-outline-overlay{display:block}
 .piece-outline-halo,.piece-outline-accent{
   fill:none;opacity:0;pointer-events:none;vector-effect:non-scaling-stroke;
   /* fill-box — растёт от центра СОБСТВЕННОГО контура детали, включая
@@ -988,8 +1001,14 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   cursor:nwse-resize;touch-action:none;
 }
 
+/* overflow:auto + margin:auto на карточке вместо align-items/justify-content
+   центрирования: на низком экране (телевизор, телефон в альбомной) карточка
+   выше оверлея, и при центрировании по флексу верх карточки уезжал ЗА
+   границу контейнера — до него было не докрутить (классическая ловушка
+   flex + overflow). margin:auto центрирует так же, пока место есть, но
+   схлопывается в ноль, когда его нет, и прокрутка работает по обеим осям. */
 .win-overlay{
-  position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  position:absolute;inset:0;display:flex;overflow:auto;padding:1.2rem;
   background:color-mix(in srgb, var(--md-sys-color-inverse-surface) 55%, transparent);
   animation:puzzle-win-fade .25s var(--ease-emph-dec) both;
 }
@@ -1005,7 +1024,7 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
      .win-overlay, max-width её же и обрезает потолком — на узком экране
      сама сожмётся вместе с контейнером, на широком — реально дорастёт до
      потолка, а не только до текста внутри. */
-  width:100%;max-width:30rem;
+  width:100%;max-width:30rem;margin:auto;
 }
 /* Картинка на всю ширину карточки, вровень с краями (см. правку «Окно
    победы — превью и результат») — тот же приём, что у .puzzle-preview-image
@@ -1785,6 +1804,15 @@ select.text-input{
    трогают детали (см. правку «Подсказка про тур», данные Метрики) — им
    нужен маленький намёк сбоку, а не блокирующий тур на весь экран. */
 .table-hint{
+  /* pointer-events:none — пузырь ЛЕЖИТ поверх панели виджетов (z-index:80,
+     position:fixed), и на узком экране накрывает её целиком: на телефонах
+     из-за этого не работали ни чат, ни список участников, ни звук — тап
+     доставался пузырю, а он на клик не реагирует вовсе. Сквозной тап решает
+     обе задачи разом: попадает в кнопку под пузырём И закрывает сам пузырь
+     (см. onOutside в onboarding.js — он слушает pointerdown на document в
+     фазе захвата, и теперь e.target уже не внутри пузыря). Крестику
+     pointer-events возвращаем — он единственное, что тут кликают нарочно. */
+  pointer-events:none;
   position:fixed;z-index:80;max-width:15rem;padding:.65rem 1.7rem .65rem .8rem;
   background:var(--md-sys-color-surface-container-lowest);
   border:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
@@ -1811,7 +1839,7 @@ select.text-input{
   border-left:0;
   border-right:1px solid color-mix(in srgb, var(--flame-tip) 28%, var(--md-sys-color-outline-variant));
 }
-.table-hint-close{
+.table-hint-close{pointer-events:auto;
   position:absolute;top:2px;right:2px;width:1.6rem;height:1.6rem;border:0;background:transparent;
   color:var(--md-sys-color-on-surface-variant);cursor:pointer;font-size:1rem;line-height:1;border-radius:50%;
 }

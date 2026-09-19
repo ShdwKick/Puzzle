@@ -3548,6 +3548,25 @@ function clusterMembersOf(pieces, key) {
  *  не стыкует — вызывающий код (renderTable/renderRoomTable) сам решает,
  *  как это подсветить и подвести туда камеру. null, если пазл уже собран
  *  целиком (подсказывать нечего). */
+/** Крайние детали, которые ещё НЕ состыкованы ни с кем — то, что подсвечивает
+ *  подсказка «рамка». Раньше подсвечивались все крайние подряд, включая уже
+ *  собранные куски рамки (жалоба после проверки на телефонах): половина
+ *  экрана вспыхивала тем, что человек только что сам и сложил, а искать
+ *  среди этого оставшиеся детали становилось только труднее. Критерий
+ *  «состыкована» — тот же buildClusters, что у «Перемешать» и подсказки
+ *  «пара»: кластер размером больше одной детали. Возвращает [] (а не null)
+ *  — вызывающему достаточно обычного цикла. */
+function pickHintEdges(pieces, rows, cols) {
+  const { clusterOf, members } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
+  const out = [];
+  for (const p of pieces.values()) {
+    if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
+    if ((members.get(clusterOf.get(`${p.r},${p.c}`))?.size || 1) > 1) continue;
+    out.push(p);
+  }
+  return out;
+}
+
 function pickHintPair(pieces) {
   const { clusterOf } = window.PuzzleClusters.buildClusters(pieces.values(), CELL, SNAP_TOLERANCE);
   const candidates = [];
@@ -4366,9 +4385,12 @@ async function renderTable(root, puzzleId, signal, queryString) {
   // рамка не собрана — это подсказка «вот где рамка», а не проверка
   // прогресса.
   $(root, "#hintEdgesBtn").addEventListener("click", () => {
+    // Только ещё не состыкованные крайние (см. pickHintEdges) — уже
+    // сложенные куски рамки подсвечивать незачем, они и так на виду.
+    const edges = pickHintEdges(pieces, rows, cols);
+    if (!edges.length) return;
     trackGoal("hint_used", { mode: "edges" });
-    for (const p of pieces.values()) {
-      if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
+    for (const p of edges) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
     }
@@ -6187,9 +6209,12 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   // получил первый WS-sync, подсвечивать нечего.
   $(root, "#hintEdgesBtn").addEventListener("click", () => {
     if (!pieces) return;
+    // Тот же отбор, что в соло (см. pickHintEdges): уже состыкованные
+    // крайние детали не вспыхивают.
+    const edges = pickHintEdges(pieces, rows, cols);
+    if (!edges.length) return;
     trackGoal("hint_used", { mode: "edges" });
-    for (const p of pieces.values()) {
-      if (p.r !== 0 && p.r !== rows - 1 && p.c !== 0 && p.c !== cols - 1) continue;
+    for (const p of edges) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
     }
