@@ -999,7 +999,42 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
   border-radius:50%;background:var(--md-sys-color-primary);
   border:2px solid var(--md-sys-color-surface);box-shadow:var(--e1);
   cursor:nwse-resize;touch-action:none;
+  /* Полупрозрачность в покое (см. правку «Крестик и уголок — полупрозрачные»):
+     панель — это подсказка «как должно получиться», и постоянно яркие
+     служебные кружки на ней отвлекают от самой картинки. Возвращаем полную
+     непрозрачность, когда с панелью работают: наведение на панель, фокус с
+     клавиатуры и сам захват (:active) — на тач-устройствах наведения нет,
+     но кнопка и в приглушённом виде прекрасно нажимается. */
+  opacity:.45;transition:opacity .18s var(--ease-std);
 }
+.preview-resize-handle::before{content:"";position:absolute;inset:-.7rem}
+.preview-panel:hover .preview-resize-handle,
+.preview-resize-handle:active,
+.preview-resize-handle:focus-visible{opacity:1}
+/* Крестик — поверх правого верхнего угла картинки, с тёмной подложкой (тот
+   же приём, что у .win-image-actions на окне победы: без неё белый крестик
+   теряется на светлом фото). Мельче обычного .icon-btn 44×44 — панель сама
+   бывает шириной от 96px, кнопка во весь стандартный размер закрыла бы
+   собой половину подсказки. */
+.preview-close{
+  position:absolute;top:.3rem;right:.3rem;width:1.6rem;height:1.6rem;
+  background:rgba(0,0,0,.45);color:#fff;
+  opacity:.45;transition:opacity .18s var(--ease-std);
+  /* overflow у .icon-btn стоит hidden, чтобы квадратная рябь (::after)
+     не торчала из круга, — но он же обрезал бы и запас под палец ниже.
+     Возвращаем видимость, а рябь делаем круглой напрямую. */
+  overflow:visible;
+}
+.preview-close::after{border-radius:inherit}
+/* Видимый кружок 1.6rem (≈26px) — заметно меньше пальца: на телефоне в
+   крестик надо было бы целиться. Прозрачный запас вокруг доводит область
+   нажатия до ≈42px, не трогая саму картинку визуально. То же у уголка
+   масштабирования ниже. */
+.preview-close::before{content:"";position:absolute;inset:-.5rem}
+.preview-close .icon{width:1rem;height:1rem}
+.preview-panel:hover .preview-close,
+.preview-close:hover,
+.preview-close:focus-visible{opacity:1}
 
 /* overflow:auto + margin:auto на карточке вместо align-items/justify-content
    центрирования: на низком экране (телевизор, телефон в альбомной) карточка

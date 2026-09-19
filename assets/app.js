@@ -344,6 +344,7 @@ const EN = {
   "Сложность": "Difficulty",
   "Перемешать": "Shuffle",
   "Показать картинку": "Show picture",
+  "Скрыть картинку": "Hide picture",
   "Фон стола — выбрать цвет": "Table background — pick a color",
   "Вернуть фон по умолчанию": "Reset to default background",
   "Режим выделения": "Selection mode",
@@ -3733,7 +3734,7 @@ function applyPieceTransform(piece) {
  *  .table-stage, а не в #world — панорама/зум доски (translate+scale на
  *  #world) на неё не действует, поэтому дельты драга/резайза берутся в
  *  чистых экранных пикселях, без деления на zoom. */
-function bindPreviewThumb(stage, panel, img, handle, toggleBtn, imageUrl, title, signal) {
+function bindPreviewThumb(stage, panel, img, handle, toggleBtn, closeBtn, imageUrl, title, signal) {
   img.src = imageUrl;
   img.alt = getLang() === "en" ? `What it should look like: ${title}` : `Как должно получиться: ${title}`;
   // Тот же баг и то же лекарство, что у деталей пазла (см. buildPieceEl,
@@ -3751,6 +3752,18 @@ function bindPreviewThumb(stage, panel, img, handle, toggleBtn, imageUrl, title,
 
   toggleBtn.addEventListener("click", () => {
     panel.hidden = !panel.hidden;
+  }, { signal });
+  // Крестик на самой картинке (см. правку «Закрыть картинку прямо с неё») —
+  // то же самое действие, что и кнопка в панели инструментов, просто под
+  // рукой: панель можно утащить куда угодно по столу, и возвращаться за её
+  // закрытием к тулбару внизу было лишним шагом. Состояние одно и то же
+  // (panel.hidden), так что кнопки не расходятся. stopPropagation — чтобы
+  // тап по крестику не начал заодно перетаскивание панели (слушатели драга
+  // висят на самой картинке, крестик лежит поверх неё).
+  closeBtn.addEventListener("pointerdown", e => e.stopPropagation(), { signal });
+  closeBtn.addEventListener("click", e => {
+    e.stopPropagation();
+    panel.hidden = true;
   }, { signal });
 
   let drag = null;
@@ -3919,6 +3932,9 @@ async function renderTable(root, puzzleId, signal, queryString) {
         <div class="marquee-select" id="marqueeSelect" hidden></div>
         <div class="preview-panel" id="previewPanel" hidden>
           <img class="preview-thumb" id="previewThumb" alt="" draggable="false">
+          <button class="icon-btn preview-close" id="previewCloseBtn" type="button" title="${t("Скрыть картинку")}" aria-label="${t("Скрыть картинку")}">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
           <div class="preview-resize-handle" id="previewResizeHandle" title="${t("Изменить размер")}" aria-hidden="true"></div>
         </div>
         <!-- «Назад» — была текстовой ссылкой «← Библиотека» в .table-toolbar,
@@ -4348,7 +4364,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
 
-  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzleDisplayTitle(puzzle), signal);
+  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), $(root, "#previewCloseBtn"), puzzle.imageUrl, puzzleDisplayTitle(puzzle), signal);
 
   bindBoardBackground(stage, $(root, "#boardBgInput"), $(root, "#boardBgResetBtn"), signal);
 
@@ -5635,6 +5651,9 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
         <div class="marquee-select" id="marqueeSelect" hidden></div>
         <div class="preview-panel" id="previewPanel" hidden>
           <img class="preview-thumb" id="previewThumb" alt="" draggable="false">
+          <button class="icon-btn preview-close" id="previewCloseBtn" type="button" title="${t("Скрыть картинку")}" aria-label="${t("Скрыть картинку")}">
+            <svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
           <div class="preview-resize-handle" id="previewResizeHandle" title="${t("Изменить размер")}" aria-hidden="true"></div>
         </div>
         <!-- «Назад» — была текстовой ссылкой «← Комната» в .table-toolbar,
@@ -6166,7 +6185,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   $(root, "#zoomResetBtn").addEventListener("click", fitView, { signal });
   window.addEventListener("resize", fitView, { signal });
 
-  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), puzzle.imageUrl, puzzleDisplayTitle(puzzle), signal);
+  bindPreviewThumb(stage, $(root, "#previewPanel"), $(root, "#previewThumb"), $(root, "#previewResizeHandle"), $(root, "#previewBtn"), $(root, "#previewCloseBtn"), puzzle.imageUrl, puzzleDisplayTitle(puzzle), signal);
 
   bindBoardBackground(stage, $(root, "#boardBgInput"), $(root, "#boardBgResetBtn"), signal);
 
