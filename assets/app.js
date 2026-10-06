@@ -4125,6 +4125,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
     selected.clear();
     for (const k of keys) selected.add(k);
     for (const [k, p] of pieces) p.el.classList.toggle("selected", selected.has(k));
+    syncOutlineScale(); // обводка только что появилась — см. комментарий у неё
   }
 
   let lastClusterEdgeIds = new Set(); // "r,c|r,c" — вспышка только на НОВЫХ стыковках
@@ -4155,7 +4156,27 @@ async function renderTable(root, puzzleId, signal, queryString) {
   // «Подсказка про пазл: жирнее», живая проверка на 999 деталях).
   function applyWorldTransform() {
     world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-    world.style.setProperty("--cam-scale", zoom);
+    if (zoom !== lastOutlineZoom) { lastOutlineZoom = zoom; syncOutlineScale(); }
+  }
+  /* Раньше тут было world.style.setProperty("--cam-scale", zoom) — и это
+     оказалось самым дорогим, что осталось на большом столе. Запись ЛЮБОГО
+     пользовательского свойства на контейнер обесценивает стили всего его
+     поддерева: на 999 деталях (вместе с обводками это ~2000 элементов)
+     каждый шаг зума стоил ~30 мс пересчёта стилей даже на десктопе —
+     замерено, причём ровно столько же стоила запись переменной, которую
+     вообще никто не читает. Панораму это не задевало только по счастливой
+     случайности: zoom при ней не меняется, а Chrome пропускает запись того
+     же самого значения.
+     Теперь переменную получают только те обводки, что сейчас ВИДНЫ (их
+     единицы, в пике — подсвеченная рамка), и поддерево не трогается вовсе:
+     тот же шаг зума стоит ~0.5 мс. Вызывается из applyWorldTransform (когда
+     зум реально изменился) и из мест, где обводка ПОЯВЛЯЕТСЯ — выделение и
+     обе подсказки: там зум прежний, но элементы новые. */
+  let lastOutlineZoom = null;
+  function syncOutlineScale() {
+    for (const el of world.querySelectorAll(".piece.hint-glow + .piece-outline-overlay, .piece.selected + .piece-outline-overlay")) {
+      el.style.setProperty("--cam-scale", zoom);
+    }
   }
   // fitBox — общая математика вписывания прямоугольника мировых координат в
   // stage (см. план «Повороты...» — подсказка вписывает только пару целевых
@@ -4412,6 +4433,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
     }
+    syncOutlineScale(); // обводка только что появилась — см. комментарий у неё
   }, { signal });
   // «Пара» — случайная ещё не состыкованная пара соседних деталей.
   // Молча ничего не делает, если пар не осталось (pickHintPair вернул
@@ -4425,6 +4447,7 @@ async function renderTable(root, puzzleId, signal, queryString) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
     }
+    syncOutlineScale(); // обводка только что появилась — см. комментарий у неё
   }, { signal });
   bindHintIdleReminder(root, stage, () => computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === rows * cols, signal);
   bindSoundButton($(root, "#soundBtn"), signal);
@@ -5990,7 +6013,27 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
   // «Подсказка про пазл: жирнее», живая проверка на 999 деталях).
   function applyWorldTransform() {
     world.style.transform = `translate(${panX}px, ${panY}px) scale(${zoom})`;
-    world.style.setProperty("--cam-scale", zoom);
+    if (zoom !== lastOutlineZoom) { lastOutlineZoom = zoom; syncOutlineScale(); }
+  }
+  /* Раньше тут было world.style.setProperty("--cam-scale", zoom) — и это
+     оказалось самым дорогим, что осталось на большом столе. Запись ЛЮБОГО
+     пользовательского свойства на контейнер обесценивает стили всего его
+     поддерева: на 999 деталях (вместе с обводками это ~2000 элементов)
+     каждый шаг зума стоил ~30 мс пересчёта стилей даже на десктопе —
+     замерено, причём ровно столько же стоила запись переменной, которую
+     вообще никто не читает. Панораму это не задевало только по счастливой
+     случайности: zoom при ней не меняется, а Chrome пропускает запись того
+     же самого значения.
+     Теперь переменную получают только те обводки, что сейчас ВИДНЫ (их
+     единицы, в пике — подсвеченная рамка), и поддерево не трогается вовсе:
+     тот же шаг зума стоит ~0.5 мс. Вызывается из applyWorldTransform (когда
+     зум реально изменился) и из мест, где обводка ПОЯВЛЯЕТСЯ — выделение и
+     обе подсказки: там зум прежний, но элементы новые. */
+  let lastOutlineZoom = null;
+  function syncOutlineScale() {
+    for (const el of world.querySelectorAll(".piece.hint-glow + .piece-outline-overlay, .piece.selected + .piece-outline-overlay")) {
+      el.style.setProperty("--cam-scale", zoom);
+    }
   }
   // fitBox — общая математика вписывания прямоугольника мировых координат в
   // stage (см. план «Повороты...» — подсказка вписывает только пару целевых
@@ -6243,6 +6286,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 5000);
     }
+    syncOutlineScale(); // обводка только что появилась — см. комментарий у неё
   }, { signal });
   $(root, "#hintPairBtn").addEventListener("click", () => {
     if (!pieces) return;
@@ -6253,6 +6297,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
       p.el.classList.add("hint-glow");
       setTimeout(() => p.el.classList.remove("hint-glow"), 3000);
     }
+    syncOutlineScale(); // обводка только что появилась — см. комментарий у неё
   }, { signal });
   bindHintIdleReminder(root, stage, () => !!pieces && computePiecesPlaced(pieces, CELL, SNAP_TOLERANCE) === rows * cols, signal);
   bindSoundButton($(root, "#soundBtn"), signal);
@@ -6407,6 +6452,7 @@ async function renderRoomTable(root, roomId, sessionId, signal) {
     selected.clear();
     for (const k of keys) selected.add(k);
     for (const [k, p] of pieces) p.el.classList.toggle("selected", selected.has(k));
+    syncOutlineScale(); // обводка только что появилась — см. комментарий у неё
   }
 
   /* activeDrag — общее (не per-piece) состояние, см. блок авто-панорамы
