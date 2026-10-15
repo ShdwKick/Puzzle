@@ -1911,6 +1911,52 @@ select.text-input{
 .table-hint-close:hover{background:color-mix(in srgb, currentColor 10%, transparent)}
 @media(max-width:420px){.table-hint{max-width:calc(100vw - 24px)}}
 
+/* ===================== КОММЕНТАРИИ К ПАЗЛУ ===================== */
+/* Лента под страницей пазла (см. mountPuzzleComments в app.js). Своей
+   плашки-карточки у секции нет — она продолжение страницы, а не врезка;
+   отделяется только заголовком и линией, как .puzzle-page-related ниже. */
+.puzzle-comments{margin-top:2.4rem}
+.puzzle-comments[hidden]{display:none}
+.puzzle-comments h2{font-size:1.1rem;margin:0 0 1rem}
+/* Каждая реплика — отдельная плашка, а не строка, отбитая линией: на
+   тёмном фоне ряд разделителей читался как таблица, и было не видно, где
+   кончается один комментарий и начинается другой. Теперь граница у каждого
+   своя, со всех сторон. */
+.comments-list{display:flex;flex-direction:column;gap:.6rem}
+.comment{
+  padding:.7rem .9rem;
+  background:var(--md-sys-color-surface-container-low);
+  border:1px solid var(--md-sys-color-outline-variant);
+  border-radius:var(--md-sys-shape-corner-l);
+}
+.comment-head{display:flex;align-items:center;gap:.6rem;margin-bottom:.3rem}
+.comment-head b{font-size:.92rem}
+.comment-at{font-size:.8rem;color:var(--md-sys-color-on-surface-variant)}
+/* Крестик удаления — у правого края строки с автором, приглушённый: он
+   есть у каждой своей реплики и у ВСЕХ реплик при входе админом (см.
+   canModerate), и в полную яркость превращал бы ленту в ряд кнопок. */
+.comment-delete{margin-left:auto;width:1.8rem;height:1.8rem;opacity:.5}
+.comment-delete .icon{width:1rem;height:1rem}
+.comment-delete:hover,.comment-delete:focus-visible{opacity:1}
+.comment-body{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.comment-form{display:flex;flex-direction:column;gap:.5rem;margin-top:1rem}
+/* Поле и кнопка одной строкой. align-items:flex-end — кнопка держится у
+   НИЖНЕГО края поля: textarea можно растянуть мышью (resize:vertical), и
+   при центрировании кнопка уезжала бы на середину выросшего поля. */
+.comment-form-row{display:flex;align-items:flex-end;gap:.6rem}
+.comment-form textarea{
+  flex:1;resize:vertical;font:inherit;
+  /* Ниже прежнего (было 4.5rem под три строки): тут пишут пару фраз, а
+     высокое пустое поле выглядело как заявка на сочинение. Растянуть под
+     длинный текст по-прежнему можно вручную. */
+  min-height:2.6rem;height:2.6rem;
+}
+/* Кнопка ровно в высоту поля, квадратная — .btn.icon даёт круг и padding в
+   em, из-за которого она бы не совпала с полем по высоте. */
+.comment-send{width:2.6rem;height:2.6rem;padding:0;flex:none}
+.comment-error{margin:0;color:var(--md-sys-color-error);font-size:.85rem}
+.comment-error[hidden]{display:none}
+
 /* ===================== СОСТОЯНИЯ ЗАГРУЗКИ/ОШИБКИ ===================== */
 .state-note{padding:2.4rem 1rem;text-align:center;color:var(--md-sys-color-on-surface-variant)}
 

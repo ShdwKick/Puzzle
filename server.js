@@ -95,6 +95,12 @@ const MAX_ACTIVE_SESSIONS_PER_ROOM = 5;
 // модерации разгребается руками, а у прямой публикации нет естественного
 // тормоза в виде «сперва заведи комнату», который был у загрузки в комнату.
 const MAX_PENDING_PUBLISH_PER_USER = 10;
+// Комментарии (см. правку «Комментарии с модерацией»). Длина — чтобы в
+// ленте под пазлом был разговор, а не статья; лимит в час — защита от
+// залпа, не от самого факта активности: живому человеку двадцати реплик за
+// час хватает с запасом.
+const MAX_COMMENT_LEN = 1000;
+const MAX_COMMENTS_PER_HOUR = 20;
 const SNAP_TOLERANCE = tolerance(CELL);
 // Прогресс = сумма деталей во ВСЕХ кластерах от двух и больше (см.
 // assets/puzzle-clusters.js/connectedPiecesCount), а не поштучный флаг
@@ -163,6 +169,29 @@ db.exec(`
     updated_at  INTEGER NOT NULL,
     PRIMARY KEY (image_file, rater_id)
   );
+
+  /* Комментарии к пазлу (см. правку «Комментарии с модерацией»). Ключ —
+     image_file, та же группировка, что у рейтингов выше: одна картинка —
+     один тред, он виден на всех уровнях сложности, а не отдельный у каждого.
+     Автор денормализован в строку (author_username/author_name) — тем же
+     приёмом, что uploader_* у puzzles и room_members: своей таблицы
+     пользователей в Puzzle нет и заводить её ради подписи не стоит.
+     Комментируют ТОЛЬКО вошедшие (решение пользователя) — author_id всегда
+     настоящий user.id, анонимной ветки тут нет, в отличие от рейтингов.
+     Удаление — настоящее DELETE, без «мягкого» флага: запись о том, что и у
+     кого снесли, уходит в adminLog (туда админ и так смотрит), а лишний
+     фильтр hidden_at в каждом чтении не нужен. */
+  CREATE TABLE IF NOT EXISTS puzzle_comments (
+    id              TEXT PRIMARY KEY,
+    image_file      TEXT NOT NULL,
+    author_id       TEXT NOT NULL,
+    author_username TEXT,
+    author_name     TEXT,
+    body            TEXT NOT NULL,
+    created_at      INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_comments_image ON puzzle_comments(image_file, created_at);
+  CREATE INDEX IF NOT EXISTS idx_comments_author ON puzzle_comments(author_id, created_at);
 
   CREATE TABLE IF NOT EXISTS rooms (
     id          TEXT PRIMARY KEY,
@@ -489,6 +518,25 @@ const stmt = {
     ON CONFLICT(image_file,rater_id) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at`),
   myRating: db.prepare("SELECT rating FROM puzzle_ratings WHERE image_file = ? AND rater_id = ?"),
   ratingSummary: db.prepare("SELECT COUNT(*) AS n, AVG(rating) AS avg FROM puzzle_ratings WHERE image_file = ?"),
+  /* Комментарии (см. CREATE TABLE puzzle_comments выше). Порядок — от
+     старых к новым, как в любой ленте обсуждения: читают сверху вниз, и
+     «новые внизу» не заставляют прокручивать назад после своего ответа. */
+  commentsForImage: db.prepare("SELECT * FROM puzzle_comments WHERE image_file = ? ORDER BY created_at"),
+  insertComment: db.prepare("INSERT INTO puzzle_comments (id,image_file,author_id,author_username,author_name,body,created_at) VALUES (?,?,?,?,?,?,?)"),
+  comment: db.prepare("SELECT * FROM puzzle_comments WHERE id = ?"),
+  deleteComment: db.prepare("DELETE FROM puzzle_comments WHERE id = ?"),
+  /* Защита от залпа: не частота запросов, а просто сколько человек успел
+     написать за последний час. Своей инфраструктуры лимитов в Puzzle нет и
+     заводить её ради этого незачем — тот же приём «посчитать и сравнить»,
+     что у MAX_PENDING_PUBLISH_PER_USER. */
+  commentCountByAuthorSince: db.prepare("SELECT COUNT(*) AS n FROM puzzle_comments WHERE author_id = ? AND created_at > ?"),
+  /* Для вкладки «Комментарии» в Admin — последние по всем пазлам сразу, с
+     названием и файлом картинки (LIMIT 200 — тот же приём, что у
+     feedbackList/internal/rooms: админу нужны недавние, не архив целиком). */
+  recentComments: db.prepare(`
+    SELECT c.*, (SELECT title FROM puzzles WHERE image_file = c.image_file LIMIT 1) AS puzzle_title,
+           (SELECT id FROM puzzles WHERE image_file = c.image_file ORDER BY grid_rows * grid_cols LIMIT 1) AS puzzle_id
+    FROM puzzle_comments c ORDER BY c.created_at DESC LIMIT 200`),
   // Список незавершённых сборок для «Продолжить сборку» над библиотекой
   // (см. план) — только публичные пазлы (owner_user_id IS NULL): свои фото,
   // загруженные в комнату, вне контекста той комнаты не открываются вообще
@@ -958,6 +1006,20 @@ const imageUrlFor = imageFile => imageFile.endsWith(".svg") ? `/assets/puzzles/$
  *  тот же image_file вместо одного. Без ratingCache поле просто всегда
  *  null (лишнего запроса не будет) — не каждому потребителю puzzlePayload
  *  вообще нужен рейтинг. */
+/** Комментарий наружу. mine — чтобы клиент показал «удалить» автору его
+ *  собственной реплики, не зная id пользователя (его мы и так не светим:
+ *  author_id наружу не уходит — для подписи хватает имени/логина, а лишний
+ *  идентификатор на публичной странице ни к чему). */
+function commentPayload(c, user) {
+  return {
+    id: c.id,
+    body: c.body,
+    author: c.author_name || c.author_username || null,
+    createdAt: c.created_at,
+    mine: !!(user && user.id === c.author_id),
+  };
+}
+
 function puzzlePayload(p, ratingCache) {
   let rating;
   if (ratingCache) {
@@ -1354,10 +1416,10 @@ function serveStatic(res, pathname, isHead) {
 // не будет, страница отдастся с дефолтным текстом — стоит проверять
 // вручную через curl после любой правки текста в index.html).
 const DEFAULT_TITLE = "Пазлы онлайн бесплатно — собрать пазл в браузере | Что собираем?";
-const DEFAULT_DESCRIPTION = "Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.";
+const DEFAULT_DESCRIPTION = "«Что собираем?» — пазлы онлайн бесплатно и без скачивания: готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.";
 const DEFAULT_HEAD_BLOCK = `  <div class="library-head">
     <h1>Пазлы онлайн бесплатно — собрать пазл в браузере</h1>
-    <p>Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Можно собирать одному или вместе с друзьями. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
+    <p>«Что собираем?» — сервис пазлов онлайн: собирайте бесплатно и без скачивания, готовые из библиотеки или свои из любой фотографии. Можно собирать одному или вместе с друзьями. Вход нужен только для того, чтобы прогресс сохранялся между заходами.</p>
   </div>`;
 const DEFAULT_LOADING_NOTE = `  <p class="state-note">Загружаем библиотеку пазлов…</p>`;
 
@@ -1743,6 +1805,30 @@ const server = http.createServer(async (req, res) => {
     // Вкладка «Обратная связь» в Admin (см. правку «Форма обратной связи») —
     // только на чтение, без approve/reject/ответа (это не модерация — прочли
     // и разобрались вне сервиса). Тот же LIMIT 200, что у /internal/rooms.
+    /* Вкладка «Комментарии» в Admin (см. правку «Комментарии с модерацией»)
+       — последние по всем пазлам сразу. Тут отдаём и author_id, и ссылку на
+       сам пазл: админу, в отличие от публичной страницы, нужно видеть, кто
+       пишет (повторяется ли один и тот же человек) и куда идти смотреть. */
+    if (p === "/internal/comments" && req.method === "GET") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      return json(res, 200, {
+        comments: stmt.recentComments.all().map(c => ({
+          id: c.id, body: c.body, createdAt: c.created_at,
+          authorId: c.author_id, author: c.author_name || c.author_username || null,
+          puzzleId: c.puzzle_id, puzzleTitle: c.puzzle_title,
+          imageUrl: imageUrlFor(c.image_file),
+        })),
+      });
+    }
+    const commentDeleteMatch = p.match(/^\/internal\/comments\/([\w-]+)$/);
+    if (commentDeleteMatch && req.method === "DELETE") {
+      if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
+      const comment = stmt.comment.get(commentDeleteMatch[1]);
+      if (!comment) return json(res, 404, { error: "not found" });
+      stmt.deleteComment.run(comment.id);
+      adminLog.warn("Admin удалил комментарий", { commentId: comment.id, authorId: comment.author_id, body: comment.body });
+      return json(res, 200, { ok: true });
+    }
     if (p === "/internal/feedback" && req.method === "GET") {
       if (!checkAdminKey(req)) return json(res, 403, { error: "forbidden" });
       return json(res, 200, {
@@ -2763,6 +2849,62 @@ async function api(req, res, url, user) {
       return json(res, 200, { ok: true, average: summary.avg, count: summary.n });
     }
     return json(res, 405, { error: "method not allowed" });
+  }
+
+  /* Комментарии к пазлу (см. правку «Комментарии с модерацией»).
+   *  • Только у БИБЛИОТЕЧНЫХ пазлов (owner_user_id IS NULL) — то же условие
+   *    видимости, что у публичной страницы /puzzle/:id: обсуждать чужое
+   *    непроверенное фото или свой черновик в комнате незачем и некому.
+   *  • Писать могут только вошедшие (решение пользователя) — гостю 401, в
+   *    отличие от рейтингов, где анонимная cookie как раз допустима.
+   *  • Постмодерация: комментарий виден сразу, админ сносит лишнее — отсюда
+   *    и canModerate в ответе, по нему клиент рисует «удалить» прямо на
+   *    странице пазла, не гоняя человека в админку.
+   *  • Ключ — image_file (см. схему): тред общий на все уровни сложности. */
+  const commentsMatch = seg[1] === "puzzles" && seg[2] && seg[3] === "comments";
+  if (commentsMatch && seg.length === 4) {
+    const puzzle = stmt.puzzle.get(seg[2]);
+    if (!puzzle || puzzle.owner_user_id !== null) return json(res, 404, { error: "not found" });
+
+    if (m === "GET") {
+      return json(res, 200, {
+        comments: stmt.commentsForImage.all(puzzle.image_file).map(c => commentPayload(c, user)),
+        // Чтобы клиент сразу знал, рисовать форму или плашку «нужен вход», и
+        // не выяснял это отдельным запросом.
+        canComment: !!user,
+        canModerate: !!(user && user.admin),
+      });
+    }
+    if (m === "POST") {
+      if (!user) return json(res, 401, { error: "unauthorized" });
+      const body = await readJson(req);
+      const text = str(body.body, MAX_COMMENT_LEN);
+      if (!text) return json(res, 400, { error: "bad body" });
+      const since = now() - 60 * 60 * 1000;
+      if (stmt.commentCountByAuthorSince.get(user.id, since).n >= MAX_COMMENTS_PER_HOUR) {
+        return json(res, 429, { error: "too many comments", limit: MAX_COMMENTS_PER_HOUR });
+      }
+      const id = crypto.randomUUID(), ts = now();
+      stmt.insertComment.run(id, puzzle.image_file, user.id, user.username || null, user.name || null, text, ts);
+      adminLog.info("Новый комментарий к пазлу", { commentId: id, puzzleId: puzzle.id, title: puzzle.title, authorId: user.id });
+      return json(res, 200, commentPayload(stmt.comment.get(id), user));
+    }
+    return json(res, 405, { error: "method not allowed" });
+  }
+  // Удаление — свой комментарий сносит автор, любой — админ (claim admin в
+  // токене, см. Auth/lib/tokens.js). Отдельной кнопки «пожаловаться» пока
+  // нет: аудитория маленькая, админ и так видит всю ленту в Admin.
+  if (commentsMatch && seg[4] && seg.length === 5 && m === "DELETE") {
+    if (!user) return json(res, 401, { error: "unauthorized" });
+    const comment = stmt.comment.get(seg[4]);
+    if (!comment) return json(res, 404, { error: "not found" });
+    if (comment.author_id !== user.id && !user.admin) return json(res, 403, { error: "forbidden" });
+    stmt.deleteComment.run(comment.id);
+    // Текст уносим в журнал: «мягкого» удаления у комментариев нет (см.
+    // схему), и без этого от снесённого не осталось бы никакого следа —
+    // а именно он нужен, чтобы понять, кто повторяется.
+    adminLog.info("Комментарий удалён", { commentId: comment.id, authorId: comment.author_id, byAdmin: !!(user.admin && comment.author_id !== user.id), body: comment.body });
+    return json(res, 200, { ok: true });
   }
 
   // Список незавершённых сборок для «Продолжить сборку» над библиотекой

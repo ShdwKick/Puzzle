@@ -279,8 +279,8 @@ const EN = {
   "За стол": "Play",
   "Удалить прогресс": "Delete progress",
   "Пазлы онлайн бесплатно — собрать пазл в браузере": "Free online jigsaw puzzles — solve them right in your browser",
-  "Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.":
-    "Solve jigsaw puzzles online for free, no downloads — ready-made from the library or your own from any photo. Pieces are shaped, the table zooms and pans, and you can solve alone or with friends in a room. Logging in is only needed to keep your progress between visits.",
+  "«Что собираем?» — сервис пазлов онлайн: собирайте бесплатно и без скачивания, готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.":
+    "What Are We Piecing Together? is an online jigsaw service: solve for free with no downloads, ready-made from the library or your own from any photo. Pieces are shaped, the table zooms and pans, and you can solve alone or with friends in a room. Logging in is only needed to keep your progress between visits.",
   "Загружаем…": "Loading…",
   "Играть можно без входа — прогресс тогда хранится только в этом браузере.": "You can play without logging in — progress is then stored only in this browser.",
   "Войти и сохранять прогресс": "Log in and save progress",
@@ -317,6 +317,14 @@ const EN = {
   "Не удалось загрузить категорию — обновите страницу.": "Couldn't load the category — please refresh the page.",
   "Добавил:": "Added by:",
   "На модерации": "Under review",
+  "Комментарии": "Comments",
+  "Пока никто не написал — будьте первым.": "Nobody has written yet — be the first.",
+  "Войдите, чтобы оставить комментарий.": "Sign in to leave a comment.",
+  "Что скажете об этом пазле?": "What do you think of this puzzle?",
+  "Без имени": "Unnamed",
+  "Удалить комментарий": "Delete comment",
+  "Удалить этот комментарий?": "Delete this comment?",
+  "Слишком много комментариев за час — попробуйте позже.": "Too many comments this hour — try again later.",
   "Эти пазлы видите только вы — в библиотеке они появятся после проверки.":
     "Only you can see these — they'll appear in the library once reviewed.",
   "Опубликовано": "Published",
@@ -930,6 +938,150 @@ bindModal("historyModalBackdrop", null, "historyModalClose");
  * пазл и не решив его, роут это уже поддерживал анонимно) и блок «Ещё в
  * категории X» — реальные внутренние ссылки на похожие пазлы, не только
  * ради красоты: без него страница пазла — тупик для краулера. */
+/** Лента комментариев под пазлом (см. правку «Комментарии с модерацией»).
+ *  Постмодерация: написанное видно сразу, лишнее сносит админ — у него
+ *  «удалить» есть на КАЖДОМ комментарии (сервер отдаёт canModerate по claim
+ *  admin в токене), у обычного человека — только на своём (поле mine).
+ *  roomFetch, а не голый fetch: токен нужен даже на чтении, иначе сервер не
+ *  сможет отметить свои комментарии и права модератора. Гостю лента видна,
+ *  но вместо формы — приглашение войти (писать могут только вошедшие). */
+async function mountPuzzleComments(root, puzzleId, signal) {
+  const section = $(root, "#puzzleComments");
+  const list = $(root, "#puzzleCommentsList");
+  const formBox = $(root, "#puzzleCommentsForm");
+  const url = `/api/puzzles/${encodeURIComponent(puzzleId)}/comments`;
+
+  let data;
+  try {
+    const res = await roomFetch(url);
+    if (!res.ok) throw new Error("comments fetch failed");
+    data = await res.json();
+  } catch {
+    // Молча не показываем секцию вовсе: комментарии — не главное на
+    // странице, и пустая плашка с ошибкой тут мешала бы больше, чем
+    // отсутствие блока. Сама страница пазла при этом цела.
+    return;
+  }
+  if (signal.aborted) return;
+  section.hidden = false;
+
+  function paint() {
+    list.innerHTML = "";
+    if (!data.comments.length) {
+      list.innerHTML = `<p class="state-note">${t("Пока никто не написал — будьте первым.")}</p>`;
+      return;
+    }
+    for (const c of data.comments) list.appendChild(buildComment(c));
+  }
+
+  function buildComment(c) {
+    const item = document.createElement("article");
+    item.className = "comment";
+    const head = document.createElement("div");
+    head.className = "comment-head";
+    const who = document.createElement("b");
+    who.textContent = c.author || t("Без имени");
+    const when = document.createElement("span");
+    when.className = "comment-at";
+    when.textContent = new Date(c.createdAt).toLocaleDateString(getLang() === "en" ? "en-US" : "ru-RU",
+      { day: "numeric", month: "long", year: "numeric" });
+    head.append(who, when);
+    if (c.mine || data.canModerate) {
+      const del = document.createElement("button");
+      del.className = "icon-btn comment-delete"; del.type = "button";
+      del.title = t("Удалить комментарий"); del.setAttribute("aria-label", del.title);
+      del.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
+      del.addEventListener("click", async () => {
+        if (!confirm(t("Удалить этот комментарий?"))) return;
+        del.disabled = true;
+        try {
+          const res = await auth.fetch(`${url}/${encodeURIComponent(c.id)}`, { method: "DELETE" });
+          if (!res.ok) throw new Error("delete failed");
+          data.comments = data.comments.filter(x => x.id !== c.id);
+          paint();
+        } catch { alert(t("Не удалось удалить.")); del.disabled = false; }
+      }, { signal });
+      head.appendChild(del);
+    }
+    const body = document.createElement("p");
+    body.className = "comment-body";
+    body.textContent = c.body; // textContent, не innerHTML — текст чужой
+    item.append(head, body);
+    return item;
+  }
+
+  if (!data.canComment) {
+    const note = document.createElement("p");
+    note.className = "state-note";
+    note.textContent = t("Войдите, чтобы оставить комментарий.");
+    formBox.appendChild(note);
+  } else {
+    const form = document.createElement("form");
+    form.className = "comment-form";
+    // Поле и кнопка в одну строку (см. .comment-form-row в styles.css) —
+    // привычная строка ввода, а не «простыня с кнопкой под ней»: писать тут
+    // будут пару фраз, а не отзыв на страницу.
+    const row = document.createElement("div");
+    row.className = "comment-form-row";
+    const area = document.createElement("textarea");
+    area.className = "text-input"; area.rows = 1;
+    area.maxLength = 1000; // тот же потолок, что MAX_COMMENT_LEN на сервере
+    area.placeholder = t("Что скажете об этом пазле?");
+    const note = document.createElement("p");
+    note.className = "comment-error"; note.hidden = true;
+    const send = document.createElement("button");
+    // Без подписи — бумажный самолётик: действие одно и очевидное, а
+    // подпись «Отправить» рядом с полем на всю ширину только съедала место.
+    // Название остаётся в title/aria-label, кнопка не становится немой.
+    send.className = "btn filled icon comment-send"; send.type = "submit";
+    send.title = t("Отправить"); send.setAttribute("aria-label", send.title);
+    // viewBox сдвинут на 1.5 вместо обычного "0 0 24 24" — оптическая
+    // поправка, не опечатка. Геометрически самолётик стоит ровно (замерено:
+    // bbox путей 2..22 по обеим осям, центр совпадает с центром viewBox), но
+    // смотрится сдвинутым вверх-вправо: длинный тонкий кончик уходит в угол,
+    // а масса линии собрана внизу слева — её центр лежит на 2.1 единицы
+    // выше и правее середины. Сдвиг окна на 1.5 опускает глиф влево-вниз
+    // примерно на две трети этой разницы — на глаз ровнее всего (сравнивал
+    // 0/1/1.5/2.14 бок о бок). Правим viewBox, а не transform в CSS: это
+    // свойство самого значка, а не кнопки, и ничему не мешает.
+    send.innerHTML = `<svg class="icon" viewBox="1.5 -1.5 24 24"><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></svg>`;
+    row.append(area, send);
+    form.append(row, note);
+    form.addEventListener("submit", async e => {
+      e.preventDefault();
+      const text = area.value.trim();
+      if (!text) return;
+      send.disabled = true; note.hidden = true;
+      try {
+        const res = await auth.fetch(url, {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: text }),
+        });
+        const added = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          // 429 — единственный отказ, у которого есть внятное объяснение для
+          // человека: остальное показываем общим текстом, незачем пересказывать
+          // коды состояния.
+          note.textContent = res.status === 429
+            ? t("Слишком много комментариев за час — попробуйте позже.")
+            : t("Не удалось отправить — попробуйте ещё раз.");
+          note.hidden = false;
+          send.disabled = false;
+          return;
+        }
+        data.comments.push(added);
+        area.value = "";
+        paint();
+      } catch {
+        note.textContent = t("Не удалось отправить — попробуйте ещё раз.");
+        note.hidden = false;
+      }
+      send.disabled = false;
+    }, { signal });
+    formBox.appendChild(form);
+  }
+  paint();
+}
+
 async function renderPuzzlePage(root, id, signal) {
   root.innerHTML = `<p class="state-note">${t("Загружаем…")}</p>`;
   let data, categories, allPuzzles;
@@ -1020,6 +1172,11 @@ async function renderPuzzlePage(root, id, signal) {
         <button class="btn filled full" id="puzzlePagePlayBtn" type="button">${t("За стол")}</button>
       </div>
     </div>
+    <section class="puzzle-comments" id="puzzleComments" hidden>
+      <h2 id="puzzleCommentsHeading">${t("Комментарии")}</h2>
+      <div class="comments-list" id="puzzleCommentsList"></div>
+      <div id="puzzleCommentsForm"></div>
+    </section>
     <section class="puzzle-page-related" id="puzzlePageRelated" hidden>
       <h2 id="puzzlePageRelatedHeading"></h2>
       <div class="puzzle-grid" id="puzzlePageRelatedGrid"></div>
@@ -1165,6 +1322,12 @@ async function renderPuzzlePage(root, id, signal) {
   // openPuzzlePreviewModal): своё ещё не опубликованное фото сюда обычно и
   // не попадает (API отдаёт 404 не-автору), но сам автор, глядя на
   // собственную заявку, тоже не должен видеть бесполезную ссылку.
+  // Комментарии — только у публичного пазла, по тому же признаку, что и
+  // «поделиться» ниже (сервер отдаёт 404 на /comments для не-библиотечного,
+  // но гонять заведомо пустой запрос незачем). Не ждём ответа: страница
+  // показывается сразу, лента дорисовывается под ней.
+  if (!p.ownerUserId) mountPuzzleComments(root, variants[0].id, signal);
+
   const shareBtn = $(root, "#puzzlePageShareBtn");
   shareBtn.hidden = !!p.ownerUserId;
   if (!p.ownerUserId) {
@@ -2679,7 +2842,7 @@ async function renderLibrary(root, signal) {
   root.innerHTML = `
     <div class="library-head">
       <h1>${t("Пазлы онлайн бесплатно — собрать пазл в браузере")}</h1>
-      <p>${t("Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.")}</p>
+      <p>${t("«Что собираем?» — сервис пазлов онлайн: собирайте бесплатно и без скачивания, готовые из библиотеки или свои из любой фотографии. Детали фигурные, стол зумится и двигается, можно собирать одному или вместе с друзьями в комнате. Вход нужен только для того, чтобы прогресс сохранялся между заходами.")}</p>
     </div>
     <div id="roomsSectionOuter" hidden>
       <h2 class="room-section-title">${t("Комнаты")}</h2>
@@ -3242,7 +3405,7 @@ function renderPublishCta(signal) {
  *  /category/:slug на любой другой маршрут (без сброса вкладка сохраняла
  *  бы чужой заголовок после клиентского перехода, скажем, в комнату). */
 const DEFAULT_TITLE = "Пазлы онлайн бесплатно — собрать пазл в браузере | Что собираем?";
-const DEFAULT_DESCRIPTION = "Собирайте пазлы онлайн бесплатно и без скачивания — готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.";
+const DEFAULT_DESCRIPTION = "«Что собираем?» — пазлы онлайн бесплатно и без скачивания: готовые из библиотеки или свой из любой фотографии. Фигурные детали, зум и панорама стола, совместная сборка с друзьями в комнате в реальном времени.";
 
 function setPageMeta(title, description) {
   document.title = title;

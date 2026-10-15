@@ -1822,5 +1822,89 @@ ok("roomSessionsStarted7dGuest + roomSessionsStarted7dAuth === roomSessionsStart
 ok("roomSessionsStarted7dGuest > 0 (анонимные сеансы теста уже накопились)", stats.roomSessionsStarted7dGuest > 0, String(stats.roomSessionsStarted7dGuest));
 ok("photosUploaded7d — число, не отрицательное", typeof stats.photosUploaded7d === "number" && stats.photosUploaded7d >= 0, String(stats.photosUploaded7d));
 
+// ───────── комментарии к пазлу (см. правку «Комментарии с модерацией»):
+// пишут только вошедшие, видно сразу (постмодерация), сносит автор или
+// админ, тред общий на все уровни сложности ─────────
+const cUrl = id => `/puzzles/${id}/comments`;
+
+// Гость ленту видит, но писать не может.
+ir = await fetch(PUZZLE + "/api" + cUrl("hills"));
+const guestView = await ir.json();
+ok("гость видит ленту комментариев — 200", ir.status === 200 && Array.isArray(guestView.comments), String(ir.status));
+ok("но писать ему нельзя — canComment=false", guestView.canComment === false, JSON.stringify(guestView.canComment));
+ok("и прав модератора у него нет", guestView.canModerate === false, JSON.stringify(guestView.canModerate));
+ir = await fetch(PUZZLE + "/api" + cUrl("hills"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: "гость" }) });
+ok("POST от гостя — 401", ir.status === 401, String(ir.status));
+
+r = await asJson(tokenA, cUrl("hills"), { method: "POST", body: { body: "Отличный пазл, собрали за вечер." } });
+ok("вошедший может написать — 200", r.status === 200 && r.body.id, JSON.stringify(r.body));
+const commentId = r.body.id;
+ok("комментарий возвращается со своим признаком mine", r.body.mine === true, JSON.stringify(r.body.mine));
+ok("автор подписан логином, а id автора наружу не уходит",
+  r.body.author === "danil" && r.body.authorId === undefined, JSON.stringify(r.body));
+
+r = await asJson(tokenA, cUrl("hills"), { method: "POST", body: { body: "   " } });
+ok("пустой/пробельный текст — 400", r.status === 400, String(r.status));
+
+// Ключ — image_file: тред должен быть общим у всех уровней сложности.
+r = await asJson(tokenB, cUrl("hills-48"));
+ok("тот же тред виден на другом уровне сложности того же пазла",
+  r.body.comments.some(x => x.id === commentId), JSON.stringify(r.body.comments.map(x => x.id)));
+ok("чужой комментарий не помечен как свой", r.body.comments.find(x => x.id === commentId).mine === false, "");
+
+// Чужой снести нельзя, свой — можно; админ может любой.
+r = await asJson(tokenB, `${cUrl("hills")}/${commentId}`, { method: "DELETE" });
+ok("чужой комментарий обычному пользователю не удалить — 403", r.status === 403, String(r.status));
+
+r = await asJson(tokenB, cUrl("hills"), { method: "POST", body: { body: "И правда хорош." } });
+const otherCommentId = r.body.id;
+r = await asJson(tokenB, `${cUrl("hills")}/${otherCommentId}`, { method: "DELETE" });
+ok("свой комментарий автор удаляет — 200", r.status === 200, String(r.status));
+r = await asJson(tokenB, cUrl("hills"));
+ok("после удаления его в ленте нет", !r.body.comments.some(x => x.id === otherCommentId), "");
+
+// Защита от залпа (MAX_COMMENTS_PER_HOUR): двадцать первый за час отбивается.
+// Девятнадцать добиваем в цикле — один уже написан выше.
+for (let i = 0; i < 19; i++) await asJson(tokenA, cUrl("hills"), { method: "POST", body: { body: `залп ${i}` } });
+r = await asJson(tokenA, cUrl("hills"), { method: "POST", body: { body: "двадцать первый" } });
+ok("больше двадцати комментариев в час — 429, а не молчаливый приём",
+  r.status === 429 && r.body.limit === 20, JSON.stringify({ status: r.status, body: r.body }));
+// Лимит персональный: другому человеку он не мешает.
+r = await asJson(tokenB, cUrl("hills"), { method: "POST", body: { body: "а мне можно" } });
+ok("лимит считается по автору, не на весь пазл", r.status === 200, String(r.status));
+await asJson(tokenB, `${cUrl("hills")}/${r.body.id}`, { method: "DELETE" });
+
+// Непубличный пазл (чужая/своя ещё не одобренная загрузка) комментариев не
+// имеет вовсе — та же граница видимости, что у публичной страницы.
+ur = await callRaw(tokenA, `/puzzles?roomId=${roomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Фото без комментариев")}`, fakePng, "image/png");
+const privateId = (await ur.json()).variants[0].id;
+r = await asJson(tokenA, cUrl(privateId));
+ok("у непубличного пазла комментариев нет — 404", r.status === 404, String(r.status));
+
+// Админка: лента по всем пазлам и удаление по ключу.
+ir = await internalCall("", "/internal/comments");
+ok("GET /internal/comments без ключа — 403", ir.status === 403, String(ir.status));
+ir = await internalCall(ADMIN_KEY, "/internal/comments");
+const adminComments = (await ir.json()).comments;
+ok("Admin видит комментарий в общей ленте", adminComments.some(x => x.id === commentId), String(adminComments.length));
+const adminRow = adminComments.find(x => x.id === commentId);
+ok("в админской ленте есть автор, пазл и картинка — то, по чему модерируют",
+  adminRow.authorId === userIdA && !!adminRow.puzzleId && !!adminRow.imageUrl && adminRow.puzzleTitle === "Холмы",
+  JSON.stringify(adminRow));
+
+ir = await internalCall(ADMIN_KEY, `/internal/comments/${commentId}`, { method: "DELETE" });
+ok("Admin удаляет комментарий — 200", ir.status === 200, String(ir.status));
+r = await asJson(tokenA, cUrl("hills"));
+ok("удалённый админом пропал из публичной ленты", !r.body.comments.some(x => x.id === commentId), "");
+ir = await internalCall(ADMIN_KEY, `/internal/comments/${commentId}`, { method: "DELETE" });
+ok("повторное удаление того же — 404", ir.status === 404, String(ir.status));
+
+// Удаление должно оставлять след: «мягкого» флага у комментариев нет,
+// единственная память о снесённом — журнал.
+ir = await internalCall(ADMIN_KEY, "/internal/logs?limit=1000");
+ok("удаление комментария записано в журнал вместе с текстом",
+  (await ir.json()).logs.some(x => x.message.includes("удалил комментарий") && x.meta?.commentId === commentId),
+  commentId);
+
 for (const p of procs) p.kill();
 process.exit(failures ? 1 : 0);
