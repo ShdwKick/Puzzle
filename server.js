@@ -1437,7 +1437,7 @@ const pluralPieces = n => pluralRu(n, "деталь", "детали", "дета�
 
 const DEFAULT_OG_IMAGE = `${PUBLIC_URL}/assets/og-image.png`;
 
-function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement, image, noindex }) {
+function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement, image, noindex, breadcrumbs }) {
   // Скрытый из библиотеки пазл (см. ALTER TABLE hidden_at) по прямой ссылке
   // открывается — но в индексе ему делать нечего: из sitemap он уже выпал,
   // а сам по себе выпасть из выдачи может только по noindex. Вставляем
@@ -1461,6 +1461,24 @@ function applySeoOverride(html, { title, description, path: routePath, headBlock
   // у реальных фото другие пропорции, но эти теги — необязательная
   // подсказка, не критично, если чуть разойдётся с фактическим кадром.
   if (image) html = html.replaceAll(DEFAULT_OG_IMAGE, image);
+  // ВАЖНО: блок идёт в самом конце, после замены каноники выше. Она
+  // делает replaceAll по строке "<домен>/\"" — а в крошках ровно так и
+  // выглядит ссылка на корень, и при вставке раньше «Библиотека» уезжала
+  // на адрес текущей страницы. Поймано на живой выдаче крошек.
+  // BreadcrumbList — отдельным блоком перед </head>, рядом с уже лежащими там
+  // WebSite и FAQPage (см. index.html). Отдельным, а не внутри существующих:
+  // у каждой страницы крошки свои, а те два блока общие на весь сайт и живут
+  // в статичной разметке. escapeHtml на названиях — они пользовательские
+  // (название категории предлагает человек, название пазла тоже).
+  if (breadcrumbs && breadcrumbs.length > 1) {
+    const items = breadcrumbs.map((c, i) => ({
+      "@type": "ListItem", position: i + 1, name: c.name, item: c.url,
+    }));
+    const block = JSON.stringify({ "@context": "https://schema.org", "@type": "BreadcrumbList", itemListElement: items });
+    // JSON внутри <script> — экранируем только "</", иначе закрывающий тег
+    // внутри строки раньше времени закрыл бы сам скрипт.
+    html = html.replace("</head>", `<script type="application/ld+json">\n${block.replaceAll("</", "<\\/")}\n</script>\n</head>`);
+  }
   return html;
 }
 
@@ -1538,8 +1556,45 @@ function categoryPuzzlesListHtml(category) {
 
 function serveApp(res, pathname, isHead) {
   try {
-    let html = fs.readFileSync(APP_HTML, "utf8");
-    if (pathname === "/categories") {
+    // .replace(/\r\n/g, "\n") — защита от целого класса молчаливых поломок.
+    // Подстановки ниже (applySeoOverride) ищут в этом html МНОГОСТРОЧНЫЕ куски,
+    // заданные в коде шаблонными строками, а движок JS по спецификации приводит
+    // переводы строк внутри шаблонной строки к LF. Стоит index.html оказаться в
+    // рабочей копии с CRLF (хватит редактора на Windows или core.autocrlf=true
+    // при клонировании) — многострочные замены перестают находиться, и h1, интро
+    // и серверные списки для /categories, /category/:slug и /puzzle/:id тихо
+    // отдаются общими, без единой ошибки в логах. Однострочные замены (title,
+    // description, canonical) при этом работают, поэтому поломка не бросается в
+    // глаза. На этом уже попались — см. проверку h1 в test/e2e-rooms.mjs.
+    let html = fs.readFileSync(APP_HTML, "utf8").replace(/\r\n/g, "\n");
+    // /publish и /rooms до этого отдавались с заголовком и каноникой ГЛАВНОЙ
+    // (см. правку «SEO для страниц публикации и комнат»): для поиска они были
+    // не отдельными страницами, а дублями «/», и по своим запросам не
+    // показывались вовсе. А запросы у них свои и вполне ходовые — «сделать
+    // пазл из фотографии» и «собрать пазл вдвоём», и это ровно то, чем сервис
+    // отличается от соседей. Описания тут не про сервис вообще, а про одно
+    // конкретное действие, которое человек пришёл сделать.
+    if (pathname === "/publish") {
+      html = applySeoOverride(html, {
+        title: "Сделать пазл из своей фотографии онлайн — бесплатно | Что собираем?",
+        description: "Превратите любую фотографию в пазл: загрузите снимок, сервис сам нарежет его на фигурные детали. Бесплатно, без скачивания и без установки приложений.",
+        path: "/publish",
+        headBlock: `  <div class="library-head">
+    <h1>Сделать пазл из своей фотографии</h1>
+    <p>Загрузите снимок — сервис сам нарежет его на фигурные детали и соберёт все уровни сложности сразу. Бесплатно, прямо в браузере.</p>
+  </div>`,
+      });
+    } else if (pathname === "/rooms") {
+      html = applySeoOverride(html, {
+        title: "Собрать пазл вдвоём онлайн — совместная сборка | Что собираем?",
+        description: "Соберите пазл вместе с друзьями в реальном времени: общий стол, детали двигаются у всех сразу, чат рядом. Нужна только ссылка-приглашение.",
+        path: "/rooms",
+        headBlock: `  <div class="library-head">
+    <h1>Собрать пазл вдвоём или компанией</h1>
+    <p>Создайте комнату, отправьте ссылку — и собирайте один пазл вместе, в реальном времени. Детали двигаются сразу у всех, рядом чат.</p>
+  </div>`,
+      });
+    } else if (pathname === "/categories") {
       html = applySeoOverride(html, {
         title: "Категории пазлов онлайн — собрать пазл по теме | Что собираем?",
         description: "Все категории пазлов онлайн в одном месте — выберите тему и собирайте бесплатно, без регистрации и скачивания.",
@@ -1611,6 +1666,20 @@ function serveApp(res, pathname, isHead) {
   </div>`,
             image: `${PUBLIC_URL}${imageUrlFor(puzzle.image_file)}`,
             noindex: !!puzzle.hidden_at,
+            // Крошки на странице уже были видимые (см. .puzzle-page-crumbs в
+            // app.js), но поиск о них не знал — разметка их проявляет: вместо
+            // голого адреса в выдаче показывается путь «Библиотека › Категория
+            // › Пазл». Берём ту же категорию, что видит человек, и только
+            // одобренную — на непроверенную ссылаться из выдачи незачем.
+            breadcrumbs: (() => {
+              const crumbs = [{ name: "Библиотека", url: `${PUBLIC_URL}/` }];
+              const cat = puzzle.category_id ? stmt.categoryById.get(puzzle.category_id) : null;
+              if (cat && cat.status === "approved") {
+                crumbs.push({ name: cat.name, url: `${PUBLIC_URL}/category/${encodeURIComponent(cat.slug)}` });
+              }
+              crumbs.push({ name: puzzle.title, url: `${PUBLIC_URL}/puzzle/${encodeURIComponent(puzzle.id)}` });
+              return crumbs;
+            })(),
           });
         }
       }
@@ -2417,6 +2486,10 @@ const server = http.createServer(async (req, res) => {
       const urls = [
         { loc: `${PUBLIC_URL}/`, priority: "1.0" },
         { loc: `${PUBLIC_URL}/categories`, priority: "0.8" },
+        // Обе появились в sitemap вместе со своими заголовками (см. serveApp):
+        // пока они отдавались как дубль главной, класть их сюда было незачем.
+        { loc: `${PUBLIC_URL}/publish`, priority: "0.7" },
+        { loc: `${PUBLIC_URL}/rooms`, priority: "0.7" },
         ...stmt.listApprovedCategories.all()
           .filter(c => stmt.categoryPublicPuzzleCount.get(c.id).n > 0)
           .map(c => ({ loc: `${PUBLIC_URL}/category/${encodeURIComponent(c.slug)}`, priority: "0.6" })),

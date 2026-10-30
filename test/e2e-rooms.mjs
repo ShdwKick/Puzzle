@@ -18,6 +18,10 @@ const AUTH_PORT = parseInt(process.env.AUTH_PORT || "8788", 10);
 const PUZZLE_PORT = parseInt(process.env.PUZZLE_PORT || "8796", 10);
 const AUTH = `http://localhost:${AUTH_PORT}`;
 const PUZZLE = `http://localhost:${PUZZLE_PORT}`;
+// PUBLIC_URL серверу тут не задаётся — он берёт свой дефолт (см. server.js).
+// Каноника, sitemap и крошки строятся от него, поэтому в проверках ниже
+// сверяемся с этим же адресом, а не с localhost.
+const PUBLIC_BASE = "https://puzzle.burninghouse.ru";
 const NODE_ARGS = process.version.startsWith("v22") ? ["--experimental-sqlite"] : [];
 
 fs.rmSync(WORK, { recursive: true, force: true });
@@ -1232,6 +1236,42 @@ ir = await fetch(PUZZLE + "/categories");
 const categoriesPageHtml = await ir.text();
 ok("серверная заглушка /categories несёт обложку — src первого пазла категории",
   categoriesPageHtml.includes(`<img src="${categorizedUpload.variants[0].imageUrl}"`), "");
+
+// Своя шапка (h1 + интро) у каждого типа страниц — это МНОГОСТРОЧНАЯ подстановка
+// в serveApp, и ломается она иначе, чем однострочные title/description: те
+// продолжают работать, а h1 тихо остаётся общим. Ровно так и случилось, когда
+// index.html оказался в рабочей копии с CRLF, — движок JS приводит переводы
+// строк в шаблонных строках к LF, и кусок переставал находиться. Проверяем
+// обе страницы, у которых своя шапка.
+ok("у /categories своя h1, а не общая библиотечная",
+  categoriesPageHtml.includes("<h1>Категории пазлов онлайн</h1>")
+  && !categoriesPageHtml.includes("<h1>Пазлы онлайн бесплатно"), "");
+
+const hillsPageHtml = await (await fetch(PUZZLE + "/puzzle/hills")).text();
+ok("у /puzzle/:id своя h1 с названием пазла",
+  hillsPageHtml.includes("<h1>Пазл «Холмы»</h1>")
+  && !hillsPageHtml.includes("<h1>Пазлы онлайн бесплатно"), "");
+
+// У /publish и /rooms до правки «SEO для страниц публикации и комнат» не было
+// ни своего заголовка, ни своей каноники — для поиска они были дублями главной.
+for (const [path, h1, canon] of [
+  ["/publish", "Сделать пазл из своей фотографии", "/publish"],
+  ["/rooms", "Собрать пазл вдвоём или компанией", "/rooms"],
+]) {
+  const page = await (await fetch(PUZZLE + path)).text();
+  ok(`${path}: своя h1 и каноника на себя, а не на главную`,
+    page.includes(`<h1>${h1}</h1>`) && page.includes(`<link rel="canonical" href="${PUBLIC_BASE}${canon}">`),
+    path);
+}
+
+// Крошки в разметке (BreadcrumbList) — их легко сломать соседней заменой:
+// каноника делает replaceAll по "<домен>/\"" и однажды уже перезаписала
+// ссылку на корень внутри крошек. Проверяем именно её.
+const crumbs = JSON.parse(/<script type="application\/ld\+json">\s*(\{"@context":"https:\/\/schema\.org","@type":"BreadcrumbList"[\s\S]*?\})\s*<\/script>/.exec(hillsPageHtml)[1]);
+ok("крошки: первая ведёт на корень, последняя — на сам пазл",
+  crumbs.itemListElement[0].item === PUBLIC_BASE + "/"
+  && crumbs.itemListElement.at(-1).item.endsWith("/puzzle/hills"),
+  JSON.stringify(crumbs.itemListElement.map(x => x.item)));
 
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
   method: "POST", body: { title: "С неверной категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: "no-such-category" },
