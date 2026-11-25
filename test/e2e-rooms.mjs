@@ -8,6 +8,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module"; // lib/thumbs.js — CommonJS, как и server.js
 import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
 import zlib from "node:zlib"; // только для gradientPng ниже — фикстура под миниатюры
@@ -933,7 +934,11 @@ ok("и категория, проставленная при загрузке, �
 // ───────── пометка «не для детей» (см. правку «Возрастное подтверждение»):
 // заявку кладёт автор, решение — за модератором, помеченное не попадает в
 // поисковые поверхности ─────────
-ok("по умолчанию пометки нет", directPublicRow.notForKids === false, JSON.stringify(directPublicRow.notForKids));
+// !== true, а не === false: в списке библиотеки поля со значением
+// null/false не передаются вовсе (см. libraryPayload в server.js) — смысл
+// «пометки нет» от этого не меняется, а байтов на 4157 строк экономится
+// заметно. Клиент все эти поля проверяет только на правдивость.
+ok("по умолчанию пометки нет", directPublicRow.notForKids !== true, JSON.stringify(directPublicRow.notForKids));
 
 ur = await callRaw(tokenA, `/puzzles?publish=1&w=300&h=400&consent=1&notForKids=1&title=${encodeURIComponent("Полотно с обнажённой натурой")}`, fakePng, "image/png");
 const artUpload = await ur.json();
@@ -1368,6 +1373,21 @@ if (thumbMade) {
   ok("vips/magick/sips на этой машине нет — проверка самого пережима пропущена", true, thumbCache);
 }
 
+/* Временное имя файла, в которое пишется миниатюра, обязано сохранять
+   расширение В КОНЦЕ: и vips, и ImageMagick выбирают формат записи по
+   суффиксу. Первая версия приписывала `.part` просто в конец
+   (`<uuid>.webp.123.part`) — и на проде vips падал на КАЖДОЙ картинке с
+   «vips вернул 1», потому что формата `.part` он не знает. Локально это не
+   воспроизводилось вовсе: sips на расширение только ругается
+   предупреждением, то есть на macOS «работало», а в контейнере не работало
+   ничего. Проверка дешёвая и ровно про этот класс поломок. */
+const thumbsLib = createRequire(import.meta.url)("../lib/thumbs.js");
+for (const ext of [".webp", ".jpg"]) {
+  const part = thumbsLib.partPathFor(`/data/400/abc${ext}`, ext);
+  ok(`временное имя миниатюры сохраняет расширение ${ext} в конце`,
+    part.endsWith(ext) && part.includes(".part"), part);
+}
+
 // Фолбэк: fakePng — PNG только по сигнатуре, пережать его нельзя. Адрес
 // миниатюры при этом обязан отдать ОРИГИНАЛ, а не 404 и не HTML.
 tr = await fetch(PUZZLE + categorizedUpload.variants[0].thumbUrl);
@@ -1391,9 +1411,56 @@ ok("размер не из белого списка миниатюрой не �
 ir = await fetch(PUZZLE + "/api/puzzles");
 const libForThumbs = await ir.json();
 const svgPuzzle = libForThumbs.find(p => p.imageUrl.endsWith(".svg"));
-ok("у встроенных .svg миниатюры не заводятся — все три адреса совпадают",
-  svgPuzzle && svgPuzzle.thumbUrl === svgPuzzle.imageUrl && svgPuzzle.previewUrl === svgPuzzle.imageUrl,
+// В списке библиотеки thumbUrl/previewUrl больше не передаются — клиент
+// выводит их из imageUrl сам (см. thumbFromImageUrl в assets/app.js и
+// libraryPayload в server.js). Поэтому правило «у .svg миниатюр нет»
+// проверяем там, где адрес миниатюры реально строится сервером: в
+// статичном списке категории. hills временно прикреплён к категории выше.
+ok("в списке библиотеки производных адресов нет — клиент считает их сам",
+  svgPuzzle && svgPuzzle.thumbUrl === undefined && svgPuzzle.previewUrl === undefined,
   JSON.stringify(svgPuzzle && { imageUrl: svgPuzzle.imageUrl, thumbUrl: svgPuzzle.thumbUrl }));
+
+/* ── Кэш и облегчённый payload GET /api/puzzles (см. libraryResponse и
+   libraryPayload в server.js) ─────────────────────────────────────────────
+
+   Эндпоинт отдавал всю библиотеку на каждый заход главной: 4157 строк,
+   2.5 МБ JSON (211 КБ в gzip), и собиралось это заново каждый раз — 4157
+   объектов, подзапрос рейтинга на каждую картинку и JSON.stringify на
+   2.5 МБ, синхронно (node:sqlite — DatabaseSync). Клиент рисует 48 карточек
+   за раз. Плюс `Cache-Control: no-store` запрещал браузеру даже спрашивать,
+   не изменилось ли что-то. */
+const libRes1 = await fetch(PUZZLE + "/api/puzzles");
+const libEtag = libRes1.headers.get("etag");
+await libRes1.text();
+ok("GET /api/puzzles отдаёт ETag", !!libEtag && libEtag.startsWith('"'), String(libEtag));
+ok("и Cache-Control: no-cache, а не no-store — иначе условный запрос невозможен",
+  (libRes1.headers.get("cache-control") || "") === "no-cache", libRes1.headers.get("cache-control"));
+const libRes304 = await fetch(PUZZLE + "/api/puzzles", { headers: { "If-None-Match": libEtag } });
+ok("повторный заход с тем же ETag — 304 и пустое тело",
+  libRes304.status === 304 && (await libRes304.text()) === "", String(libRes304.status));
+// Null-ов в списке быть не должно вовсе: это 4157 строк, и каждое пустое
+// поле в них — чистый вес. Смысл при этом тот же (клиент проверяет такие
+// поля только на правдивость).
+const libRows = await (await fetch(PUZZLE + "/api/puzzles")).json();
+ok("в списке библиотеки нет ни одного null-значения",
+  libRows.every(r => Object.values(r).every(v => v !== null)),
+  JSON.stringify(libRows.find(r => Object.values(r).some(v => v === null)) || {}).slice(0, 160));
+ok("и notForKids передаётся только когда пометка реально стоит",
+  libRows.every(r => r.notForKids === undefined || r.notForKids === true), "");
+
+// Кэш обязан сбрасываться от любой записи в базу — иначе список у всех
+// посетителей тихо устареет. Держится на total_changes() (см. stmt), так
+// что забыть инвалидацию негде: счётчик двигает сама запись.
+const cacheProbeId = libRows.find(r => r.imageUrl.endsWith(".png") || r.imageUrl.endsWith(".jpg"))?.id;
+ok("в библиотеке есть загруженный через Admin пазл — на нём и проверим кэш", !!cacheProbeId, String(cacheProbeId));
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${cacheProbeId}/title`, { method: "POST", body: { title: "Проверка сброса кэша" } });
+ok("название изменено", ir.status === 200, String(ir.status));
+const libRes2 = await fetch(PUZZLE + "/api/puzzles");
+await libRes2.text();
+ok("после правки библиотеки ETag другой",
+  libRes2.headers.get("etag") !== libEtag, `${libEtag} → ${libRes2.headers.get("etag")}`);
+ok("и старый ETag больше не даёт 304 — иначе клиент остался бы со старым списком",
+  (await fetch(PUZZLE + "/api/puzzles", { headers: { "If-None-Match": libEtag } })).status === 200, "");
 
 // Своя шапка (h1 + интро) у каждого типа страниц — это МНОГОСТРОЧНАЯ подстановка
 // в serveApp, и ломается она иначе, чем однострочные title/description: те
@@ -1723,7 +1790,7 @@ ok("удаление обычной категории — 200", ir.status === 2
 ir = await fetch(PUZZLE + "/api/puzzles");
 const afterCategoryDelete = (await ir.json()).find(p => p.id === categorizedPuzzleId);
 ok("пазл пережил удаление своей категории — остался, но без категории (ON DELETE SET NULL на puzzles.category_id)",
-  afterCategoryDelete && afterCategoryDelete.categoryId === null, JSON.stringify(afterCategoryDelete));
+  afterCategoryDelete && !afterCategoryDelete.categoryId, JSON.stringify(afterCategoryDelete));
 
 ir = await fetch(PUZZLE + "/api/categories");
 const categoriesAfterDelete = await ir.json();
@@ -1878,7 +1945,7 @@ ok("Admin одобрил фото с категориями — 200", ir.status 
 ir = await fetch(PUZZLE + "/api/puzzles");
 const approvedCatRow = (await ir.json()).find(x => x.id === catPublishId);
 ok("после approve: ownerUserId обнулён, но uploaderUsername ОСТАЛСЯ — ключевая проверка всего дизайна атрибуции",
-  approvedCatRow && approvedCatRow.ownerUserId === null && approvedCatRow.uploaderUsername === "danil" && approvedCatRow.uploaderUserId === userIdA,
+  approvedCatRow && !approvedCatRow.ownerUserId && approvedCatRow.uploaderUsername === "danil" && approvedCatRow.uploaderUserId === userIdA,
   JSON.stringify(approvedCatRow));
 
 ir = await fetch(PUZZLE + `/api/users/${userIdA}/puzzles`);

@@ -31,8 +31,26 @@ const $ = (root, sel) => root.querySelector(sel);
    и из объектов, пришедших не из puzzlePayload (локальный прогресс гостя
    в localStorage, см. localProgress), и там новых полей нет. Без фолбэка
    у такой карточки картинка просто не нарисовалась бы. */
-const cardSrc = p => p.thumbUrl || p.imageUrl;
-const previewSrc = p => p.previewUrl || p.imageUrl;
+/** Адрес миниатюры по адресу оригинала — та же схема, что thumbUrlFor в
+ *  server.js: /uploads/<uuid>.jpg → /uploads/thumb/400/<uuid>.
+ *
+ *  Зачем считать самим, когда сервер эти адреса и так присылал: в списке
+ *  библиотеки их больше нет. Два адреса на строку × 4157 строк — это 580 КБ
+ *  сырого JSON из 2.5 МБ, целиком выводимых из третьего поля (см.
+ *  libraryPayload в server.js). В одиночных ответах и в списке комнаты поля
+ *  остались, поэтому сначала смотрим, что прислали, и считаем только если
+ *  не прислали ничего.
+ *
+ *  .svg (три стартовые картинки) миниатюр не имеет — вектор на единицы
+ *  килобайт, растр был бы хуже и тяжелее; для них возвращается тот же
+ *  адрес. Всё, что не из /uploads/, не трогаем вовсе. */
+function thumbFromImageUrl(imageUrl, size) {
+  if (!imageUrl || !imageUrl.startsWith("/uploads/")) return imageUrl;
+  const base = imageUrl.slice("/uploads/".length).replace(/\.[^.]+$/, "");
+  return `/uploads/thumb/${size}/${base}`;
+}
+const cardSrc = p => p.thumbUrl || thumbFromImageUrl(p.imageUrl, 400);
+const previewSrc = p => p.previewUrl || thumbFromImageUrl(p.imageUrl, 800);
 /** srcset для карточки: на retina-экране (DPR 2) 400px в слот 318px —
  *  заметно мыльно, 800px там как раз. Пустая строка, если сервер новых
  *  полей не прислал — присваивать img.srcset = "" безопасно, браузер
@@ -42,9 +60,10 @@ const previewSrc = p => p.previewUrl || p.imageUrl;
  *  делаются вовсе (см. thumbUrlFor в server.js), и srcset из двух
  *  одинаковых адресов с разными ширинами был бы заявкой, что это разные
  *  картинки разного размера, — неправда, пусть и безобидная. */
-const cardSrcset = p => (p.thumbUrl && p.previewUrl && p.thumbUrl !== p.previewUrl)
-  ? `${p.thumbUrl} 400w, ${p.previewUrl} 800w`
-  : "";
+const cardSrcset = p => {
+  const small = cardSrc(p), big = previewSrc(p);
+  return (small && big && small !== big) ? `${small} 400w, ${big} 800w` : "";
+};
 /** sizes для тех же карточек: по нему браузер выбирает между 400w и 800w с
  *  учётом плотности экрана. Сетка — repeat(auto-fill, minmax(15.5rem,1fr))
  *  (см. .puzzle-grid), замеренная ширина слота — 286–318px, так что 320px

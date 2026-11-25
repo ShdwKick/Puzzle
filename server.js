@@ -577,6 +577,22 @@ const stmt = {
   // puzzlesPublic остаётся для Admin (/internal/puzzles) — ему как раз
   // нужно видеть скрытые, иначе их нечем было бы вернуть обратно.
   puzzlesPublicVisible: db.prepare("SELECT * FROM puzzles WHERE owner_user_id IS NULL AND hidden_at IS NULL ORDER BY sort_order, created_at"),
+  /* Счётчик изменённых строк за время жизни соединения — встроенная функция
+   * SQLite. Нужен как «версия базы» для кэша библиотеки (см.
+   * libraryResponse): любой INSERT/UPDATE/DELETE где угодно в процессе его
+   * двигает, а чтения — нет (проверено на node:sqlite).
+   *
+   * Почему так, а не ручная инвалидация в каждом месте записи: мест этих
+   * много (две загрузки, три удаления, смена названия, категории, пометки
+   * «не для детей», скрытие, модерация, оценки), и забытое означало бы
+   * тихо устаревший список у всех посетителей — ровно тот класс поломок,
+   * которого этот файл старательно избегает. Тут забыть нечего: счётчик
+   * двигает сама запись.
+   *
+   * Цена — кэш сбрасывается и от записей, к библиотеке не относящихся
+   * (прогресс сборки, комнаты). Это дёшево: список всё равно читают только
+   * при загрузке страницы, а не во время игры. */
+  totalChanges: db.prepare("SELECT total_changes() AS n"),
   // СВОИ ФОТО ИМЕННО ЭТОЙ КОМНАТЫ (room_id, видны сразу по факту загрузки —
   // не все фото владельца по всем его комнатам, см. комментарий у ALTER
   // TABLE room_id выше) + библиотечные пазлы, ЯВНО добавленные в эту
@@ -1091,6 +1107,70 @@ function puzzlePayload(p, ratingCache) {
     // этому флагу размывает превью и просит подтвердить возраст.
     notForKids: !!p.not_for_kids,
   };
+}
+
+/* ───────────────── библиотека: кэш ответа и облегчённый payload ─────────────
+ *
+ *  GET /api/puzzles без roomId отдавал ВСЮ библиотеку целиком на каждый
+ *  заход главной: 4157 строк, 2.5 МБ JSON (211 КБ в gzip), и всё это
+ *  собиралось заново на каждый запрос — 4157 объектов, подзапрос рейтинга на
+ *  каждую уникальную картинку и JSON.stringify на 2.5 МБ, синхронно, в том
+ *  же потоке, что и всё остальное (node:sqlite — DatabaseSync). Клиент при
+ *  этом рисует 48 карточек за раз (PUZZLE_PAGE_SIZE в app.js).
+ *
+ *  Настоящая пагинация тут не делается намеренно: клиенту весь список нужен
+ *  не для сетки, а для вещей, которые считаются по всей библиотеке сразу —
+ *  нумерация «Категория #N» (ensureDisplayTitleCache), «Продолжить сборку» у
+ *  гостя (прогресс лежит в localStorage, сервер о нём не знает), сортировка,
+ *  фильтр по категории и блок «похожие». Серверная пагинация потребовала бы
+ *  переписать всё это; см. README, «Открытые вопросы».
+ *
+ *  Поэтому две вещи, которые дают почти весь выигрыш и ничего не ломают:
+ *
+ *  1. Ответ собирается ОДИН раз и переиспользуется, пока в базе ничего не
+ *     менялось (см. stmt.totalChanges). Плюс ETag: повторный заход получает
+ *     304 без тела вовсе — а прежний `Cache-Control: no-store` в json()
+ *     запрещал браузеру даже спрашивать.
+ *  2. Из списка убрано лишнее: поля со значением null (клиент их проверяет
+ *     только на правдивость), notForKids:false и выводимые из imageUrl
+ *     thumbUrl/previewUrl. Это 2.5 МБ → 1.4 МБ в сыром виде. В gzip выигрыш
+ *     скромный (211 → 194 КБ: повторяющиеся имена полей жмутся прекрасно),
+ *     зато вдвое меньше работы браузеру на разбор JSON и вдвое меньше
+ *     памяти под него — а это как раз телефон, на котором и так тяжело.
+ *
+ *  ВАЖНО: это облегчение применяется ТОЛЬКО к списку библиотеки. Одиночные
+ *  объекты (страница пазла, сеанс комнаты) и список комнаты по-прежнему
+ *  идут через puzzlePayload как есть — там экономить нечего, а менять форму
+ *  ответа ради нуля смысла нет. Клиент к обеим формам готов: thumbUrl он
+ *  берёт из ответа, если тот есть, и выводит из imageUrl, если нет (см.
+ *  thumbFromImageUrl в assets/app.js). */
+function libraryPayload(p, ratingCache) {
+  const full = puzzlePayload(p, ratingCache);
+  const out = {};
+  for (const [k, v] of Object.entries(full)) {
+    if (v === null) continue;                        // ownerUserId, moderationReason и прочие пустые
+    if (k === "notForKids" && v === false) continue; // пометка есть у единиц
+    if (k === "thumbUrl" || k === "previewUrl") continue; // выводятся из imageUrl
+    out[k] = v;
+  }
+  return out;
+}
+
+/** Готовое тело ответа GET /api/puzzles и его ETag. Пересобирается только
+ *  когда в базе что-то изменилось. */
+const libraryCache = { changes: -1, body: "", etag: "" };
+function libraryResponse() {
+  const changes = stmt.totalChanges.get().n;
+  if (libraryCache.changes === changes && libraryCache.body) return libraryCache;
+  const ratingCache = new Map();
+  const body = JSON.stringify(stmt.puzzlesPublicVisible.all().map(p => libraryPayload(p, ratingCache)));
+  // Сильный ETag (без W/): тело байт-в-байт одно и то же, пока не изменилась
+  // база. Короткий срез хэша — этого с запасом хватает, чтобы два разных
+  // состояния библиотеки не совпали.
+  libraryCache.changes = changes;
+  libraryCache.body = body;
+  libraryCache.etag = `"${crypto.createHash("sha1").update(body).digest("base64url").slice(0, 22)}"`;
+  return libraryCache;
 }
 
 /** Форс-удаление целой группы (все уровни сложности одной загрузки) —
@@ -3159,8 +3239,22 @@ async function api(req, res, url, user) {
       const roomRatingCache = new Map();
       return json(res, 200, stmt.puzzlesForRoom.all(roomId, roomId).map(p => puzzlePayload(p, roomRatingCache)));
     }
-    const libraryRatingCache = new Map();
-    return json(res, 200, stmt.puzzlesPublicVisible.all().map(p => puzzlePayload(p, libraryRatingCache)));
+    // Готовое тело из кэша (см. libraryResponse) + условный запрос.
+    // Cache-Control: no-cache — это НЕ «не кэшируй», а «кэшируй, но каждый
+    // раз спрашивай»: именно он включает повторную проверку по ETag, после
+    // которой браузер получает 304 без тела. Прежний no-store из json()
+    // запрещал даже спрашивать, и 211 КБ ехали заново на каждый заход.
+    const lib = libraryResponse();
+    if (req.headers["if-none-match"] === lib.etag) {
+      res.writeHead(304, { ETag: lib.etag, "Cache-Control": "no-cache" });
+      return res.end();
+    }
+    res.writeHead(200, {
+      "Content-Type": "application/json; charset=utf-8",
+      ETag: lib.etag,
+      "Cache-Control": "no-cache",
+    });
+    return res.end(lib.body);
   }
 
   // Загрузка своего фото и генерация пазла из него — см. README «Свои фото».
