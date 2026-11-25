@@ -53,6 +53,7 @@ const crypto = require("crypto");
 const { DatabaseSync } = require("node:sqlite");
 const { checkAdminKey, createAdminLog } = require("./admin-internal");
 const mailer = require("./lib/mailer");
+const thumbs = require("./lib/thumbs");
 const mailTpl = require("./lib/emailTemplates");
 const ws = require("./ws-server");
 const { buildClusters, largestClusterSize, connectedPiecesCount, tolerance } = require("./assets/puzzle-clusters.js");
@@ -75,6 +76,14 @@ const APP_HTML = path.join(__dirname, "index.html");
 const ASSETS_DIR = path.join(__dirname, "assets");
 const ALLOWED_ORIGIN = process.env.ALLOWED_ORIGIN || "";
 const PUZZLE_PHOTO_DIR = path.join(DATA_DIR, "puzzle-photos");
+// Миниатюры обложек (см. lib/thumbs.js и правку «Миниатюры картинок»).
+// Отдельный каталог рядом с оригиналами, а не подкаталог внутри них:
+// serveStatic отдаёт /uploads/ по basename с проверкой расширения, и
+// подкаталог там пришлось бы отдельно исключать из этой выдачи. Внутри —
+// по каталогу на размер: DATA_DIR/puzzle-thumbs/400/<uuid>.webp. Том
+// монтируется на DATA_DIR целиком (см. docker-compose), так что миниатюры
+// переживают пересоздание контейнера вместе с оригиналами.
+const PUZZLE_THUMB_DIR = path.join(DATA_DIR, "puzzle-thumbs");
 const MAX_PHOTO_BYTES = parseInt(process.env.MAX_PHOTO_BYTES || String(4 * 1024 * 1024), 10);
 // Промежуточные уровни (см. план «Больше шагов сложности») — по одному
 // «+»-варианту между каждой парой исходных шести (24/72/150/360/800,
@@ -122,6 +131,13 @@ const AUTH_BASE = (process.env.AUTH_BASE || AUTH_ISSUER).replace(/\/+$/, "");
 // ───────────────────────── хранилище ─────────────────────────
 fs.mkdirSync(DATA_DIR, { recursive: true });
 fs.mkdirSync(PUZZLE_PHOTO_DIR, { recursive: true });
+fs.mkdirSync(PUZZLE_THUMB_DIR, { recursive: true });
+// Один раз на старте — видно в логах контейнера, чем именно пережимаются
+// обложки и пережимаются ли вообще. Без этой строки «почему главная опять
+// тянет мегабайты» выяснялось бы только замерами снаружи.
+console.log(thumbs.available()
+  ? `[thumbs] миниатюры обложек делает ${thumbs.toolName()}`
+  : "[thumbs] ни vips, ни magick, ни sips не найдены — обложки отдаются в исходном размере");
 
 const db = new DatabaseSync(DB_PATH);
 db.exec("PRAGMA journal_mode = WAL");   // конкурентные чтения не блокируют запись
@@ -997,6 +1013,20 @@ async function isDeviceBanned(deviceId) {
 // POST /internal/puzzles, так что путаницы файл↔расширение тут не бывает.
 const imageUrlFor = imageFile => imageFile.endsWith(".svg") ? `/assets/puzzles/${imageFile}` : `/uploads/${imageFile}`;
 
+/** Адрес миниатюры обложки (см. lib/thumbs.js). Расширения в адресе нет
+ *  намеренно — на диске миниатюра бывает и .webp (vips), и .jpg (sips),
+ *  формат браузеру сообщает Content-Type, и адрес от инструмента на
+ *  машине не зависит.
+ *
+ *  .svg (три стартовые картинки — Холмы/Лес/Горы) миниатюры не получают:
+ *  это вектор на единицы килобайт, пережимать его в растр значило бы
+ *  сделать хуже. Для них возвращается тот же адрес, что у оригинала —
+ *  вызывающей стороне не нужно про это знать, srcset просто укажет на
+ *  один и тот же файл. */
+const thumbUrlFor = (imageFile, size) => imageFile.endsWith(".svg")
+  ? imageUrlFor(imageFile)
+  : `/uploads/thumb/${size}/${imageFile.replace(/\.[^.]+$/, "")}`;
+
 /** ratingCache — необязательный Map (заводит и передаёт вызывающий код,
  *  общий на весь список в одном запросе, см. вызовы puzzlePayload/.map()
  *  ниже) — рейтинг привязан к image_file, а не к id конкретного уровня
@@ -1032,6 +1062,13 @@ function puzzlePayload(p, ratingCache) {
   return {
     id: p.id, title: p.title, titleEn: p.title_en || null, gridRows: p.grid_rows, gridCols: p.grid_cols,
     imageUrl: imageUrlFor(p.image_file),
+    // thumbUrl/previewUrl (см. правку «Миниатюры картинок») — те же байты
+    // картинки, пережатые под место, куда она реально встаёт: 400 для
+    // карточки в сетке, 800 для неё же на retina и для превью в модалках
+    // и на странице пазла. imageUrl остаётся полным размером — на столе
+    // из него нарезаются детали, там миниатюра не годится.
+    thumbUrl: thumbUrlFor(p.image_file, 400),
+    previewUrl: thumbUrlFor(p.image_file, 800),
     seed: p.seed, ownerUserId: p.owner_user_id || null,
     // Только для показа автору (клиент сам решает, кому рисовать бейдж —
     // buildCard в app.js гейтит по mine), см. план «Модерация загруженных
@@ -1138,6 +1175,7 @@ function forceDeletePuzzleGroup(puzzle) {
   }
   for (const gp of group) stmt.deletePuzzle.run(gp.id);
   try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
+  thumbs.remove(PUZZLE_THUMB_DIR, puzzle.image_file.replace(/\.[^.]+$/, ""));
 }
 
 // Пришедшие с фронта детали — доверенный документ хранится как есть, но
@@ -1378,6 +1416,43 @@ function serveStatic(res, pathname, isHead) {
     sendFile(res, file, { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" }, isHead);
     return true;
   }
+  // Миниатюра обложки (см. lib/thumbs.js и правку «Миниатюры картинок») —
+  // ДО общей ветки /uploads/ ниже: у адреса миниатюры нет расширения, её
+  // regex на имя файла его не пропустит, и запрос ушёл бы в serveApp,
+  // который отдал бы на адрес картинки HTML страницы с кодом 200.
+  //
+  // Генерация ленивая, прямо здесь: 477 уже загруженных обложек не требуют
+  // отдельной миграции перед деплоем — первая же карточка, которой нужна
+  // миниатюра, её и заводит, дальше файл просто лежит. Прогреть заранее,
+  // чтобы на живых людях не пережималось, — scripts/backfill-thumbs.mjs.
+  const thumbMatch = pathname.match(/^\/uploads\/thumb\/(\d+)\/([\w-]+)$/);
+  if (thumbMatch) {
+    const size = parseInt(thumbMatch[1], 10);
+    const base = thumbMatch[2];
+    if (!thumbs.SIZES.includes(size)) return false;
+    const file = thumbs.ensure(PUZZLE_PHOTO_DIR, PUZZLE_THUMB_DIR, size, base);
+    if (file) {
+      sendFile(res, file, {
+        "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream",
+        // immutable — как у оригинала: имя файла содержит uuid загрузки,
+        // под одним адресом содержимое не меняется никогда.
+        "Cache-Control": "public, max-age=31536000, immutable",
+      }, isHead);
+      return true;
+    }
+    // Миниатюры нет и сделать не удалось (нет инструмента в образе, битый
+    // файл) — отдаём по этому же адресу ОРИГИНАЛ. Страница остаётся
+    // рабочей и выглядит ровно как до правки, просто тяжёлой; ломаться
+    // из-за отсутствия vips она не должна. Кэш короткий, не immutable:
+    // как только миниатюра появится, браузеры подхватят её сами.
+    const src = thumbs.sourceFor(PUZZLE_PHOTO_DIR, base);
+    if (!src) return false;
+    sendFile(res, src, {
+      "Content-Type": MIME[path.extname(src).toLowerCase()] || "application/octet-stream",
+      "Cache-Control": "public, max-age=300",
+    }, isHead);
+    return true;
+  }
   if (pathname.startsWith("/uploads/")) {
     const name = path.basename(pathname);
     if (!/^[\w-]+\.(jpg|png|webp)$/i.test(name)) return false;
@@ -1504,7 +1579,10 @@ function categoriesListHtml() {
     // единственных реально SSR-рендерящихся <img> во всём приложении был
     // упущенной возможностью, хоть соседний текст ссылки его технически и
     // дублирует для скринридера).
-    const img = cover ? `<img src="${escapeHtml(imageUrlFor(cover.image_file))}" alt="${escapeHtml(c.name)}" loading="lazy">` : "";
+    // Миниатюра, не оригинал (см. правку «Миниатюры картинок») — в этом
+    // списке картинка показывается в 2.2rem (см. .category-server-list img
+    // в styles.css), а грузилась в исходных 1880px.
+    const img = cover ? `<img src="${escapeHtml(thumbUrlFor(cover.image_file, 400))}" alt="${escapeHtml(c.name)}" loading="lazy">` : "";
     return `<li><a href="/category/${encodeURIComponent(c.slug)}">${img}${escapeHtml(c.name)} (${c.count})</a></li>`;
   }).join("\n    ");
   return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
@@ -1548,7 +1626,10 @@ function categoryPuzzlesListHtml(category) {
     const title = g.firstRow.uploader_user_id
       ? escapeHtml(g.firstRow.title)
       : `${escapeHtml(category.name)} #${++n}`;
-    const img = `<img src="${escapeHtml(imageUrlFor(g.firstRow.image_file))}" alt="${title}" loading="lazy">`;
+    // Миниатюра, не оригинал — та же причина, что в categoriesListHtml
+    // выше: краулер (и человек до отработки JS) тянул сюда 21 картинку по
+    // 100-350 КБ, то есть почти 4 МБ на страницу категории.
+    const img = `<img src="${escapeHtml(thumbUrlFor(g.firstRow.image_file, 400))}" alt="${title}" loading="lazy">`;
     return `<li><a href="/puzzle/${encodeURIComponent(g.lightestId)}">${img}${title}</a></li>`;
   }).join("\n    ");
   return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
@@ -1985,6 +2066,12 @@ const server = http.createServer(async (req, res) => {
       const groupId = crypto.randomUUID();
       const file = groupId + PHOTO_MIME[mime];
       fs.writeFileSync(path.join(PUZZLE_PHOTO_DIR, file), buf);
+      // Миниатюры — сразу после оригинала (см. правку «Миниатюры картинок»):
+      // иначе их заведёт первый же посетитель, которому покажут эту карточку,
+      // и пережатие попадёт в его время ответа. Не падаем, если не вышло —
+      // ensureAll сам проглатывает ошибку, а отдача картинки умеет обойтись
+      // оригиналом (см. serveStatic).
+      thumbs.ensureAll(PUZZLE_PHOTO_DIR, PUZZLE_THUMB_DIR, groupId);
       const ts = now();
       const variants = PIECE_PRESETS.map(total => {
         const { rows, cols } = gridForPieceTarget(total, width, height);
@@ -2028,6 +2115,7 @@ const server = http.createServer(async (req, res) => {
       }
       for (const gp of group) stmt.deletePuzzle.run(gp.id);
       try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
+      thumbs.remove(PUZZLE_THUMB_DIR, puzzle.image_file.replace(/\.[^.]+$/, ""));
       adminLog.info("Admin удалил картинку из библиотеки", { puzzleId: puzzle.id, title: puzzle.title });
       return json(res, 200, { ok: true });
     }
@@ -2738,6 +2826,12 @@ async function api(req, res, url, user) {
     const groupId = crypto.randomUUID();
     const file = groupId + PHOTO_MIME[mime];
     fs.writeFileSync(path.join(PUZZLE_PHOTO_DIR, file), buf);
+    // Миниатюры — сразу после оригинала (см. правку «Миниатюры картинок»):
+    // иначе их заведёт первый же посетитель, которому покажут эту карточку,
+    // и пережатие попадёт в его время ответа. Не падаем, если не вышло —
+    // ensureAll сам проглатывает ошибку, а отдача картинки умеет обойтись
+    // оригиналом (см. serveStatic).
+    thumbs.ensureAll(PUZZLE_PHOTO_DIR, PUZZLE_THUMB_DIR, groupId);
     const ts = now();
     const variantIds = PIECE_PRESETS.map(total => {
       const { rows, cols } = gridForPieceTarget(total, width, height);
@@ -2794,6 +2888,7 @@ async function api(req, res, url, user) {
     }
     for (const p of group) stmt.deletePuzzle.run(p.id);
     try { fs.unlinkSync(path.join(PUZZLE_PHOTO_DIR, puzzle.image_file)); } catch {}
+    thumbs.remove(PUZZLE_THUMB_DIR, puzzle.image_file.replace(/\.[^.]+$/, ""));
     adminLog.info("Своё фото удалено", { userId: user.id, puzzleId: puzzle.id, title: puzzle.title, variants: group.length });
     return json(res, 200, { ok: true });
   }
@@ -2990,6 +3085,10 @@ async function api(req, res, url, user) {
       puzzleId: r.puzzle_id,
       title: r.title,
       imageUrl: imageUrlFor(r.image_file),
+      // Как в puzzlePayload (см. правку «Миниатюры картинок») — карточка
+      // «Продолжить сборку» такая же .puzzle-card, с тем же слотом 4/3.
+      thumbUrl: thumbUrlFor(r.image_file, 400),
+      previewUrl: thumbUrlFor(r.image_file, 800),
       categoryId: r.category_id || null,
       uploaderUserId: r.uploader_user_id || null,
       piecesPlaced: r.pieces_placed,

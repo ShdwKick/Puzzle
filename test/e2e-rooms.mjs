@@ -10,6 +10,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync, spawn } from "node:child_process";
 import crypto from "node:crypto";
+import zlib from "node:zlib"; // только для gradientPng ниже — фикстура под миниатюры
 
 const PUZZLE_DIR = path.resolve(fileURLToPath(import.meta.url), "../..");
 const AUTH_DIR = process.env.AUTH_DIR || path.join(PUZZLE_DIR, "..", "Auth");
@@ -360,6 +361,57 @@ const callRaw = (token, p, body, contentType) => fetch(PUZZLE + "/api" + p, {
 });
 const PNG_MAGIC = Buffer.from("\x89PNG\r\n\x1a\n", "latin1");
 const fakePng = Buffer.concat([PNG_MAGIC, Buffer.alloc(64)]);
+
+/** Настоящий, декодируемый PNG — нужен ровно одному блоку проверок
+ *  (миниатюры обложек, см. lib/thumbs.js): fakePng выше это PNG только по
+ *  первым восьми байтам, его sniffImage пропускает, а vips/sips разобрать
+ *  не могут — то есть на нём проверяется только ФОЛБЭК, когда миниатюру
+ *  сделать не удалось. Чтобы проверить и сам пережим, нужна картинка,
+ *  которую инструмент реально откроет.
+ *
+ *  Собираем руками, а не кладём фикстуру в репозиторий: двоичный файл в
+ *  тестах пришлось бы объяснять и хранить, а тут двадцать строк и никакой
+ *  зависимости. Плавный градиент, а не шум: шум JPEG сжимает хуже, чем
+ *  PNG, и уменьшенная копия случайно выходила БОЛЬШЕ оригинала — проверка
+ *  «миниатюра легче» на таком фикстуре врала бы про работающий код.
+ *  Градиент ведёт себя как фотография: 1000×700 PNG ≈ 420 КБ, миниатюра
+ *  400px ≈ 9 КБ. */
+const CRC32 = (() => {
+  const table = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c;
+  }
+  return buf => {
+    let c = -1;
+    for (const b of buf) c = table[(c ^ b) & 0xff] ^ (c >>> 8);
+    return (c ^ -1) >>> 0;
+  };
+})();
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const typed = Buffer.concat([Buffer.from(type, "latin1"), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(CRC32(typed));
+  return Buffer.concat([len, typed, crc]);
+}
+function gradientPng(w, h) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 2; // 8 бит на канал, truecolor RGB, без альфы
+  const raw = Buffer.alloc(h * (1 + w * 3)); // по байту фильтра на строку
+  for (let y = 0; y < h; y++) {
+    const off = y * (1 + w * 3);
+    raw[off] = 0; // filter type 0 (None)
+    for (let x = 0; x < w; x++) {
+      const i = off + 1 + x * 3;
+      raw[i] = (x * 255 / w) | 0;
+      raw[i + 1] = (y * 255 / h) | 0;
+      raw[i + 2] = ((x + y) * 255 / (w + h)) | 0;
+    }
+  }
+  return Buffer.concat([PNG_MAGIC, pngChunk("IHDR", ihdr), pngChunk("IDAT", zlib.deflateSync(raw)), pngChunk("IEND", Buffer.alloc(0))]);
+}
 
 r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Вторая комната того же владельца" } });
 ok("вторая комната создана", r.status === 200, JSON.stringify(r.body));
@@ -1232,10 +1284,93 @@ ok("все 11 вариантов несут одну и ту же категор
 // Обложка категории (см. план «Обложка категории») — серверная заглушка
 // /categories (categoriesListHtml, до отработки JS) несёт <img> с адресом
 // первого пазла категории; тот же адрес отдаёт /api/puzzles.
+//
+// Сверяем именно thumbUrl, а не imageUrl (см. правку «Миниатюры картинок»):
+// в этом списке картинка показывается в 2.2rem, и отдавать туда оригинал в
+// 1880px было ровно тем, из-за чего страница категории тянула почти 4 МБ.
+// Проверка на thumbUrl, а не на формат адреса строкой, — чтобы тест ловил
+// рассинхрон между тем, что отдаёт API, и тем, что попало в HTML, а не
+// переписывался при каждой смене схемы адресов миниатюр.
 ir = await fetch(PUZZLE + "/categories");
 const categoriesPageHtml = await ir.text();
-ok("серверная заглушка /categories несёт обложку — src первого пазла категории",
-  categoriesPageHtml.includes(`<img src="${categorizedUpload.variants[0].imageUrl}"`), "");
+ok("серверная заглушка /categories несёт обложку — миниатюру первого пазла категории",
+  categoriesPageHtml.includes(`<img src="${categorizedUpload.variants[0].thumbUrl}"`),
+  categorizedUpload.variants[0].thumbUrl || "");
+ok("адрес обложки в заглушке — именно миниатюра, не оригинал",
+  !categoriesPageHtml.includes(`<img src="${categorizedUpload.variants[0].imageUrl}"`), "");
+
+/* ── Миниатюры обложек (см. lib/thumbs.js, правку «Миниатюры картинок») ──
+   Главное, что тут проверяется, — что по адресу миниатюры ВСЕГДА приходит
+   рабочая картинка. Пережать её может быть нечем (в образе нет vips) или не
+   из чего (битый файл), и в обоих случаях страница должна остаться целой, а
+   не показать сломанный <img>. Какой из путей отработал, видно по
+   Cache-Control: у настоящей миниатюры immutable (её содержимое под этим
+   адресом не поменяется никогда), у фолбэка-оригинала — короткий кэш, чтобы
+   браузер подхватил миниатюру, как только она появится. */
+const realPng = gradientPng(1000, 700);
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "Для миниатюры", imageBase64: realPng.toString("base64"), width: 1000, height: 700 },
+});
+const thumbUpload = await ir.json();
+const thumbVariant = thumbUpload.variants[0];
+ok("загрузка настоящего PNG через Admin — 200", ir.status === 200, JSON.stringify(thumbUpload).slice(0, 160));
+ok("пазл несёт три адреса одной картинки: оригинал, 400px и 800px",
+  thumbVariant.imageUrl.startsWith("/uploads/")
+  && thumbVariant.thumbUrl === `/uploads/thumb/400/${thumbVariant.imageUrl.replace("/uploads/", "").replace(/\.[^.]+$/, "")}`
+  && thumbVariant.previewUrl.startsWith("/uploads/thumb/800/"),
+  JSON.stringify({ imageUrl: thumbVariant.imageUrl, thumbUrl: thumbVariant.thumbUrl, previewUrl: thumbVariant.previewUrl }));
+
+let tr = await fetch(PUZZLE + thumbVariant.thumbUrl);
+const thumbBytes = Buffer.from(await tr.arrayBuffer());
+const thumbCache = tr.headers.get("cache-control") || "";
+const thumbMade = thumbCache.includes("immutable");
+ok("адрес миниатюры отдаёт картинку — 200 и image/*",
+  tr.status === 200 && (tr.headers.get("content-type") || "").startsWith("image/"),
+  `${tr.status} ${tr.headers.get("content-type")}`);
+// Пережать было чем (на машине есть vips/magick/sips) — тогда проверяем и
+// результат: именно за этим вся правка. Нечем — проверять нечего, кроме
+// фолбэка ниже, и тест не должен от этого краснеть на чужой машине.
+if (thumbMade) {
+  ok("миниатюра 400px заметно легче оригинала (в 4+ раза)",
+    thumbBytes.length * 4 < realPng.length,
+    `${realPng.length} → ${thumbBytes.length} байт`);
+  ok("миниатюра — это другие байты, а не тот же файл под другим адресом",
+    !thumbBytes.equals(realPng), "");
+  tr = await fetch(PUZZLE + thumbVariant.previewUrl);
+  const previewBytes = Buffer.from(await tr.arrayBuffer());
+  ok("миниатюра 800px тяжелее 400px, но всё ещё легче оригинала",
+    previewBytes.length > thumbBytes.length && previewBytes.length < realPng.length,
+    `400px ${thumbBytes.length} < 800px ${previewBytes.length} < оригинал ${realPng.length}`);
+} else {
+  ok("vips/magick/sips на этой машине нет — проверка самого пережима пропущена", true, thumbCache);
+}
+
+// Фолбэк: fakePng — PNG только по сигнатуре, пережать его нельзя. Адрес
+// миниатюры при этом обязан отдать ОРИГИНАЛ, а не 404 и не HTML.
+tr = await fetch(PUZZLE + categorizedUpload.variants[0].thumbUrl);
+const fallbackBytes = Buffer.from(await tr.arrayBuffer());
+ok("непережимаемая картинка: по адресу миниатюры приходит оригинал, а не ошибка",
+  tr.status === 200 && fallbackBytes.equals(fakePng),
+  `${tr.status}, ${fallbackBytes.length} байт против ${fakePng.length} у оригинала`);
+ok("и кэш у такого ответа короткий, не immutable — чтобы миниатюру потом подхватили",
+  !(tr.headers.get("cache-control") || "").includes("immutable"),
+  tr.headers.get("cache-control") || "");
+
+// Размеры — белый список (см. SIZES в lib/thumbs.js): произвольное число в
+// адресе не должно заставлять сервис пережимать картинку под что угодно.
+tr = await fetch(PUZZLE + thumbVariant.thumbUrl.replace("/400/", "/137/"));
+ok("размер не из белого списка миниатюрой не отдаётся",
+  !(tr.headers.get("content-type") || "").startsWith("image/"),
+  `${tr.status} ${tr.headers.get("content-type")}`);
+
+// Встроенные .svg (Холмы/Лес/Горы) — вектор на единицы килобайт, растровая
+// миниатюра была бы и тяжелее, и хуже; адреса у них совпадают с оригиналом.
+ir = await fetch(PUZZLE + "/api/puzzles");
+const libForThumbs = await ir.json();
+const svgPuzzle = libForThumbs.find(p => p.imageUrl.endsWith(".svg"));
+ok("у встроенных .svg миниатюры не заводятся — все три адреса совпадают",
+  svgPuzzle && svgPuzzle.thumbUrl === svgPuzzle.imageUrl && svgPuzzle.previewUrl === svgPuzzle.imageUrl,
+  JSON.stringify(svgPuzzle && { imageUrl: svgPuzzle.imageUrl, thumbUrl: svgPuzzle.thumbUrl }));
 
 // Своя шапка (h1 + интро) у каждого типа страниц — это МНОГОСТРОЧНАЯ подстановка
 // в serveApp, и ломается она иначе, чем однострочные title/description: те

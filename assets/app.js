@@ -11,6 +11,53 @@ let puzzlesCache = new Map(); // ключ — roomId ("" для соло), см.
 let currentRouteAbort = null;
 
 const $ = (root, sel) => root.querySelector(sel);
+
+/* Миниатюры обложек (см. правку «Миниатюры картинок», lib/thumbs.js и
+   thumbUrlFor в server.js). Сервер отдаёт в каждом пазле три адреса одной
+   и той же картинки: imageUrl — оригинал, thumbUrl — 400px, previewUrl —
+   800px. Правило простое:
+
+     cardSrc    — всё, что показывается карточкой в сетке (слот 318 CSS-
+                  пикселей, .puzzle-card-thumb), плюс обложки категорий;
+     previewSrc — превью покрупнее: модалка выбора сложности, превью пазла,
+                  картинка на странице /puzzle/:id;
+     imageUrl   — только стол: из оригинала нарезаются детали
+                  (createPieceEl), миниатюра там дала бы мыло. Превью
+                  рядом со столом (bindPreviewThumb) тоже берёт оригинал —
+                  он к тому моменту УЖЕ в кэше браузера под детали, так
+                  что миниатюра была бы лишней загрузкой, а не экономией.
+
+   `|| p.imageUrl` — не перестраховка на пустом месте: карточки собираются
+   и из объектов, пришедших не из puzzlePayload (локальный прогресс гостя
+   в localStorage, см. localProgress), и там новых полей нет. Без фолбэка
+   у такой карточки картинка просто не нарисовалась бы. */
+const cardSrc = p => p.thumbUrl || p.imageUrl;
+const previewSrc = p => p.previewUrl || p.imageUrl;
+/** srcset для карточки: на retina-экране (DPR 2) 400px в слот 318px —
+ *  заметно мыльно, 800px там как раз. Пустая строка, если сервер новых
+ *  полей не прислал — присваивать img.srcset = "" безопасно, браузер
+ *  просто остаётся при src.
+ *
+ *  Равенство адресов — это .svg (три стартовые картинки): им миниатюры не
+ *  делаются вовсе (см. thumbUrlFor в server.js), и srcset из двух
+ *  одинаковых адресов с разными ширинами был бы заявкой, что это разные
+ *  картинки разного размера, — неправда, пусть и безобидная. */
+const cardSrcset = p => (p.thumbUrl && p.previewUrl && p.thumbUrl !== p.previewUrl)
+  ? `${p.thumbUrl} 400w, ${p.previewUrl} 800w`
+  : "";
+/** sizes для тех же карточек: по нему браузер выбирает между 400w и 800w с
+ *  учётом плотности экрана. Сетка — repeat(auto-fill, minmax(15.5rem,1fr))
+ *  (см. .puzzle-grid), замеренная ширина слота — 286–318px, так что 320px
+ *  это честная верхняя оценка, а не запас «на всякий случай»: завысить тут
+ *  значит заставить браузер тянуть 800w там, где хватило бы 400w.
+ *
+ *  Что при этом получается на практике: обычный экран берёт 400w, retina и
+ *  телефон — 800w. На замеренной обложке библиотеки (1880×1253, 313 КБ) это
+ *  7 КБ против 22 КБ в WebP — то есть retina платит за резкость втрое, но
+ *  всё равно в 14 раз меньше, чем до правки. Третий размер между 400 и 800
+ *  усложнил бы лестницу ради разницы, которой на этом фоне уже не видно. */
+const CARD_SIZES = "(max-width: 30rem) 92vw, 320px";
+
 const CELL = 100;          // размер ячейки сетки в «мировых» пикселях (масштаб — зумом), должно совпадать с CELL в server.js
 const PAD_FACTOR = 0.4;    // тот же коэффициент, что зашит в buildPiecePath — держим один здесь и там
 const SNAP_TOLERANCE = window.PuzzleClusters.tolerance(CELL); // допуск стыковки — общий модуль с сервером
@@ -740,7 +787,7 @@ function openDifficultyModal(title, variants, onPlay) {
   document.getElementById("difficultyModalTitle").textContent = `${t("Выберите сложность")} — «${title}»`;
   document.getElementById("difficultyCaption").textContent = title;
   const img = document.getElementById("difficultyImage");
-  img.src = variants[0].imageUrl; img.alt = title;
+  img.src = previewSrc(variants[0]); img.alt = title;
   pendingDifficultyChoice = { variants, onPlay, idx: 0 };
   renderDifficultyGrid(document.getElementById("difficultyGrid"), variants, pendingDifficultyChoice);
   document.getElementById("difficultyAsymmetric").checked = false; // не запоминаем между открытиями — осознанный выбор каждый раз
@@ -804,7 +851,7 @@ async function openPuzzlePreviewModal(p, { variants, onPlay }) {
   document.getElementById("puzzlePreviewTitle").textContent = displayTitle;
   document.getElementById("puzzlePreviewCaptionTitle").textContent = displayTitle;
   const img = document.getElementById("puzzlePreviewImage");
-  img.src = p.imageUrl;
+  img.src = previewSrc(p);
   img.alt = displayTitle;
 
   // Автор — то же условие, что у buildCard (см. .puzzle-card-author там):
@@ -880,7 +927,7 @@ function openHistoryModal(s, roomId) {
   document.getElementById("historyModalTitle").textContent = displayTitle;
   document.getElementById("historyModalCaptionTitle").textContent = displayTitle;
   const img = document.getElementById("historyModalImage");
-  img.src = s.puzzle.imageUrl;
+  img.src = previewSrc(s.puzzle);
   img.alt = displayTitle;
   const duration = formatDuration(Math.max(0, s.completedAt - s.startedAt));
   document.getElementById("historyModalMeta").textContent = getLang() === "en"
@@ -1183,7 +1230,7 @@ async function renderPuzzlePage(root, id, signal) {
     </section>`;
 
   const img = $(root, "#puzzlePageImage");
-  img.src = p.imageUrl; img.alt = displayTitle;
+  img.src = previewSrc(p); img.alt = displayTitle;
   // Сюда можно попасть и прямой ссылкой, минуя сетку с её размытием (см.
   // buildCard), поэтому спрашиваем и здесь. Не блокируем рендер страницы:
   // название, категория, рейтинг видны сразу, размыта только картинка —
@@ -1896,7 +1943,8 @@ async function renderAddPuzzleLibrary(container, roomId, addedImageUrls, signal,
       const card = document.createElement("div");
       card.className = "add-puzzle-card";
       const img = document.createElement("img");
-      img.src = g.imageUrl; img.alt = puzzleDisplayTitle(g); img.loading = "lazy";
+      img.src = cardSrc(g); img.srcset = cardSrcset(g); img.sizes = CARD_SIZES;
+      img.alt = puzzleDisplayTitle(g); img.loading = "lazy";
       const title = document.createElement("div");
       title.className = "title"; title.textContent = puzzleDisplayTitle(g);
       const btn = document.createElement("button");
@@ -1958,6 +2006,10 @@ async function inProgressPuzzles(allPuzzles) {
     if (progress && progress.piecesPlaced > 0 && !progress.completedAt) {
       out.push({
         puzzleId: p.id, title: p.title, imageUrl: p.imageUrl,
+        // Протаскиваем и миниатюры (см. cardSrc) — иначе у гостя, чей
+        // прогресс лежит в localStorage, карточка «Продолжить сборку»
+        // осталась бы единственной на странице с обложкой в полный размер.
+        thumbUrl: p.thumbUrl, previewUrl: p.previewUrl,
         uploaderUserId: p.uploaderUserId, categoryId: p.categoryId,
         piecesPlaced: progress.piecesPlaced, piecesTotal: progress.piecesTotal,
         updatedAt: progress.updatedAt || 0,
@@ -1998,7 +2050,7 @@ function buildInProgressCard(ip, signal, onDeleted) {
       <p class="puzzle-card-meta"></p>
     </div>`;
   const img = $(card, "img");
-  img.src = ip.imageUrl;
+  img.src = cardSrc(ip); img.srcset = cardSrcset(ip); img.sizes = CARD_SIZES;
   img.alt = puzzleDisplayTitle(ip);
   $(card, ".puzzle-card-title").textContent = puzzleDisplayTitle(ip);
   const badge = $(card, ".puzzle-card-badge");
@@ -2049,7 +2101,7 @@ function buildHistoryCard(s, roomId, signal) {
       <p class="puzzle-card-meta"></p>
     </div>`;
   const img = $(card, "img");
-  img.src = s.puzzle.imageUrl;
+  img.src = cardSrc(s.puzzle); img.srcset = cardSrcset(s.puzzle); img.sizes = CARD_SIZES;
   img.alt = puzzleDisplayTitle(s.puzzle);
   $(card, ".puzzle-card-title").textContent = puzzleDisplayTitle(s.puzzle);
   const duration = formatDuration(Math.max(0, s.completedAt - s.startedAt));
@@ -2421,7 +2473,12 @@ function buildCard(p, opts = {}) {
   const tpl = document.getElementById("tplPuzzleCard");
   const node = tpl.content.firstElementChild.cloneNode(true);
   const img = $(node, "img");
-  img.src = p.imageUrl;
+  // Миниатюра, не оригинал (см. cardSrc выше). Это основная карточка сетки
+  // библиотеки — та самая, из-за которой главная тянула 3.5 МБ: обложки
+  // шли в исходных 1880×1253 в слот 318×238.
+  img.src = cardSrc(p);
+  img.srcset = cardSrcset(p);
+  img.sizes = CARD_SIZES;
   img.alt = puzzleDisplayTitle(p);
   img.decoding = "async";
   // Ленивая загрузка — везде, КРОМЕ первой карточки сетки (opts.eager, см.
@@ -3470,7 +3527,9 @@ async function renderCategories(root, signal) {
     const thumb = document.createElement("div");
     thumb.className = "category-block-thumb";
     const img = document.createElement("img");
-    img.src = cover.imageUrl;
+    img.src = cardSrc(cover);
+    img.srcset = cardSrcset(cover);
+    img.sizes = CARD_SIZES;
     // Название категории, не пусто — та же правка, что и у серверного
     // categoriesListHtml (см. server.js): картиночный поиск может завести
     // сюда, alt тогда должен что-то говорить сам по себе.
