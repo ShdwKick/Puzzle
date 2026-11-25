@@ -1482,6 +1482,59 @@ const MIME = {
 // «файла нет» от «вот вам главная вместо него» по коду ответа было нельзя.
 const ROOT_FILES = ["robots.txt", "llms.txt", "manifest.json"];
 
+/* ─────────────────── версия статики в адресе (?v=…) ───────────────────
+ *
+ *  Имена файлов в assets/ без хэша, а отдавались они с max-age=3600 — то
+ *  есть до часа после каждого деплоя посетители работали на СТАРОМ app.js с
+ *  новым сервером. Обычно это просто «новое не включилось», но один раз
+ *  вышло хуже: правка «кэш и вес списка библиотеки» убрала thumbUrl из
+ *  ответа /api/puzzles (новый клиент считает адрес сам), а старый клиент из
+ *  кэша на отсутствие поля подставлял `p.imageUrl` — то есть час грузил
+ *  обложки по 300 КБ вместо 15 КБ, ровно то, что чинилось. Поймано
+ *  измерением живого сайта: srcset на странице был из двух ступеней, хотя
+ *  свежий app.js отдавал три.
+ *
+ *  Лечение: в index.html адреса статики проштампованы ?v=<версия>, и при
+ *  совпадении версии файл отдаётся с immutable на год. Адрес меняется при
+ *  каждой сборке, поэтому новый HTML всегда тянет новый JS, а постоянные
+ *  посетители перестают каждый час заново качать 139 КБ app.js и 44 КБ CSS.
+ *
+ *  Версия считается по именам, размерам и mtime файлов в assets/ — на
+ *  каждый запрос страницы, а не один раз при старте. Это 18 statSync рядом
+ *  с чтением самого index.html, то есть бесплатно, зато в разработке правка
+ *  app.js сразу меняет версию. Со стартовым кэшированием было бы наоборот:
+ *  immutable на год + неизменный ?v= = своё же изменение не увидеть без
+ *  принудительной перезагрузки.
+ *
+ *  Подкаталоги (assets/puzzles/*.svg — картинки встроенных пазлов) в версию
+ *  не входят и штампа не получают: это содержимое библиотеки, а не код, оно
+ *  живёт своей жизнью и меняется отдельно от сборки.
+ *
+ *  По mtime, а не по содержимому: хэшировать 640 КБ app.js+styles.css на
+ *  каждый запрос страницы было бы расточительно. Плата за это — деплой,
+ *  который содержимое не менял, всё равно сбросит кэш (в новом образе у
+ *  файлов новые mtime). Это одна лишняя загрузка ~190 КБ на посетителя за
+ *  деплой, и ошибка в безопасную сторону: сбросить кэш лишний раз не
+ *  страшно, не сбросить — та самая дыра, из-за которой всё и затевалось. */
+function assetVersion() {
+  const h = crypto.createHash("sha1");
+  for (const name of fs.readdirSync(ASSETS_DIR).sort()) {
+    try {
+      const st = fs.statSync(path.join(ASSETS_DIR, name));
+      if (!st.isFile()) continue;
+      h.update(`${name}:${st.size}:${st.mtimeMs};`);
+    } catch { /* файл исчез между readdir и stat — просто не учитываем */ }
+  }
+  return h.digest("base64url").slice(0, 10);
+}
+
+/** Проштамповать ссылки на статику в готовом HTML. Только относительные,
+ *  в кавычках: абсолютный og:image (https://…/assets/og-image.png) трогать
+ *  нельзя — по нему applySeoOverride ищет и подменяет картинку пазла. */
+function stampAssets(html, version) {
+  return html.replace(/(src|href)="\/assets\/([^"?]+)"/g, `$1="/assets/$2?v=${version}"`);
+}
+
 // HEAD — та же логика поиска/заголовков, что и GET, просто без тела (см.
 // правку «HEAD-запросы к статике» — Яндекс.Вебмастер жаловался «файл
 // favicon не найден», хотя GET /favicon.ico отдавал его прекрасно: сам
@@ -1496,7 +1549,7 @@ function sendFile(res, file, headers, isHead) {
 
 /** Отдаём только index.html, assets/ и uploads/ (свои фото). store.db и
  *  server.js снаружи недоступны. */
-function serveStatic(res, pathname, isHead) {
+function serveStatic(res, pathname, isHead, assetV) {
   // Некоторые краулеры/тулы запрашивают /favicon.ico напрямую с корня,
   // игнорируя <link rel="icon"> в index.html — отдаём тот же файл, что и
   // из assets/, без отдельного правила ниже.
@@ -1580,15 +1633,25 @@ function serveStatic(res, pathname, isHead) {
   if (file !== APP_HTML && !file.startsWith(ASSETS_DIR + path.sep)) return false;
   if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
   const headers = { "Content-Type": MIME[path.extname(file).toLowerCase()] || "application/octet-stream" };
-  // /assets/* (см. план «SEO») — раньше вообще без Cache-Control, каждый
-  // визит заново тянул app.js/styles.css и т.п. Имена файлов без хэша
-  // (см. комментарий у ROOT_FILES) — значит долгий immutable-кэш, как у
-  // /uploads/ выше, был бы небезопасен: деплой поменял бы содержимое под
-  // тем же URL, и браузеры/Яндекс с длинным кэшем не увидели бы правку
-  // неделями. Час — компромисс: заметно меньше повторных загрузок, но
-  // изменения долетают в разумный срок. index.html — без кэша вовсе,
-  // это точка входа, свежесть важнее.
-  if (file.startsWith(ASSETS_DIR + path.sep)) headers["Cache-Control"] = "public, max-age=3600";
+  // /assets/* — срок кэша зависит от того, пришёл ли адрес со штампом
+  // версии (см. assetVersion/stampAssets выше).
+  //
+  //  • ?v= совпадает с текущей версией — immutable на год. Безопасно
+  //    именно потому, что ключ кэша включает query: сборка поменяет версию,
+  //    адрес станет другим, а старый просто никому больше не понадобится.
+  //  • без ?v= или с устаревшим — час, как было раньше. Сюда попадают
+  //    /favicon.ico с корня, старый HTML из чьего-то кэша и прямые заходы.
+  //    Ставить тут immutable было бы ошибкой: содержимое под этим адресом
+  //    деплой меняет, и браузер не увидел бы правку год.
+  //
+  // До штампа час стоял на всём, и это был не компромисс, а дыра: до часа
+  // после каждого деплоя посетитель работал на старом app.js с новым
+  // сервером (см. комментарий у assetVersion).
+  if (file.startsWith(ASSETS_DIR + path.sep)) {
+    headers["Cache-Control"] = assetV && assetV === assetVersion()
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=3600";
+  }
   sendFile(res, file, headers, isHead);
   return true;
 }
@@ -2273,6 +2336,10 @@ function serveApp(res, pathname, isHead) {
         dropFaq: true,
       });
     }
+    // Штамп версии — последним, уже по готовому HTML: applySeoOverride
+    // выше ищет в нём точные строки (в том числе абсолютный og:image с
+    // /assets/ внутри), и подмешивать ?v= до него значило бы ломать поиск.
+    html = stampAssets(html, assetVersion());
     res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
     res.end(isHead ? undefined : html);
   } catch {
@@ -3148,7 +3215,7 @@ const server = http.createServer(async (req, res) => {
         res.writeHead(301, { Location: redirectTo + (url.search || "") });
         return res.end();
       }
-      if (p !== "/" && serveStatic(res, p, isHead)) return;
+      if (p !== "/" && serveStatic(res, p, isHead, url.searchParams.get("v"))) return;
       // Остальное — SPA с маршрутизацией по прямым путям (History API, см.
       // план «Прямые ссылки вместо #/ + страница категорий»): любой
       // нераспознанный GET-путь получает index.html, точечно

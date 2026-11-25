@@ -1786,6 +1786,49 @@ ok("/manifest.json — 200 и именно JSON, а не HTML главной с�
 ok("/manifest.json разбирается как JSON и несёт имя сервиса",
   (await manifestRes.json()).short_name === "Что собираем?", "");
 
+/* ── Версия статики в адресе (см. assetVersion/stampAssets в server.js) ──
+
+   Имена файлов в assets/ без хэша, а отдавались они с max-age=3600 — то
+   есть до часа после каждого деплоя посетитель работал на СТАРОМ app.js с
+   новым сервером. Один раз это уже выстрелило: правка, убравшая thumbUrl
+   из /api/puzzles, в паре со старым клиентом из кэша давала обложки по
+   300 КБ вместо 15 КБ. */
+const stampedHtml = await (await fetch(PUZZLE + "/")).text();
+const stampedRefs = [...stampedHtml.matchAll(/(?:src|href)="\/assets\/([^"]+)"/g)].map(m => m[1]);
+ok("все ссылки на статику в HTML проштампованы ?v=",
+  stampedRefs.length > 0 && stampedRefs.every(r => /\?v=[A-Za-z0-9_-]+$/.test(r)),
+  stampedRefs.filter(r => !r.includes("?v=")).join(" ") || `${stampedRefs.length} ссылок, все со штампом`);
+const stampVersion = (/app\.js\?v=([A-Za-z0-9_-]+)/.exec(stampedHtml) || [])[1];
+ok("версия выглядит как версия", !!stampVersion && stampVersion.length >= 8, String(stampVersion));
+// og:image — абсолютный адрес, и по нему applySeoOverride ищет и подменяет
+// картинку пазла. Проштампуй его — подмена перестанет находиться молча.
+ok("абсолютный og:image штампом НЕ тронут — иначе сломается подмена картинки пазла",
+  stampedHtml.includes(`content="${PUBLIC_BASE}/assets/og-image.png"`), "");
+
+const cacheOf = async u => (await fetch(PUZZLE + u)).headers.get("cache-control");
+ok("со верной версией статика отдаётся immutable на год",
+  (await cacheOf(`/assets/app.js?v=${stampVersion}`) || "").includes("immutable"),
+  await cacheOf(`/assets/app.js?v=${stampVersion}`));
+// Без штампа и с устаревшим — только час. Поставить тут immutable было бы
+// ошибкой: содержимое под этим адресом деплой меняет.
+ok("без версии — час, как было раньше",
+  (await cacheOf("/assets/app.js")) === "public, max-age=3600", await cacheOf("/assets/app.js"));
+ok("с устаревшей версией — тоже час, а не immutable",
+  (await cacheOf("/assets/app.js?v=ustarevshaya")) === "public, max-age=3600",
+  await cacheOf("/assets/app.js?v=ustarevshaya"));
+// В разработке правка файла должна менять версию без перезапуска сервера:
+// иначе immutable на год + неизменный ?v= = своё же изменение не увидеть.
+const touched = path.join(PUZZLE_DIR, "assets", "theme.css");
+const before = fs.readFileSync(touched);
+fs.writeFileSync(touched, Buffer.concat([before, Buffer.from("\n/* touch */\n")]));
+try {
+  const after = (/app\.js\?v=([A-Za-z0-9_-]+)/.exec(await (await fetch(PUZZLE + "/")).text()) || [])[1];
+  ok("правка файла в assets/ меняет версию без перезапуска сервера",
+    after && after !== stampVersion, `${stampVersion} → ${after}`);
+} finally {
+  fs.writeFileSync(touched, before);
+}
+
 // Корневые файлы и sitemap честный 404 задеть не должен.
 for (const pathname of ["/robots.txt", "/llms.txt", "/sitemap.xml", "/favicon.ico", "/assets/app.js"]) {
   ok(`${pathname} — по-прежнему 200`, await statusOf(pathname) === 200, pathname);
