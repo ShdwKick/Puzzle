@@ -62,7 +62,13 @@ const previewSrc = p => p.previewUrl || thumbFromImageUrl(p.imageUrl, 800);
  *  картинки разного размера, — неправда, пусть и безобидная. */
 const cardSrcset = p => {
   const small = cardSrc(p), big = previewSrc(p);
-  return (small && big && small !== big) ? `${small} 400w, ${big} 800w` : "";
+  if (!small || !big || small === big) return "";
+  // Три ступени, а не две (см. SIZES в lib/thumbs.js): по sizes ниже
+  // обычный экран берёт 400, retina — 640, DPR 3 и телефон (там карточка
+  // шириной во весь экран) — 800. До ступени 640 retina брала 800 и
+  // переплачивала процентов сорок.
+  const medium = p.mediumUrl || thumbFromImageUrl(p.imageUrl, 640);
+  return `${small} 400w, ${medium} 640w, ${big} 800w`;
 };
 /** sizes для тех же карточек: по нему браузер выбирает между 400w и 800w с
  *  учётом плотности экрана. Сетка — repeat(auto-fill, minmax(15.5rem,1fr))

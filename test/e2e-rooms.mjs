@@ -1369,6 +1369,28 @@ if (thumbMade) {
   ok("миниатюра 800px тяжелее 400px, но всё ещё легче оригинала",
     previewBytes.length > thumbBytes.length && previewBytes.length < realPng.length,
     `400px ${thumbBytes.length} < 800px ${previewBytes.length} < оригинал ${realPng.length}`);
+  /* Промежуточная ступень (см. SIZES в lib/thumbs.js) — её берёт retina,
+     где 400 мылит, а 800 переплата. В payload отдельного поля под неё нет:
+     клиент строит адрес сам (cardSrcset в assets/app.js), тут делаем то же.
+
+     Вес НЕ сверяем с соседними ступенями, хотя соблазн есть. На этом
+     фикстуре-градиенте sips выдаёт 400px → 8.9 КБ, 640px → 50 КБ,
+     800px → 27 КБ: размеры в пикселях при этом правильные (640×448 и
+     800×560), просто JPEG-кодировщик на искусственном плавном переходе
+     ведёт себя немонотонно — какие-то масштабы ложатся в сетку 8×8 чисто,
+     какие-то дают дизеринг. Проверено отдельно, вне этого кода, прямым
+     вызовом sips. На настоящих фотографиях вес растёт как положено (на
+     живой обложке 400px → 15.5 КБ, 800px → 50 КБ), но закреплять в тесте
+     то, что зависит от кодировщика и от картинки, — значит получить
+     падение на чужой машине вместо поимки ошибки. */
+  tr = await fetch(PUZZLE + thumbVariant.thumbUrl.replace("/400/", "/640/"));
+  const mediumBytes = Buffer.from(await tr.arrayBuffer());
+  ok("миниатюра 640px отдаётся и легче оригинала",
+    tr.status === 200 && mediumBytes.length < realPng.length,
+    `640px ${mediumBytes.length} против оригинала ${realPng.length}`);
+  ok("и это настоящая миниатюра, а не отданный в обход оригинал",
+    (tr.headers.get("cache-control") || "").includes("immutable") && !mediumBytes.equals(realPng),
+    tr.headers.get("cache-control"));
 } else {
   ok("vips/magick/sips на этой машине нет — проверка самого пережима пропущена", true, thumbCache);
 }
@@ -1669,6 +1691,12 @@ ok("главная: FAQ на месте — и разметка, и видимы
   homeHtmlForFaq.includes('"@type": "FAQPage"') && homeHtmlForFaq.includes('<section class="faq">'), "");
 ok("страница пазла: ни FAQ-разметки, ни видимого блока",
   !hillsPageHtml.includes('"@type": "FAQPage"') && !hillsPageHtml.includes('<section class="faq">'), "");
+// И ни одного упоминания FAQPage вообще — включая комментарии, которые
+// объясняют уже выкушенный блок. Проверка по слову, а не по разметке:
+// на живом сайте grep по FAQPage на странице пазла находил комментарий из
+// <head>, хотя сама разметка уже не отдавалась.
+ok("страница пазла: слова FAQPage не осталось вовсе, даже в комментариях",
+  !hillsPageHtml.includes("FAQPage"), "");
 ok("страница пазла: остальная разметка на месте — WebSite и крошки не унесло вместе с FAQ",
   hillsPageHtml.includes('"@type": "WebSite"') && hillsPageHtml.includes('"BreadcrumbList"'), "");
 ok("страница категории: FAQ-разметки нет, но видимый блок остался",
