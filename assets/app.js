@@ -218,12 +218,6 @@ function t(ru) {
 function tn(n, ru, en) {
   return getLang() === "en" ? (n === 1 ? en[0] : en[1]) : plural(n, ru[0], ru[1], ru[2]);
 }
-// Первый вызов applyTheme() — тут, а не сразу после её объявления выше:
-// applyTheme читает t()/getLang()/LANG_KEY (см. выше), а те объявлены
-// именно тут, чуть ниже по файлу — const в TDZ, вызов до этой строки падал
-// с "Cannot access 'LANG_KEY' before initialization" при самой первой
-// загрузке страницы (регресс, найден при живой проверке страницы пазла).
-applyTheme(localStorage.getItem("puzzle.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 /** Английское название категории, если задано И выбран английский
  *  интерфейс — иначе всегда name (см. план «Английский язык в
  *  интерфейсе», nameEn — необязательное поле, ставит только Admin). */
@@ -576,8 +570,29 @@ const EN = {
   "Этот пазл не предназначен для детей. Вам есть 18 лет?": "This puzzle isn't meant for children. Are you 18 or older?",
   "Мне нет 18": "I'm under 18",
   "Мне есть 18": "I'm 18 or older",
+  "Страница не найдена | Что собираем?": "Page not found | What are we building?",
+  "Страница не найдена": "Page not found",
+  "Такой страницы на сайте нет — возможно, ссылка устарела или в адресе опечатка.": "There's no such page — the link may be outdated or mistyped.",
+  "Вернуться в библиотеку пазлов": "Back to the puzzle library",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
+// Первый вызов applyTheme() — тут, ПОСЛЕ словаря EN, а не сразу после её
+// объявления выше. applyTheme ставит подпись кнопки темы через t(), а t()
+// при английском интерфейсе читает EN — то есть const, объявленный ниже по
+// файлу. Любой вызов выше этой строки падает в TDZ.
+//
+// Вызов уже один раз переезжал: раньше он стоял до getLang()/LANG_KEY и
+// падал с "Cannot access 'LANG_KEY' before initialization" при первой же
+// загрузке. Тогда его сдвинули ровно настолько, чтобы перестало падать —
+// то есть за LANG_KEY, но всё ещё ПЕРЕД EN. На русском это незаметно:
+// t() при getLang()==="ru" до EN даже не дотягивается и возвращает
+// оригинал. А вот с puzzle_lang=en приложение не стартовало вовсе —
+// "Cannot access 'EN' before initialization" ронял весь скрипт на этой
+// строке, до роутера, и страница так и оставалась серверной заглушкой.
+// Найдено при проверке английского интерфейса после выравнивания h1.
+// Отсюда вниз двигать больше некуда и незачем: ниже только объявления,
+// которых applyTheme не касается.
+applyTheme(localStorage.getItem("puzzle.theme") || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"));
 function applyLangButton() {
   const btn = document.getElementById("langBtn");
   btn.textContent = getLang() === "en" ? "RU" : "EN";
@@ -1147,15 +1162,49 @@ async function renderPuzzlePage(root, id, signal) {
   if (signal.aborted) return;
 
   const { puzzle: p, variants } = data;
-  const displayTitle = puzzleDisplayTitle(p);
+  /* Заголовок ЭТОЙ страницы — настоящее название пазла, а не вычисляемое
+     «Категория #N» (см. puzzleDisplayTitle). Причина — расхождение
+     «в исходном HTML один h1, после гидратации другой»: сервер отдаёт
+     «Пазл «Холмы»» (см. serveApp в server.js), клиент раньше заменял его
+     на «Природа #1». Поиск сравнивает исходный HTML с отрендеренным, и
+     такое расхождение заголовка ему не нравится — а с тех пор, как на
+     странице появился настоящий текст (см. правку «Уникальный текст на
+     страницах пазлов и категорий»), h1 ещё и весит больше.
+     Выровнено в сторону настоящего названия: в СЕТКЕ карточек нумерация
+     осмысленна (одинаковые по смыслу картинки одной категории, подписи
+     должны быть короткими и однородными), а на собственной странице
+     пазла полезнее его имя. Категорию человек тут всё равно видит —
+     .puzzle-page-tag рядом с заголовком.
+     Формулировка — дословно серверная, вместе со словом «Пазл» и
+     кавычками: сравнивается именно текст узла, и «Холмы» против
+     «Пазл «Холмы»» было бы тем же расхождением, только тише.
+     titleEn — единственное место, где он вообще используется (GigaChat
+     его давно заводит, см. gigachat.js, а клиент не читал); английскому
+     интерфейсу расходиться с серверным HTML можно — краулер
+     переключённый язык не видит, см. комментарий у FAQ в index.html. */
+  const isEn = getLang() === "en";
+  /* Защита от непрезентабельных названий (см. isPresentableTitle). Решение
+     принимаем по p.title — ровно по тому полю, которое видит сервер
+     (titleEn он не читает вовсе), иначе в английском интерфейсе правило
+     отвергало бы нормальный английский titleEn как «латиницу». Не прошло —
+     показываем ту же подпись, что в сетке карточек, то есть «Категория #N»
+     (puzzleDisplayTitle); сервер в этом случае считает её сам тем же
+     правилом и той же нумерацией, см. puzzleDisplayName в server.js. */
+  const ownTitle = isPresentableTitle(p.title)
+    ? ((isEn && p.titleEn) ? p.titleEn : p.title)
+    : puzzleDisplayTitle(p);
+  const headingTitle = isEn ? `Puzzle "${ownTitle}"` : `Пазл «${ownTitle}»`;
   const pieces = p.gridRows * p.gridCols;
   // Дословно та же формула, что и SEO title/description для /puzzle/:id на
   // сервере (см. server.js, serveApp/applySeoOverride) — после клиентского
   // перехода (SPA, без полной перезагрузки) вкладка должна показать тот же
   // текст, что и при свежей загрузке этого же URL напрямую.
+  // ownTitle, а не p.title: в русском интерфейсе это одно и то же (значит,
+  // с серверным <title> по-прежнему совпадает дословно), а в английском
+  // вкладка перестаёт спорить с заголовком на самой странице.
   setPageMeta(
-    `Пазл «${p.title}» онлайн — собрать бесплатно | Что собираем?`,
-    `Собери пазл «${p.title}» онлайн бесплатно, без регистрации и скачивания — ${pieces} ${plural(pieces, "деталь", "детали", "деталей")}, прямо в браузере.`,
+    `Пазл «${ownTitle}» онлайн — собрать бесплатно | Что собираем?`,
+    `Собери пазл «${ownTitle}» онлайн бесплатно, без регистрации и скачивания — ${pieces} ${plural(pieces, "деталь", "детали", "деталей")}, прямо в браузере.`,
   );
 
   // Категория — только approved (categories — GET /api/categories, отдаёт
@@ -1230,7 +1279,7 @@ async function renderPuzzlePage(root, id, signal) {
     </section>`;
 
   const img = $(root, "#puzzlePageImage");
-  img.src = previewSrc(p); img.alt = displayTitle;
+  img.src = previewSrc(p); img.alt = ownTitle;
   // Сюда можно попасть и прямой ссылкой, минуя сетку с её размытием (см.
   // buildCard), поэтому спрашиваем и здесь. Не блокируем рендер страницы:
   // название, категория, рейтинг видны сразу, размыта только картинка —
@@ -1242,7 +1291,7 @@ async function renderPuzzlePage(root, id, signal) {
     onAgeConfirmed(() => img.classList.remove("is-blurred"), signal);
     ensureAgeConfirmed();
   }
-  $(root, "#puzzlePageTitle").textContent = displayTitle;
+  $(root, "#puzzlePageTitle").textContent = headingTitle;
 
   if (category) {
     const name = categoryDisplayName(category);
@@ -1426,9 +1475,13 @@ async function renderPuzzlePage(root, id, signal) {
     if (related.length) {
       const section = $(root, "#puzzlePageRelated");
       section.hidden = false;
+      // Дословно тот же заголовок, что отдаёт сервер в исходном HTML (см.
+      // puzzleRelatedHtml в server.js) — то же выравнивание, что у h1
+      // выше, и формулировка со словом «пазлы» заодно понятнее, чем
+      // прежнее «Ещё в категории».
       $(root, "#puzzlePageRelatedHeading").textContent = getLang() === "en"
-        ? `More in "${categoryDisplayName(category)}"`
-        : `Ещё в категории «${categoryDisplayName(category)}»`;
+        ? `More puzzles in "${categoryDisplayName(category)}"`
+        : `Другие пазлы в категории «${categoryDisplayName(category)}»`;
       const grid = $(root, "#puzzlePageRelatedGrid");
       for (const g of related) grid.appendChild(buildCard(g));
     }
@@ -1595,6 +1648,33 @@ function puzzleDisplayTitle(p) {
   if (p.uploaderUserId || !displayTitleCache) return p.title;
   const info = displayTitleCache.get(puzzleGroupKey(p));
   return info ? `${categoryDisplayName(info.cat)} #${info.n}` : p.title;
+}
+
+/** Годится ли название пазла, чтобы показать его человеку как заголовок.
+ *
+ *  В библиотеке названия двух сортов: короткие человеческие («Холмы»,
+ *  «Снежные вершины») и сырой alt-текст с фотостока, попавший в базу, пока
+ *  до него не дошла очередь переименования («Stunning aerial view of
+ *  Progreso Beach, Yucatan, Mexico at sunset, showing the s…»). В сетке
+ *  карточек разницы не видно — там подпись всегда «Категория #N», см.
+ *  puzzleDisplayTitle выше. А в заголовке страницы пазла видно, и очень.
+ *
+ *  ДУБЛЬ: ровно то же правило и те же числа живут в server.js
+ *  (isPresentableTitle). Расходиться им нельзя — на этом держится
+ *  совпадение h1 в исходном HTML и после гидратации, см. renderPuzzlePage.
+ *  Меняете здесь — меняйте и там. Общего модуля между сервером и клиентом в
+ *  проекте нет, а ради шести строк заводить его незачем (тот же случай, что
+ *  pluralRu/plural). */
+const TITLE_MAX_LEN = 60;
+function isPresentableTitle(title) {
+  if (!title) return false;
+  if (title.length > TITLE_MAX_LEN) return false;
+  const letters = [...title].filter(c => /\p{L}/u.test(c));
+  if (!letters.length) return false;
+  // Доля, а не «есть хоть одна латинская буква»: в нормальном названии
+  // латиница попадается («Кафе Cafe de Flore»), отсекать такое незачем.
+  const latin = letters.filter(c => /[A-Za-z]/.test(c)).length;
+  return latin / letters.length <= 0.5;
 }
 
 // По индексу, не по точному числу деталей: gridForPieceTarget округляет
@@ -6998,6 +7078,21 @@ document.addEventListener("click", e => {
   navigate(url.pathname + url.search);
 });
 
+/** Страница по несуществующему адресу (см. route ниже и честный 404 в
+ *  server.js — сервер на такой путь отвечает 404). Текст дословно тот же,
+ *  что сервер кладёт в исходный HTML (NOT_FOUND_HEAD): расхождение между
+ *  тем, что видит краулер, и тем, что видит человек, мы только что
+ *  вычистили на страницах пазлов, незачем заводить его здесь.
+ *  async — route() ждёт промис от любой ветки (см. run.catch). */
+async function renderNotFound(root) {
+  setPageMeta(t("Страница не найдена | Что собираем?"), "");
+  root.innerHTML = `
+    <div class="library-head">
+      <h1>${t("Страница не найдена")}</h1>
+      <p>${t("Такой страницы на сайте нет — возможно, ссылка устарела или в адресе опечатка.")} <a href="/">${t("Вернуться в библиотеку пазлов")}</a>.</p>
+    </div>`;
+}
+
 function route() {
   const pathname = location.pathname;
   const tableMatch = pathname.match(/^\/table\/([^/]+)$/);
@@ -7039,7 +7134,13 @@ function route() {
     : pathname === "/categories" ? renderCategories(root, signal)
     : categoryMatch ? renderCategoryPage(root, decodeURIComponent(categoryMatch[1]), signal)
     : puzzleMatch ? renderPuzzlePage(root, decodeURIComponent(puzzleMatch[1]), signal)
-    : renderLibrary(root, signal);
+    // Библиотеку рисует ТОЛЬКО корень. Раньше сюда же проваливался любой
+    // нераспознанный путь, и человек по битой ссылке видел обычную главную
+    // — то же самое, что делал сервер, отдавая на такой адрес код 200 (см.
+    // serveApp в server.js). Сервер теперь отвечает 404, и страница
+    // должна говорить то же, что код ответа.
+    : pathname === "/" ? renderLibrary(root, signal)
+    : renderNotFound(root);
   run.catch(e => {
     if (signal.aborted) return;
     console.error(e);

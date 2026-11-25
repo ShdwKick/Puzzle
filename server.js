@@ -1389,7 +1389,18 @@ const MIME = {
 // Dockerfile (см. историю с lib/mailer.js — забытая директория в COPY
 // роняет контейнер MODULE_NOT_FOUND, тот же принцип и тут, наоборот —
 // лишний файл в этом списке, которого нет в COPY, тихо не найдётся).
-const ROOT_FILES = ["robots.txt", "llms.txt"];
+// manifest.json добавлен сюда вместе с честным 404 (см. serveApp) — и
+// найден ровно им. В списке его не было вовсе, и в COPY Dockerfile тоже:
+// <link rel="manifest" href="/manifest.json"> в index.html уходил в
+// serveStatic, тот его не находил, запрос проваливался в serveApp и
+// получал код 200 с ТЕЛОМ ГЛАВНОЙ СТРАНИЦЫ и Content-Type: text/html.
+// Браузер молча не мог его разобрать — то есть PWA-манифеста у сервиса не
+// было никогда, а вместе с ним не работала и кнопка «Установить как
+// приложение» (ей нужен beforeinstallprompt, а его без валидного манифеста
+// браузер не присылает). Проверено на живом сайте: curl /manifest.json
+// отдавал <!doctype html>. Именно так soft-404 и прячет поломки — отличить
+// «файла нет» от «вот вам главная вместо него» по коду ответа было нельзя.
+const ROOT_FILES = ["robots.txt", "llms.txt", "manifest.json"];
 
 // HEAD — та же логика поиска/заголовков, что и GET, просто без тела (см.
 // правку «HEAD-запросы к статике» — Яндекс.Вебмастер жаловался «файл
@@ -1410,6 +1421,26 @@ function serveStatic(res, pathname, isHead) {
   // игнорируя <link rel="icon"> в index.html — отдаём тот же файл, что и
   // из assets/, без отдельного правила ниже.
   if (pathname === "/favicon.ico") pathname = "/assets/favicon.ico";
+  // Файлы подтверждения прав для поисковиков — по маске, а не списком: имя
+  // у них своё на каждый сайт (yandex_1a2b3c4d5e6f7890.html), и прописывать
+  // его в код незачем. Отдаём ТОЛЬКО если файл реально лежит в корне
+  // репозитория; нет файла — обычный 404, как у любого другого адреса.
+  //
+  // Эта ветка появилась вместе с честным 404 (см. serveApp) и ровно из-за
+  // него: до него /yandex_<любые цифры>.html отдавался с кодом 200 (телом
+  // главной страницы), то есть сайт «подтверждал» права по ЛЮБОМУ такому
+  // адресу, не имея ни одного такого файла. Если права в Вебмастере были
+  // подтверждены именно файлом, он держался на этой случайности — и при
+  // следующей перепроверке подтверждение бы слетело. Положите настоящий
+  // файл сюда, в корень рядом с index.html, и добавьте его в COPY в
+  // Dockerfile (или подтвердите права метатегом/DNS — надёжнее, файл не
+  // зависит от сборки). См. README, «Честный 404».
+  if (/^\/(yandex_[0-9a-zA-Z]+\.html|google[0-9a-zA-Z]+\.html)$/.test(pathname)) {
+    const file = path.join(__dirname, pathname.slice(1));
+    if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
+    sendFile(res, file, { "Content-Type": MIME[".html"] }, isHead);
+    return true;
+  }
   if (ROOT_FILES.includes(pathname.replace(/^\//, ""))) {
     const file = path.join(__dirname, pathname.replace(/^\//, ""));
     if (!fs.existsSync(file) || !fs.statSync(file).isFile()) return false;
@@ -1512,7 +1543,36 @@ const pluralPieces = n => pluralRu(n, "деталь", "детали", "дета�
 
 const DEFAULT_OG_IMAGE = `${PUBLIC_URL}/assets/og-image.png`;
 
-function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement, image, noindex, breadcrumbs }) {
+/** Выкусить из HTML блок JSON-LD с заданным @type, не тронув остальные.
+ *  Поблочно через колбэк, а не одним регэкспом «от script до @type»:
+ *  блоков в <head> несколько (WebSite, FAQPage, иногда BreadcrumbList), и
+ *  ленивый `[\s\S]*?` в таком регэкспе спокойно перепрыгнул бы границу
+ *  чужого блока и унёс бы его целиком. */
+function dropJsonLd(html, type) {
+  return html.replace(/<script type="application\/ld\+json">([\s\S]*?)<\/script>\n?/g,
+    (whole, body) => body.includes(`"@type": "${type}"`) ? "" : whole);
+}
+
+function applySeoOverride(html, { title, description, path: routePath, headBlock, loadingNoteReplacement, image, noindex, breadcrumbs, dropFaq }) {
+  // Разметка FAQPage — только на главной. Этот блок лежит в статичном
+  // index.html, то есть уезжал в КАЖДУЮ страницу сайта, все 500+. У Google
+  // на это прямое правило: FAQ-разметка, повторённая на всём сайте,
+  // расширенного сниппета не даёт вовсе — и правильно, вопросы «нужна ли
+  // регистрация» и «сколько стоит» относятся к сервису, а не к странице
+  // конкретного пазла или категории. applySeoOverride зовётся только для
+  // НЕ-главной (см. serveApp), поэтому проверять путь тут не нужно.
+  html = dropJsonLd(html, "FAQPage");
+  // Сам видимый блок убираем только там, где он реально мешает — на
+  // страницах пазлов (dropFaq, см. вызов). На /categories, /category/:slug,
+  // /rooms и /publish он остаётся: страниц этих единицы, дублированием
+  // текста их не топит, а человеку в футере он не лишний.
+  // Комментарий над блоком уносим вместе с ним: он объясняет именно этот
+  // блок («разметка должна дословно совпадать с видимым блоком .faq»), и
+  // без него это просто 400 байт мусора в каждой из 477 страниц.
+  if (dropFaq) {
+    html = html.replace(/\n?[ \t]*<!-- FAQPage-разметка[\s\S]*?-->\n/, "\n");
+    html = html.replace(/\n?[ \t]*<section class="faq">[\s\S]*?<\/section>\n/, "\n");
+  }
   // Скрытый из библиотеки пазл (см. ALTER TABLE hidden_at) по прямой ссылке
   // открывается — но в индексе ему делать нечего: из sitemap он уже выпал,
   // а сам по себе выпасть из выдачи может только по noindex. Вставляем
@@ -1608,7 +1668,7 @@ function categoriesListHtml() {
  *  них тут тоже не считается. Раз оба конца читают один и тот же порядок
  *  строк по одной и той же формуле — результат совпадает сам по себе, это
  *  не отдельно согласуемая логика, которую можно нечаянно рассинхронизировать. */
-function categoryPuzzlesListHtml(category) {
+function categoryPuzzlesListHtml(category, { excludeImage = null, limit = 0 } = {}) {
   // Помеченные «не для детей» не попадают и в статичный снимок категории
   // (см. sitemap.xml выше — та же причина: краулеру нечем подтвердить
   // возраст, а картинка тут идёт прямо в <img> исходного HTML).
@@ -1621,19 +1681,290 @@ function categoryPuzzlesListHtml(category) {
     if (pieces < g.lightestPieces) { g.lightestId = row.id; g.lightestPieces = pieces; }
   }
   if (!groups.size) return "";
-  let n = 0;
-  const items = [...groups.values()].map(g => {
-    const title = g.firstRow.uploader_user_id
-      ? escapeHtml(g.firstRow.title)
-      : `${escapeHtml(category.name)} #${++n}`;
+  // Номера — из общего categoryPuzzleNumbers (см. там же, почему по полному
+  // списку категории, включая «не для детей», и почему это важно). Раньше
+  // счётчик жил прямо здесь и считал по уже отфильтрованному списку —
+  // отсюда и расхождение с клиентом.
+  const numbers = categoryPuzzleNumbers(category);
+  let items = [...groups.values()].map(g => {
+    const n = numbers.get(g.firstRow.image_file);
+    const title = n ? `${escapeHtml(category.name)} #${n}` : escapeHtml(g.firstRow.title);
+    return { g, title };
+  });
+  if (excludeImage) items = items.filter(it => it.g.firstRow.image_file !== excludeImage);
+  if (limit > 0) items = items.slice(0, limit);
+  if (!items.length) return "";
+  const html = items.map(({ g, title }) => {
     // Миниатюра, не оригинал — та же причина, что в categoriesListHtml
     // выше: краулер (и человек до отработки JS) тянул сюда 21 картинку по
     // 100-350 КБ, то есть почти 4 МБ на страницу категории.
     const img = `<img src="${escapeHtml(thumbUrlFor(g.firstRow.image_file, 400))}" alt="${title}" loading="lazy">`;
     return `<li><a href="/puzzle/${encodeURIComponent(g.lightestId)}">${img}${title}</a></li>`;
   }).join("\n    ");
-  return `  <ul class="category-server-list">\n    ${items}\n  </ul>`;
+  return `  <ul class="category-server-list">\n    ${html}\n  </ul>`;
 }
+
+/* ───────────────────── презентабельность названия ─────────────────────
+ *
+ *  Названия пазлов в библиотеке бывают двух сортов. Короткие человеческие
+ *  («Холмы», «Снежные вершины», «Библиотека Оксфордского союза») —
+ *  их придумал GigaChat при импорте или человек при публикации. И сырой
+ *  alt-текст с фотостока, попавший в базу, когда до него не дошла очередь
+ *  переименования: «Stunning aerial view of Progreso Beach, Yucatan,
+ *  Mexico at sunset, showing the s…». На момент этой правки в живой базе
+ *  239 названий первого сорта и 238 второго.
+ *
+ *  В сетке карточек это было не видно: там подпись всегда вычисляемая,
+ *  «Категория #N» (см. puzzleDisplayTitle в assets/app.js). А вот в h1 и
+ *  <title> страницы пазла уходит именно название, и правка «Заголовок
+ *  страницы пазла» (выравнивание h1 с клиентом) этот сырой alt на половине
+ *  библиотеки проявила.
+ *
+ *  Настоящее лечение — дочистить названия: scripts/rename-pexels-titles.mjs
+ *  уже переименовал половину библиотеки и просто не был доведён до конца.
+ *  Но при следующем импорте GigaChat может быть не настроен или отказать, и
+ *  в базу опять ляжет длинный alt (см. ветку «GigaChat не смог придумать
+ *  название» в POST /internal/puzzles — там это сознательно НЕ ошибка, а
+ *  ухудшение названия). Поэтому правило, а не только разовая миграция.
+ *
+ *  Правило держится на двух признаках и проверено на живой базе: латиница
+ *  отсекает ровно те 238, длина не отсекает ни одного хорошего (самое
+ *  длинное кириллическое — 54 символа, «Элегантный интерьер классической
+ *  библиотеки Манчестера»).
+ *
+ *  ВАЖНО: ровно то же правило живёт в assets/app.js (isPresentableTitle).
+ *  Расходиться им нельзя — на том и держится совпадение h1 в исходном HTML
+ *  и после гидратации. Меняете здесь — меняйте и там. Дублируется, а не
+ *  шарится, по той же причине, что pluralRu: общего модуля между сервером и
+ *  клиентом в проекте нет, а ради шести строк заводить его незачем. */
+const TITLE_MAX_LEN = 60;
+function isPresentableTitle(title) {
+  if (!title) return false;
+  if (title.length > TITLE_MAX_LEN) return false;
+  const letters = [...title].filter(c => /\p{L}/u.test(c));
+  if (!letters.length) return false;
+  // Больше половины букв — латиница: это не название, это чужой alt-текст.
+  // Доля, а не «есть хоть одна латинская буква»: в нормальном названии
+  // латиница попадается («Кафе Cafe de Flore»), и отсекать такое незачем.
+  const latin = letters.filter(c => /[A-Za-z]/.test(c)).length;
+  return latin / letters.length <= 0.5;
+}
+
+/** image_file → номер в категории («Кошки #3»). Один источник для всех,
+ *  кому этот номер нужен: статичного списка категории
+ *  (categoryPuzzlesListHtml) и подписи пазла, у которого название не
+ *  прошло isPresentableTitle.
+ *
+ *  Считается по ПОЛНОМУ списку категории, включая помеченные «не для
+ *  детей». Раньше categoryPuzzlesListHtml фильтровал их ДО нумерации — а
+ *  клиент (ensureDisplayTitleCache, он берёт /api/puzzles, где такие
+ *  пазлы есть) нумеровал вместе с ними. Значит, в категории с одним
+ *  «не для детей» в середине все последующие номера у сервера и у клиента
+ *  расходились на единицу. Фильтр остался, но теперь он применяется к
+ *  тому, ЧТО рисовать, а не к тому, КАК нумеровать. */
+function categoryPuzzleNumbers(category) {
+  const numbers = new Map();
+  const seen = new Set();
+  let n = 0;
+  for (const row of stmt.categoryPuzzles.all(category.id)) {
+    if (seen.has(row.image_file)) continue;
+    seen.add(row.image_file);
+    // Публикации пользователей номеров не получают и счётчик не двигают —
+    // у них всегда своё название (тот же критерий, что у клиента).
+    if (row.uploader_user_id) continue;
+    numbers.set(row.image_file, ++n);
+  }
+  return numbers;
+}
+
+/** Как называть пазл в заголовке его страницы: своё название, если оно на
+ *  это годится, иначе — та же подпись, что в сетке карточек. Если номера
+ *  нет (пазл без категории, публикация пользователя), остаётся название:
+ *  лучше показать неидеальное, чем ничего. */
+function puzzleDisplayName(puzzle, category) {
+  if (isPresentableTitle(puzzle.title)) return puzzle.title;
+  if (!category) return puzzle.title;
+  const n = categoryPuzzleNumbers(category).get(puzzle.image_file);
+  return n ? `${category.name} #${n}` : puzzle.title;
+}
+
+/* ─────────────── содержимое страницы пазла для краулера ───────────────
+ *
+ *  До этой правки `/puzzle/:id` отдавала в исходном HTML заголовок и одно
+ *  предложение — около 90 символов своего текста на 2500 общих (шапка,
+ *  футер, блок FAQ). На 477 страницах это выглядит как 477 почти
+ *  одинаковых документов, и Яндекс такие держит в индексе неохотно
+ *  («малоценные или маловостребованные страницы»). Плюс страница была
+ *  тупиком: ни одной ссылки дальше по сайту, кроме общей навигации, —
+ *  видимые крошки и блок «похожие» рисует только JS.
+ *
+ *  Текст ниже не выдуман и не размножен шаблоном ради объёма: всё в нём
+ *  взято из базы (сетка, число деталей, уровни сложности, категория,
+ *  оценки, комментарии), поэтому у каждой страницы он свой настолько,
+ *  насколько своим является сам пазл. Чего тут по-прежнему НЕТ — живого
+ *  описания самой фотографии; оно требует либо рук, либо GigaChat
+ *  (gigachat.js уже умеет смотреть на картинку, см. titleFromImage), и
+ *  это отдельная задача, см. README «Открытые вопросы». */
+
+/** Видимые хлебные крошки — ровно те же, что рисует клиент
+ *  (.puzzle-page-crumbs в renderPuzzlePage), и ровно те же, что уже уходят
+ *  в разметку BreadcrumbList. Разметка без видимой ссылки — это обещание
+ *  поиску, которого на странице нет; теперь ссылка на категорию есть и в
+ *  HTML, и это единственный путь с этой страницы «вверх» для краулера. */
+function puzzleCrumbsHtml(category) {
+  const up = category
+    ? `<span aria-hidden="true">/</span><a href="/category/${encodeURIComponent(category.slug)}">${escapeHtml(category.name)}</a>`
+    : "";
+  return `  <nav class="puzzle-page-crumbs" aria-label="Хлебные крошки">\n    <a href="/">Библиотека</a>${up}\n  </nav>`;
+}
+
+/** Уровни сложности той же картинки — реальные ссылки на существующие
+ *  страницы (у каждого уровня свой id и своя /puzzle/:id). Для человека
+ *  это выбор сложности, для краулера — связный куст страниц вместо 477
+ *  одиночек. */
+function puzzleVariantsHtml(puzzle) {
+  const rows = stmt.puzzlesByImagePublic.all(puzzle.image_file)
+    .filter(r => !r.hidden_at)
+    .map(r => ({ id: r.id, pieces: r.grid_rows * r.grid_cols }))
+    .sort((a, b) => a.pieces - b.pieces);
+  if (rows.length < 2) return "";
+  const items = rows.map(r => r.id === puzzle.id
+    // Текущий уровень — не ссылка на саму себя: ссылка страницы на себя же
+    // ничего не сообщает ни человеку, ни поиску.
+    ? `<li><b>${r.pieces} ${pluralPieces(r.pieces)}</b></li>`
+    : `<li><a href="/puzzle/${encodeURIComponent(r.id)}">${r.pieces} ${pluralPieces(r.pieces)}</a></li>`
+  ).join("\n      ");
+  return `  <section class="puzzle-page-ssr">
+    <h2>Уровни сложности</h2>
+    <ul class="puzzle-variants-list">
+      ${items}
+    </ul>
+  </section>`;
+}
+
+/** Комментарии — единственный на этой странице текст, написанный людьми, и
+ *  потому самый ценный для «страница не пустая». Отдаём как есть, без
+ *  формы ответа (её поставит JS): краулеру форма ни к чему, а человеку до
+ *  отработки JS достаточно прочесть. */
+function puzzleCommentsHtml(puzzle) {
+  const rows = stmt.commentsForImage.all(puzzle.image_file);
+  if (!rows.length) return "";
+  // Потолок на снимок для краулера — страница не должна расти без предела
+  // от популярной ветки. Первые по времени, тем же порядком, что показывает
+  // клиент (commentsForImage — ORDER BY created_at); полную ветку всё равно
+  // дорисует JS. Тексты экранируются: это пользовательский ввод, и он
+  // попадает прямо в исходный HTML (ссылки в комментариях ссылками не
+  // становятся — только текст, так что спам-ссылку сюда не протащить).
+  const items = rows.slice(0, 20).map(c => {
+    const author = escapeHtml(c.author_name || c.author_username || "Гость");
+    return `<li><b>${author}</b>: ${escapeHtml(c.body)}</li>`;
+  }).join("\n      ");
+  return `  <section class="puzzle-page-ssr">
+    <h2>Комментарии (${rows.length})</h2>
+    <ul class="puzzle-comments-list">
+      ${items}
+    </ul>
+  </section>`;
+}
+
+/** Похожие пазлы — те же шесть, что показывает клиент (см. related в
+ *  renderPuzzlePage), той же категории и тем же порядком. */
+function puzzleRelatedHtml(puzzle, category) {
+  if (!category) return "";
+  const list = categoryPuzzlesListHtml(category, { excludeImage: puzzle.image_file, limit: 6 });
+  if (!list) return "";
+  return `  <section class="puzzle-page-ssr">
+    <h2>Другие пазлы в категории «${escapeHtml(category.name)}»</h2>
+${list}
+  </section>`;
+}
+
+/** Вводный абзац страницы категории. Та же мысль, что и у страницы пазла
+ *  (см. puzzleIntroHtml ниже): у 33 категорий на всю разницу было одно
+ *  предложение «N пазлов в категории «X» — собирайте онлайн бесплатно», то
+ *  есть страницы отличались друг от друга названием и числом. Числа ниже —
+ *  из базы, и заодно это единственные ссылки с категории на /rooms и
+ *  /publish: до них путь с этих страниц краулеру был только через общую
+ *  навигацию в шапке. */
+function categoryIntroHtml(category, count) {
+  const rows = stmt.categoryPuzzles.all(category.id).filter(r => !r.not_for_kids);
+  const levels = [...new Set(rows.map(r => r.grid_rows * r.grid_cols))].sort((a, b) => a - b);
+  const name = escapeHtml(category.name);
+  const parts = [`${count} ${pluralPuzzles(count)} в категории «${name}» — собирайте онлайн бесплатно, без регистрации и скачивания.`];
+  if (levels.length > 1) {
+    parts.push(`Сложность на выбор: от ${levels[0]} до ${levels[levels.length - 1]} ${pluralPieces(levels[levels.length - 1])} у каждой картинки.`);
+  }
+  parts.push(`Детали фигурные, как в настоящем пазле. Можно собирать <a href="/rooms">вместе с друзьями в комнате</a> или <a href="/publish">сделать пазл из своей фотографии</a>.`);
+  return parts.join(" ");
+}
+
+/** Вводный абзац страницы пазла. Все числа — из базы; ориентация считается
+ *  по сетке (cols/rows), а не по самой картинке: сетка от пропорций фото и
+ *  строится (см. gridForPieceTarget), так что это тот же факт, добытый без
+ *  чтения файла. */
+function puzzleIntroHtml(puzzle, category) {
+  const pieces = puzzle.grid_rows * puzzle.grid_cols;
+  const variants = stmt.puzzlesByImagePublic.all(puzzle.image_file)
+    .filter(r => !r.hidden_at)
+    .map(r => r.grid_rows * r.grid_cols)
+    .sort((a, b) => a - b);
+  const shape = puzzle.grid_cols > puzzle.grid_rows ? "горизонтальная"
+    : puzzle.grid_cols < puzzle.grid_rows ? "вертикальная" : "квадратная";
+  const parts = [
+    `${pieces} ${pluralPieces(pieces)}, сетка ${puzzle.grid_cols}×${puzzle.grid_rows}, ${shape} картинка.`,
+    "Детали фигурные — с выступами и пазами, как в настоящем пазле; стол масштабируется и двигается, так что крупной сборке не обязательно влезать в экран целиком.",
+  ];
+  if (variants.length > 1) {
+    parts.push(`Та же картинка собирается в ${variants.length} ${pluralRu(variants.length, "уровне", "уровнях", "уровнях")} сложности — от ${variants[0]} до ${variants[variants.length - 1]} ${pluralPieces(variants[variants.length - 1])}.`);
+  }
+  if (category) {
+    parts.push(`Категория: <a href="/category/${encodeURIComponent(category.slug)}">${escapeHtml(category.name)}</a>.`);
+  }
+  const rating = stmt.ratingSummary.get(puzzle.image_file);
+  if (rating && rating.n > 0) {
+    parts.push(`Оценка игроков: ${rating.avg.toFixed(1)} из 5 (${rating.n} ${pluralRu(rating.n, "оценка", "оценки", "оценок")}).`);
+  }
+  parts.push("Собирать можно одному или вместе с друзьями — в комнате детали двигаются сразу у всех.");
+  return parts.join(" ");
+}
+
+/* ───────────────────────────── честный 404 ─────────────────────────────
+ *
+ *  До этой правки ЛЮБОЙ путь отдавался с кодом 200 и телом главной
+ *  страницы: и /blog, и /nonexistent, и /puzzle/<несуществующий>, и
+ *  /yandex_12345.html. Для поиска это soft-404 — Яндекс отдельно это
+ *  диагностирует, жжётся краулинговый бюджет, а любая внешняя ссылка на
+ *  произвольный путь заводила ещё одну «страницу»-копию главной, которую
+ *  нечем вывести из индекса.
+ *
+ *  Решение в serveApp ниже устроено «от противного»: 404 получает всё, для
+ *  чего ни одна ветка не собрала настоящую страницу. Отдельного списка
+ *  существующих маршрутов тут нет намеренно — он был первой версией этой
+ *  правки и сразу же разошёлся с реальностью: список проверял id как
+ *  [^/]+, а разбор пути — как [\w-]+, и /puzzle/<кириллица> (а приходит
+ *  она percent-encoded, с процентами в пути) попадал в «маршрут
+ *  существует», но ни в одну ветку разбора — то есть снова 200. Поймано
+ *  тестом. Одна точка истины — сам разбор.
+ *
+ *  UNVERIFIABLE_ROUTES — исключение: существует ли комната, приглашение
+ *  или профиль, сервер без токена сказать не может (комната видна только
+ *  участникам, профиль живёт в базе Auth). Эти отдаются с 200, а «ничего
+ *  не найдено» показывает клиент. Зато в индексе им делать нечего —
+ *  отсюда noindex. robots.txt их не закрывает и не должен: закрытое в
+ *  robots Яндекс всё равно показывает строкой «страница заблокирована», а
+ *  noindex убирает совсем. */
+const UNVERIFIABLE_ROUTES = [
+  /^\/rooms\/join\/[^/]+$/,
+  /^\/room\/[^/]+$/,
+  /^\/room\/[^/]+\/table\/[^/]+$/,
+  /^\/profile\/[^/]+$/,
+];
+
+const NOT_FOUND_TITLE = "Страница не найдена | Что собираем?";
+const NOT_FOUND_HEAD = `  <div class="library-head">
+    <h1>Страница не найдена</h1>
+    <p>Такой страницы на сайте нет — возможно, ссылка устарела или в адресе опечатка. <a href="/">Вернуться в библиотеку пазлов</a>.</p>
+  </div>`;
 
 function serveApp(res, pathname, isHead) {
   try {
@@ -1648,6 +1979,13 @@ function serveApp(res, pathname, isHead) {
     // description, canonical) при этом работают, поэтому поломка не бросается в
     // глаза. На этом уже попались — см. проверку h1 в test/e2e-rooms.mjs.
     let html = fs.readFileSync(APP_HTML, "utf8").replace(/\r\n/g, "\n");
+    // Код ответа (см. правку «Честный 404»). Тело при 404 — тот же каркас
+    // приложения: клиентский роутер должен подняться и нарисовать «Страница
+    // не найдена» сам (см. route() в assets/app.js), иначе человек, пришедший
+    // по устаревшей ссылке, увидел бы голый текст вместо сайта. Поиску
+    // достаточно самого кода — он и есть разница между «страницы нет» и
+    // «вот вам главная вместо неё».
+    let status = 200;
     // /publish и /rooms до этого отдавались с заголовком и каноникой ГЛАВНОЙ
     // (см. правку «SEO для страниц публикации и комнат»): для поиска они были
     // не отдельными страницами, а дублями «/», и по своим запросам не
@@ -1707,7 +2045,10 @@ function serveApp(res, pathname, isHead) {
           const name = escapeHtml(category.name);
           html = applySeoOverride(html, {
             title: `Пазлы: ${name} — собрать онлайн бесплатно | Что собираем?`,
-            description: `Пазлы онлайн в категории «${name}» — собирайте бесплатно, без регистрации и скачивания.`,
+            // В описании — число пазлов: у 33 категорий описания иначе
+            // отличаются только названием, а в сниппете выдачи это первое,
+            // что человек читает про страницу.
+            description: `${count} ${pluralPuzzles(count)} в категории «${name}» — собирайте онлайн бесплатно, без регистрации и скачивания.`,
             // encodeURIComponent — тем же приёмом, что sitemap.xml и
             // categoriesListHtml ниже: без этого canonical указывал бы на
             // ДРУГУЮ форму URL (сырую кириллицу), чем реально ведущие сюда
@@ -1715,38 +2056,83 @@ function serveApp(res, pathname, isHead) {
             path: `/category/${encodeURIComponent(category.slug)}`,
             headBlock: `  <div class="library-head">
     <h1>Пазлы: ${name}</h1>
-    <p>${count} ${pluralPuzzles(count)} в категории «${name}» — собирайте онлайн бесплатно.</p>
+    <p>${categoryIntroHtml(category, count)}</p>
   </div>`,
             // Реальные ссылки на пазлы категории (см. правку «SSR для
             // категорий») — без этого страница отдавала краулеру только
             // заголовок, ни одной ссылки дальше по сайту не было вовсе.
             loadingNoteReplacement: categoryPuzzlesListHtml(category) || DEFAULT_LOADING_NOTE,
           });
+        } else {
+          // Нет такой категории (или она не прошла модерацию) — страницы
+          // нет, и говорить об этом надо кодом, а не телом главной.
+          status = 404;
         }
       } else if (tableMatch || puzzleMatch) {
         // Публичная ссылка на конкретный пазл (см. план «Публичная ссылка
         // на пазл») — только библиотечные (owner_user_id IS NULL): своя
         // приватная/ещё не одобренная загрузка сюда не должна течь чужому
         // краулеру/превью в мессенджере даже по прямому угаданному id.
-        // Название — «сырое» puzzle.title (Холмы/Лес/...), НЕ вычисляемое
-        // «Категория #N» (см. puzzleDisplayTitle в app.js) — дублировать
-        // ранжирование по категориям тут ради SEO-заголовка не стоит той
-        // сложности, обычного узнаваемого названия достаточно для превью.
         const id = (tableMatch || puzzleMatch)[1];
         const puzzle = stmt.puzzle.get(id);
         if (puzzle && puzzle.owner_user_id === null) {
-          const title = escapeHtml(puzzle.title);
           const pieces = puzzle.grid_rows * puzzle.grid_cols;
+          // Категория нужна сразу четырём потребителям ниже (подпись пазла,
+          // крошки видимые, крошки-разметка, блок «похожие») — берём один
+          // раз. Только approved: на непроверенную незачем ссылаться ни из
+          // выдачи, ни со страницы.
+          const cat = (() => {
+            const c = puzzle.category_id ? stmt.categoryById.get(puzzle.category_id) : null;
+            return c && c.status === "approved" ? c : null;
+          })();
+          // Название — своё, если оно на это годится, иначе «Категория #N»
+          // (см. puzzleDisplayName и isPresentableTitle выше). До этой
+          // защиты в h1 и <title> уходил сырой puzzle.title, а у половины
+          // библиотеки это алт-текст с фотостока на 80 символов по-английски.
+          // Клиент считает то же самое тем же правилом — на этом держится
+          // совпадение h1 в исходном HTML и после гидратации.
+          const displayName = puzzleDisplayName(puzzle, cat);
+          const title = escapeHtml(displayName);
           html = applySeoOverride(html, {
             title: `Пазл «${title}» онлайн — собрать бесплатно | Что собираем?`,
             description: `Собери пазл «${title}» онлайн бесплатно, без регистрации и скачивания — ${pieces} ${pluralPieces(pieces)}, прямо в браузере.`,
-            path: tableMatch ? `/table/${encodeURIComponent(puzzle.id)}` : `/puzzle/${encodeURIComponent(puzzle.id)}`,
-            headBlock: `  <div class="library-head">
+            // Каноникал ВСЕГДА на /puzzle/:id, даже когда открыт /table/:id
+            // (см. правку «Честный 404 и каноникал стола»). У стола были
+            // свои title/description/h1, дословно совпадающие со страницей
+            // пазла, и self-canonical — то есть на каждую картинку в
+            // индексе претендовали два адреса с одинаковым содержимым.
+            // Стол остаётся рабочим и открывается по прямой ссылке, просто
+            // в выдаче его представляет страница пазла, где есть и описание,
+            // и уровни сложности, и комментарии. og:url туда же: при
+            // пересылке в мессенджер человеку нужна страница пазла, а не
+            // сразу стол.
+            path: `/puzzle/${encodeURIComponent(puzzle.id)}`,
+            // Крошки + h1 + вводный абзац из реальных данных (см.
+            // puzzleIntroHtml). Было: h1 и одно предложение на всю
+            // страницу.
+            headBlock: `${puzzleCrumbsHtml(cat)}
+  <div class="library-head">
     <h1>Пазл «${title}»</h1>
-    <p>${pieces} ${pluralPieces(pieces)} — собирайте онлайн бесплатно, без регистрации и скачивания.</p>
+    <p>${puzzleIntroHtml(puzzle, cat)}</p>
   </div>`,
+            // Вместо «Загружаем библиотеку пазлов…» — то, что на этой
+            // странице действительно есть: уровни сложности, комментарии
+            // людей, похожие пазлы той же категории. JS всё равно
+            // перерисует #app целиком (renderPuzzlePage), так что живого
+            // человека это не касается — только краулера и того, у кого JS
+            // ещё не отработал.
+            loadingNoteReplacement: [
+              puzzleVariantsHtml(puzzle),
+              puzzleCommentsHtml(puzzle),
+              puzzleRelatedHtml(puzzle, cat),
+            ].filter(Boolean).join("\n") || DEFAULT_LOADING_NOTE,
             image: `${PUBLIC_URL}${imageUrlFor(puzzle.image_file)}`,
             noindex: !!puzzle.hidden_at,
+            // FAQ — только на главной (см. dropFaq в applySeoOverride):
+            // один и тот же блок на 477 почти одинаковых страницах и был
+            // той самой «водой», из-за которой своего текста на странице
+            // оставалось 90 символов из 2500.
+            dropFaq: true,
             // Крошки на странице уже были видимые (см. .puzzle-page-crumbs в
             // app.js), но поиск о них не знал — разметка их проявляет: вместо
             // голого адреса в выдаче показывается путь «Библиотека › Категория
@@ -1754,18 +2140,53 @@ function serveApp(res, pathname, isHead) {
             // одобренную — на непроверенную ссылаться из выдачи незачем.
             breadcrumbs: (() => {
               const crumbs = [{ name: "Библиотека", url: `${PUBLIC_URL}/` }];
-              const cat = puzzle.category_id ? stmt.categoryById.get(puzzle.category_id) : null;
-              if (cat && cat.status === "approved") {
-                crumbs.push({ name: cat.name, url: `${PUBLIC_URL}/category/${encodeURIComponent(cat.slug)}` });
-              }
-              crumbs.push({ name: puzzle.title, url: `${PUBLIC_URL}/puzzle/${encodeURIComponent(puzzle.id)}` });
+              if (cat) crumbs.push({ name: cat.name, url: `${PUBLIC_URL}/category/${encodeURIComponent(cat.slug)}` });
+              // Та же подпись, что в h1 — иначе в выдаче путь «Библиотека ›
+              // Кошки › <80 символов английского алт-текста», хотя сам
+              // заголовок страницы уже «Кошки #3». Сырое название тут и
+              // сидело до защиты (см. puzzleDisplayName).
+              crumbs.push({ name: displayName, url: `${PUBLIC_URL}/puzzle/${encodeURIComponent(puzzle.id)}` });
               return crumbs;
             })(),
           });
+        } else {
+          // Пазла нет, либо он чужой/приватный (owner_user_id не NULL).
+          // 404 и в этом случае, не 403 и не 200: на вопрос «есть ли по
+          // этому адресу страница» ответ для спрашивающего одинаков, а
+          // перебирать id по разнице кодов не нужно давать. Хозяин своё
+          // фото всё равно увидит — клиент поднимется и запросит
+          // /api/puzzles/:id со своим токеном (тот же критерий, что у
+          // API: см. «отдаёт 404 не автору» в тестах).
+          status = 404;
         }
+      } else if (UNVERIFIABLE_ROUTES.some(re => re.test(pathname))) {
+        // Комнаты, приглашения, профили — см. комментарий у
+        // UNVERIFIABLE_ROUTES: код 200, но noindex.
+        html = applySeoOverride(html, { noindex: true, dropFaq: true });
+      } else if (pathname !== "/") {
+        // Ни одна ветка выше не собрала страницу, и это не корень — значит
+        // такой страницы нет. Сюда попадает и /blog, и /puzzle/a/b, и
+        // /puzzle/<кириллица> (её не берёт разбор пути выше), и всё
+        // остальное незнакомое. Каноникал тут нарочно остаётся прежним (на
+        // главную), а не на себя: страницы по этому адресу нет, и
+        // ссылаться ей на саму себя не на что. Решает всё равно код.
+        status = 404;
       }
     }
-    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    // Своё тело и заголовок для любого 404 — одно место на все причины
+    // (нет пути, нет категории, нет пазла). Без этого человек по битой
+    // ссылке получал бы главную страницу с её h1 «Пазлы онлайн бесплатно»
+    // и кодом 404 — то есть ровно то же расхождение между кодом и
+    // содержимым, только наоборот.
+    if (status === 404) {
+      html = applySeoOverride(html, {
+        title: NOT_FOUND_TITLE,
+        description: "Такой страницы на сайте нет. Вернитесь в библиотеку пазлов — там больше четырёхсот пазлов, которые можно собрать бесплатно.",
+        headBlock: NOT_FOUND_HEAD,
+        dropFaq: true,
+      });
+    }
+    res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
     res.end(isHead ? undefined : html);
   } catch {
     res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
@@ -2624,6 +3045,22 @@ const server = http.createServer(async (req, res) => {
     // «HEAD-запросы к статике»).
     if (req.method === "GET" || req.method === "HEAD") {
       const isHead = req.method === "HEAD";
+      // Два адреса-двойника — 301 на единственно правильный вид (см. правку
+      // «Честный 404»). Оба раньше отдавали 200 и то же содержимое, что
+      // «/» или «/categories», то есть были готовыми дублями в индексе, и
+      // ни одна ветка serveApp их не разбирает — без редиректа они получали бы
+      // 404, хотя страница по сути есть.
+      //   /index.html      → /            (точка входа у сайта одна)
+      //   /categories/ и т.п. → без хвостового слеша
+      // 301, а не 302: вид адреса меняется навсегда, и поиск должен
+      // перенести на него накопленные сигналы, а не держать оба.
+      const redirectTo = p === "/index.html" ? "/"
+        : (p.length > 1 && p.endsWith("/")) ? p.replace(/\/+$/, "")
+        : null;
+      if (redirectTo) {
+        res.writeHead(301, { Location: redirectTo + (url.search || "") });
+        return res.end();
+      }
       if (p !== "/" && serveStatic(res, p, isHead)) return;
       // Остальное — SPA с маршрутизацией по прямым путям (History API, см.
       // план «Прямые ссылки вместо #/ + страница категорий»): любой

@@ -398,6 +398,23 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
    почти никогда не видит. */
 .category-server-list img{width:2.2rem;height:2.2rem;object-fit:cover;border-radius:.4rem;vertical-align:middle;margin-right:.5rem}
 
+/* Серверные блоки на странице пазла (см. server.js — puzzleVariantsHtml,
+   puzzleCommentsHtml, puzzleRelatedHtml) — уровни сложности, комментарии и
+   похожие пазлы прямо в исходном HTML. До этой правки /puzzle/:id отдавала
+   краулеру заголовок и одно предложение, то есть 477 почти одинаковых
+   документов без единой ссылки дальше по сайту.
+
+   Оформление тут нарочно скромное: живой человек этих блоков почти не
+   видит — renderPuzzlePage перерисовывает #app целиком, как только
+   отработает JS. Нужно только, чтобы до того момента страница не выглядела
+   сломанной. */
+.puzzle-page-ssr{margin:1.5rem 0}
+.puzzle-page-ssr h2{font-size:1.1rem;font-weight:650;margin:0 0 .6rem}
+.puzzle-variants-list{display:flex;flex-wrap:wrap;gap:.5rem;list-style:none;padding:0;margin:0}
+.puzzle-variants-list li{padding:.3rem .7rem;border-radius:var(--md-sys-shape-corner-m);background:var(--md-sys-color-surface-container-high)}
+.puzzle-comments-list{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:.5rem}
+.puzzle-comments-list li{color:var(--md-sys-color-on-surface-variant)}
+
 /* ===================== КАРТОЧКИ ПАЗЛОВ ===================== */
 .puzzle-grid{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fill,minmax(15.5rem,1fr))}
 /* position:relative + БЕЗ overflow:hidden на самой карточке — якорь для

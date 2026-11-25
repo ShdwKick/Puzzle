@@ -1143,7 +1143,9 @@ const canonicalOf = html => (html.match(/<link rel="canonical" href="([^"]*)">/)
 const homeHtml = await (await fetch(PUZZLE + "/")).text();
 const categoriesHtml = await (await fetch(PUZZLE + "/categories")).text();
 const categoryHtml = await (await fetch(PUZZLE + `/category/${encodeURIComponent(categoryASlug)}`)).text();
-const missingCategoryHtml = await (await fetch(PUZZLE + "/category/нет-такой-категории")).text();
+const missingCategoryRes = await fetch(PUZZLE + "/category/нет-такой-категории");
+const missingCategoryStatus = missingCategoryRes.status;
+const missingCategoryHtml = await missingCategoryRes.text();
 
 ok("/categories отдаёт свой <title>, отличный от главной",
   titleOf(categoriesHtml) && titleOf(categoriesHtml) !== titleOf(homeHtml), titleOf(categoriesHtml));
@@ -1153,8 +1155,12 @@ ok("/category/природа — canonical указывает именно на 
   canonicalOf(categoryHtml) === `https://puzzle.burninghouse.ru/category/${encodeURIComponent(categoryASlug)}`, canonicalOf(categoryHtml));
 ok("/categories — canonical указывает на /categories",
   canonicalOf(categoriesHtml) === "https://puzzle.burninghouse.ru/categories", canonicalOf(categoriesHtml));
-ok("несуществующий слаг — просто дефолтная страница (тот же <title>, что и главная), без 404",
-  titleOf(missingCategoryHtml) === titleOf(homeHtml), titleOf(missingCategoryHtml));
+// Раньше несуществующий слаг отдавал дефолтную страницу с кодом 200 (то
+// есть soft-404). Теперь — честный 404 со своим заголовком; см. правку
+// «Честный 404» и APP_ROUTES в server.js.
+ok("несуществующий слаг — 404 и своя страница «не найдено», а не копия главной",
+  missingCategoryStatus === 404 && titleOf(missingCategoryHtml) === "Страница не найдена | Что собираем?",
+  `${missingCategoryStatus} ${titleOf(missingCategoryHtml)}`);
 
 // ───────── SSR-список пазлов на /category/:slug (см. правку «SSR для
 // категорий») — раньше страница отдавала краулеру только заголовок, без
@@ -1186,12 +1192,24 @@ ok("уборка: hills откреплён от категории «Приро�
 const ogImageOf = html => (html.match(/<meta property="og:image" content="([^"]*)">/) || [])[1];
 const hillsHtml = await (await fetch(PUZZLE + "/table/hills")).text();
 ok("/table/hills отдаёт свой <title> с названием пазла", (titleOf(hillsHtml) || "").includes("Холмы"), titleOf(hillsHtml));
-ok("/table/hills — canonical указывает именно на эту страницу", canonicalOf(hillsHtml) === "https://puzzle.burninghouse.ru/table/hills", canonicalOf(hillsHtml));
+// Каноникал стола ведёт на СТРАНИЦУ ПАЗЛА, не на себя (см. правку
+// «Честный 404 и каноникал стола»): у /table/:id и /puzzle/:id были
+// дословно одинаковые title/description/h1 и каждый свой self-canonical —
+// два адреса в индексе на одну картинку. Стол остаётся рабочим, просто в
+// выдаче его представляет страница пазла.
+ok("/table/hills — canonical ведёт на /puzzle/hills, а не на себя",
+  canonicalOf(hillsHtml) === "https://puzzle.burninghouse.ru/puzzle/hills", canonicalOf(hillsHtml));
+ok("/table/hills — og:url туда же: в мессенджер уходит страница пазла, не сразу стол",
+  (hillsHtml.match(/<meta property="og:url" content="([^"]*)">/) || [])[1] === "https://puzzle.burninghouse.ru/puzzle/hills",
+  (hillsHtml.match(/<meta property="og:url" content="([^"]*)">/) || [])[1]);
 ok("/table/hills — og:image указывает на картинку самого пазла, не на общий баннер",
   (ogImageOf(hillsHtml) || "").includes("hills.svg"), ogImageOf(hillsHtml));
 
-const missingTableHtml = await (await fetch(PUZZLE + "/table/нет-такого-пазла")).text();
-ok("несуществующий id пазла — дефолтная страница, без 404", titleOf(missingTableHtml) === titleOf(homeHtml), titleOf(missingTableHtml));
+const missingTableRes = await fetch(PUZZLE + "/table/нет-такого-пазла");
+const missingTableHtml = await missingTableRes.text();
+ok("несуществующий id пазла — честный 404 со своей страницей",
+  missingTableRes.status === 404 && titleOf(missingTableHtml) === "Страница не найдена | Что собираем?",
+  `${missingTableRes.status} ${titleOf(missingTableHtml)}`);
 
 // /puzzle/:id — та же SSR-подмена, что и у /table/:id (см. план «Страница
 // пазла вместо превью-модалки») — теперь основная публичная/шаринг-ссылка.
@@ -1205,9 +1223,14 @@ r = await asJson(tokenA, "/rooms", { method: "POST", body: { title: "Комна�
 const linkTestRoomId = r.body.id;
 ur = await callRaw(tokenA, `/puzzles?roomId=${linkTestRoomId}&w=300&h=400&consent=1&title=${encodeURIComponent("Приватное фото для проверки ссылки")}`, fakePng, "image/png");
 const privateUploadForLinkTest = await ur.json();
-const privateTableHtml = await (await fetch(PUZZLE + `/table/${privateUploadForLinkTest.variants[0].id}`)).text();
-ok("приватная (ещё не опубликованная) загрузка — дефолтная страница по угаданному id, не своя SEO-подмена",
-  titleOf(privateTableHtml) === titleOf(homeHtml), titleOf(privateTableHtml));
+const privateTableRes = await fetch(PUZZLE + `/table/${privateUploadForLinkTest.variants[0].id}`);
+const privateTableHtml = await privateTableRes.text();
+// 404, а не 403 и не 200: по угаданному id наружу не должно утекать даже
+// то, существует ли такая строка. Хозяин своё фото всё равно увидит —
+// клиент поднимется и спросит API со своим токеном.
+ok("приватная (ещё не опубликованная) загрузка — 404 по угаданному id, без своей SEO-подмены",
+  privateTableRes.status === 404 && titleOf(privateTableHtml) === "Страница не найдена | Что собираем?",
+  `${privateTableRes.status} ${titleOf(privateTableHtml)}`);
 
 ir = await fetch(PUZZLE + "/sitemap.xml");
 sitemapXml = await ir.text();
@@ -1383,7 +1406,27 @@ ok("у /categories своя h1, а не общая библиотечная",
   && !categoriesPageHtml.includes("<h1>Пазлы онлайн бесплатно"), "");
 
 const hillsPageHtml = await (await fetch(PUZZLE + "/puzzle/hills")).text();
-ok("у /puzzle/:id своя h1 с названием пазла",
+/* Порядок объявлений в assets/app.js: вызов applyTheme() на верхнем уровне
+   должен идти ПОСЛЕ словаря EN. applyTheme ставит подпись кнопки темы через
+   t(), а t() при английском интерфейсе читает EN — const, то есть TDZ.
+   Проверка странная для e2e, но ловит она не стиль, а полную неработоспособность:
+   с puzzle_lang=en скрипт падал на этой строке ещё до роутера, и приложение
+   не стартовало вовсе — при этом на русском всё было в порядке, потому что
+   t() до EN там просто не дотягивается. Один раз этот вызов уже переезжал
+   по той же причине (тогда — из-за LANG_KEY) и остановился на полпути.
+   Браузера в этом тесте нет, поэтому проверяем то, что можно, — порядок в
+   исходнике. */
+const appSource = fs.readFileSync(path.join(PUZZLE_DIR, "assets/app.js"), "utf8");
+ok("app.js: applyTheme() на верхнем уровне вызывается после словаря EN (иначе английский интерфейс не стартует)",
+  appSource.indexOf("\napplyTheme(localStorage.getItem") > appSource.indexOf("\nconst EN = {"),
+  `applyTheme на ${appSource.slice(0, appSource.indexOf("\napplyTheme(localStorage.getItem")).split("\n").length + 1}, EN на ${appSource.slice(0, appSource.indexOf("\nconst EN = {")).split("\n").length + 1}`);
+
+// Формулировка h1 тут закреплена НАМЕРЕННО и дословно: ровно эту строку
+// клиент собирает у себя после гидратации (headingTitle в renderPuzzlePage,
+// assets/app.js — настоящее название, а не вычисляемое «Категория #N»).
+// Поиск сравнивает исходный HTML с отрендеренным, и разный текст в одном и
+// том же h1 ему не нравится. Меняете строку здесь — меняйте и там.
+ok("у /puzzle/:id своя h1 с названием пазла (дословно как у клиента после гидратации)",
   hillsPageHtml.includes("<h1>Пазл «Холмы»</h1>")
   && !hillsPageHtml.includes("<h1>Пазлы онлайн бесплатно"), "");
 
@@ -1407,6 +1450,251 @@ ok("крошки: первая ведёт на корень, последняя 
   crumbs.itemListElement[0].item === PUBLIC_BASE + "/"
   && crumbs.itemListElement.at(-1).item.endsWith("/puzzle/hills"),
   JSON.stringify(crumbs.itemListElement.map(x => x.item)));
+
+/* ── Содержимое страницы пазла для краулера (см. правку «Уникальный текст
+   на страницах пазлов и категорий») ───────────────────────────────────────
+
+   До правки /puzzle/:id отдавала в исходном HTML заголовок и одно
+   предложение — около 90 символов своего текста на 2500 общих, и ни одной
+   ссылки дальше по сайту: видимые крошки и блок «похожие» рисует только JS.
+   477 таких страниц Яндекс держит в индексе неохотно. Проверяем именно то,
+   что видно БЕЗ JS, — остальное и так рисует renderPuzzlePage. */
+const mainOf = html => (/<main id="app"[\s\S]*?<\/main>/.exec(html) || [""])[0];
+
+// Блок самодостаточный: своя категория и свой «сосед» в ней, чтобы было чем
+// наполнить «другие пазлы категории», и всё убирается за собой. Тот же
+// приём, что у временного прикрепления hills выше, но без опоры на
+// состояние, которое к этому месту файла успели поменять другие блоки.
+ir = await internalCall(ADMIN_KEY, "/internal/categories", { method: "POST", body: { name: "Для текста страницы" } });
+const textCategory = await ir.json();
+const textCategorySlug = textCategory.slug;
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "Сосед по категории", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: textCategory.id },
+});
+const neighbourUpload = await ir.json();
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles/hills/category", { method: "POST", body: { categoryId: textCategory.id } });
+ok("hills временно прикреплён к своей категории для проверки текста страницы", ir.status === 200, String(ir.status));
+
+const hillsRichHtml = await (await fetch(PUZZLE + "/puzzle/hills")).text();
+const hillsMain = mainOf(hillsRichHtml);
+ok("страница пазла: видимые крошки с ссылкой на категорию прямо в HTML",
+  hillsMain.includes('class="puzzle-page-crumbs"')
+  && /<a href="\/category\/[^"]+">/.test(hillsMain),
+  (/<nav class="puzzle-page-crumbs"[\s\S]*?<\/nav>/.exec(hillsMain) || [""])[0].replace(/\s+/g, " "));
+ok("страница пазла: уровни сложности той же картинки — реальные ссылки",
+  hillsMain.includes("<h2>Уровни сложности</h2>")
+  && (hillsMain.match(/href="\/puzzle\/hills-\d+"/g) || []).length >= 5,
+  String((hillsMain.match(/href="\/puzzle\/hills-\d+"/g) || []).length));
+ok("страница пазла: текущий уровень ссылкой на себя же не идёт",
+  !hillsMain.includes('href="/puzzle/hills"'), "");
+ok("страница пазла: блок «другие пазлы категории» со ссылкой на соседа",
+  hillsMain.includes("Другие пазлы в категории")
+  && hillsMain.includes(`href="/puzzle/${neighbourUpload.variants[0].id}"`), "");
+ok("страница пазла: во вводном абзаце есть сетка и число деталей из базы",
+  /сетка \d+×\d+/.test(hillsMain) && /\d+ детал/.test(hillsMain),
+  (/<p>([\s\S]*?)<\/p>/.exec(hillsMain) || ["", ""])[1].slice(0, 200).replace(/\s+/g, " "));
+// Своего текста должно стать В РАЗЫ больше — это и есть смысл правки.
+// Порог 400 символов, а не точное число: текст ещё будут править руками,
+// а провалиться он может только обратно к «заголовок и одно предложение».
+const hillsMainText = hillsMain.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+ok("страница пазла: своего текста в <main> стало больше 400 символов",
+  hillsMainText.length > 400, `${hillsMainText.length} символов`);
+
+// Комментарий человека — единственный на странице текст, написанный не
+// шаблоном, и ровно поэтому он должен быть в исходном HTML, а не только
+// после отработки JS.
+r = await asJson(tokenA, "/puzzles/hills/comments", { method: "POST", body: { body: "Собрали вдвоём за вечер, детали приятные." } });
+const ssrCommentId = r.body && r.body.id;
+ok("комментарий для проверки SSR создан", r.status === 200 && !!ssrCommentId, JSON.stringify(r.body).slice(0, 120));
+const hillsWithComment = mainOf(await (await fetch(PUZZLE + "/puzzle/hills")).text());
+ok("страница пазла: комментарии людей попадают в исходный HTML",
+  hillsWithComment.includes("Комментарии (") && hillsWithComment.includes("Собрали вдвоём за вечер"), "");
+if (ssrCommentId) await asJson(tokenA, `/puzzles/hills/comments/${ssrCommentId}`, { method: "DELETE" });
+
+/* ── Защита от непрезентабельных названий (см. isPresentableTitle в
+   server.js и в assets/app.js) ────────────────────────────────────────────
+
+   В библиотеке названия двух сортов: короткие человеческие («Холмы») и
+   сырой alt-текст с фотостока, попавший в базу, пока до него не дошла
+   очередь переименования («Stunning aerial view of Osaka's city lights and
+   skyscrapers at night.»). На момент правки в живой базе таких было 238 из
+   477. В сетке карточек разницы не видно — там подпись всегда «Категория
+   #N», — а в h1 и <title> страницы пазла видно, и очень. */
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${neighbourUpload.variants[0].id}/title`, {
+  method: "POST", body: { title: "Stunning aerial view of Osaka's city lights and skyscrapers at night." },
+});
+ok("пазлу выдано длинное английское название (как при импорте без GigaChat)", ir.status === 200, String(ir.status));
+const uglyPage = await (await fetch(PUZZLE + `/puzzle/${neighbourUpload.variants[0].id}`)).text();
+const uglyH1 = (/<h1>([\s\S]*?)<\/h1>/.exec(uglyPage) || [])[1];
+ok("непрезентабельное название в h1 не попадает — вместо него «Категория #N»",
+  /^Пазл «Для текста страницы #\d+»$/.test(uglyH1 || ""), uglyH1);
+ok("и в <title> тоже, а не только в h1",
+  (titleOf(uglyPage) || "").startsWith("Пазл «Для текста страницы #"), titleOf(uglyPage));
+ok("и в крошках-разметке — иначе путь в выдаче спорил бы с заголовком страницы",
+  JSON.parse(/<script type="application\/ld\+json">\s*(\{"@context":"https:\/\/schema\.org","@type":"BreadcrumbList"[\s\S]*?\})\s*<\/script>/.exec(uglyPage)[1])
+    .itemListElement.at(-1).name.startsWith("Для текста страницы #"), "");
+ok("сырое название при этом наружу не уходит вовсе",
+  !uglyPage.includes("Stunning aerial view"), "");
+// Короткое человеческое название правило пропускает — иначе защита съела бы
+// ровно то, ради чего h1 и выравнивали.
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${neighbourUpload.variants[0].id}/title`, {
+  method: "POST", body: { title: "Огни Осаки" },
+});
+const prettyPage = await (await fetch(PUZZLE + `/puzzle/${neighbourUpload.variants[0].id}`)).text();
+ok("короткое русское название остаётся в h1 как есть",
+  prettyPage.includes("<h1>Пазл «Огни Осаки»</h1>"), (/<h1>([\s\S]*?)<\/h1>/.exec(prettyPage) || [])[1]);
+
+/* Нумерация «Категория #N» считается по ПОЛНОМУ списку категории, включая
+   помеченные «не для детей». Раньше статичный список категории фильтровал
+   их ДО нумерации, а клиент (он берёт /api/puzzles, где такие пазлы есть)
+   нумеровал вместе с ними — в категории с одним «не для детей» в середине
+   все последующие номера расходились на единицу. Теперь номер один для
+   всех, кому он нужен (categoryPuzzleNumbers), и фильтр решает только,
+   ЧТО рисовать, а не КАК нумеровать. Проверяем по пропуску в номерах:
+   скрытая картинка свой номер забирает с собой. */
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "Между соседями", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: textCategory.id },
+});
+const middleUpload = await ir.json();
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
+  method: "POST", body: { title: "После скрытого", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: textCategory.id },
+});
+const afterUpload = await ir.json();
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${middleUpload.variants[0].id}/not-for-kids`, { method: "POST", body: { notForKids: true } });
+ok("средней картинке категории поставлена пометка «не для детей»", ir.status === 200, String(ir.status));
+const listWithHidden = (await (await fetch(PUZZLE + `/category/${encodeURIComponent(textCategorySlug)}`)).text())
+  .match(/<ul class="category-server-list">[\s\S]*?<\/ul>/)?.[0] || "";
+ok("помеченная картинка в статичный список не попала",
+  !listWithHidden.includes(`/puzzle/${middleUpload.variants[0].id}`), "");
+ok("но свой номер она забрала с собой — у следующей он не сдвинулся",
+  listWithHidden.includes("#4") && !listWithHidden.includes("#3"),
+  (listWithHidden.match(/#\d+/g) || []).join(" "));
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${middleUpload.variants[0].id}`, { method: "DELETE" });
+ok("уборка: помеченная картинка удалена", ir.status === 200, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${afterUpload.variants[0].id}`, { method: "DELETE" });
+ok("уборка: картинка после скрытой удалена", ir.status === 200, String(ir.status));
+
+// Правило дублируется в двух файлах (общего модуля между сервером и
+// клиентом в проекте нет). Разойдись они — h1 в исходном HTML и после
+// гидратации перестанут совпадать, а это именно то, что правка «Заголовок
+// страницы пазла» чинила. Браузера в тесте нет, поэтому сверяем то, что
+// можно: порог и наличие функции по обе стороны.
+const serverSource = fs.readFileSync(path.join(PUZZLE_DIR, "server.js"), "utf8");
+ok("правило презентабельности есть и на сервере, и на клиенте",
+  serverSource.includes("function isPresentableTitle") && appSource.includes("function isPresentableTitle"), "");
+ok("порог длины названия одинаковый в server.js и assets/app.js",
+  /const TITLE_MAX_LEN = 60;/.test(serverSource) && /const TITLE_MAX_LEN = 60;/.test(appSource), "");
+
+ir = await internalCall(ADMIN_KEY, "/internal/puzzles/hills/category", { method: "POST", body: { categoryId: null } });
+ok("уборка: hills откреплён от временной категории", ir.status === 200, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/puzzles/${neighbourUpload.variants[0].id}`, { method: "DELETE" });
+ok("уборка: сосед по категории удалён", ir.status === 200, String(ir.status));
+ir = await internalCall(ADMIN_KEY, `/internal/categories/${textCategory.id}`, { method: "DELETE" });
+ok("уборка: временная категория удалена", ir.status === 200, String(ir.status));
+
+/* FAQ — только на главной. Блок лежит в статичном index.html, то есть
+   уезжал в каждую из 500+ страниц: у Google на повторённую по всему сайту
+   FAQ-разметку прямое правило (расширенного сниппета не будет), а на
+   страницах пазлов этот же блок составлял бóльшую часть всего текста. */
+// homeHtml выше забран раньше правок этого прогона — берём свежий.
+const homeHtmlForFaq = await (await fetch(PUZZLE + "/")).text();
+ok("главная: FAQ на месте — и разметка, и видимый блок",
+  homeHtmlForFaq.includes('"@type": "FAQPage"') && homeHtmlForFaq.includes('<section class="faq">'), "");
+ok("страница пазла: ни FAQ-разметки, ни видимого блока",
+  !hillsPageHtml.includes('"@type": "FAQPage"') && !hillsPageHtml.includes('<section class="faq">'), "");
+ok("страница пазла: остальная разметка на месте — WebSite и крошки не унесло вместе с FAQ",
+  hillsPageHtml.includes('"@type": "WebSite"') && hillsPageHtml.includes('"BreadcrumbList"'), "");
+ok("страница категории: FAQ-разметки нет, но видимый блок остался",
+  !categoriesPageHtml.includes('"@type": "FAQPage"') && categoriesPageHtml.includes('<section class="faq">'), "");
+
+// Вводный абзац категории — тоже из базы: число пазлов и диапазон
+// сложности. Плюс это единственные ссылки с категории на /rooms и /publish.
+const naturePage = await (await fetch(PUZZLE + "/category/" + encodeURIComponent("природа"))).text();
+const natureMain = mainOf(naturePage);
+ok("страница категории: во вводном абзаце число пазлов и ссылки на комнаты/публикацию",
+  /\d+ пазл/.test(natureMain) && natureMain.includes('href="/rooms"') && natureMain.includes('href="/publish"'),
+  (/<p>([\s\S]*?)<\/p>/.exec(natureMain) || ["", ""])[1].slice(0, 220).replace(/\s+/g, " "));
+ok("страница категории: число пазлов попало и в description",
+  /<meta name="description" content="\d+ пазл/.test(naturePage),
+  (/<meta name="description" content="([^"]*)"/.exec(naturePage) || ["", ""])[1].slice(0, 120));
+
+/* ── Честный 404 (см. APP_ROUTES/serveApp в server.js) ───────────────────
+
+   До этой правки ЛЮБОЙ путь отдавал код 200 с телом главной страницы:
+   /blog, /nonexistent, /puzzle/<несуществующий>, /yandex_12345.html. Для
+   поиска это soft-404 — Яндекс его отдельно диагностирует, жжётся
+   краулинговый бюджет, а любая внешняя ссылка на произвольный путь
+   заводила ещё одну «страницу»-копию главной, которую нечем вывести из
+   индекса. Проверяем именно КОДЫ: тело при 404 остаётся каркасом
+   приложения (клиентский роутер должен подняться и нарисовать «Страница
+   не найдена»), так что по одному <title> эти случаи не различить. */
+const statusOf = async pathname => (await fetch(PUZZLE + pathname, { redirect: "manual" })).status;
+
+for (const pathname of ["/", "/categories", "/rooms", "/publish", "/puzzle/hills", "/table/hills"]) {
+  ok(`${pathname} — 200, настоящая страница`, await statusOf(pathname) === 200, pathname);
+}
+// Комнаты/приглашения/профили сервер без токена проверить не может (кто
+// спрашивает — неизвестно), поэтому 200 и «не найдено» рисует клиент. Зато
+// в индексе им делать нечего.
+for (const pathname of ["/room/нет-такой-комнаты", "/rooms/join/NOCODE00", "/profile/нет-такого-логина"]) {
+  const html = await (await fetch(PUZZLE + pathname)).text();
+  ok(`${pathname} — 200, но noindex: проверить существование нечем, а индексировать нечего`,
+    await statusOf(pathname) === 200 && html.includes('<meta name="robots" content="noindex, follow">'), pathname);
+}
+for (const pathname of ["/nonexistent-page-xyz", "/blog", "/puzzle/нет-такого", "/category/нет-такой", "/puzzle/hills/лишний-сегмент"]) {
+  ok(`${pathname} — 404, а не копия главной с кодом 200`, await statusOf(pathname) === 404, pathname);
+}
+ok("HEAD на несуществующий путь — тоже 404",
+  (await fetch(PUZZLE + "/blog", { method: "HEAD" })).status === 404, "");
+// Тело 404 — каркас приложения, иначе человек по битой ссылке увидел бы
+// голый текст вместо сайта.
+const notFoundHtml = await (await fetch(PUZZLE + "/blog")).text();
+ok("тело 404 — всё ещё приложение (клиент поднимется и нарисует «не найдено»)",
+  notFoundHtml.includes('<main id="app"') && notFoundHtml.includes("/assets/app.js"), "");
+ok("тело 404 — своя h1, а не «Пазлы онлайн бесплатно» от главной",
+  notFoundHtml.includes("<h1>Страница не найдена</h1>")
+  && !notFoundHtml.includes("<h1>Пазлы онлайн бесплатно"), "");
+
+// Два адреса-двойника — 301 на единственно правильный вид. Оба раньше
+// отдавали 200 и то же содержимое, что «/» и «/categories».
+for (const [from, to] of [["/index.html", "/"], ["/categories/", "/categories"], ["/rooms/", "/rooms"]]) {
+  const res = await fetch(PUZZLE + from, { redirect: "manual" });
+  ok(`${from} — 301 на ${to}`, res.status === 301 && res.headers.get("location") === to,
+    `${res.status} → ${res.headers.get("location")}`);
+}
+
+// Файл подтверждения прав для поисковика: отдаём, только если он реально
+// лежит в корне. До честного 404 сайт «подтверждал» права по ЛЮБОМУ такому
+// адресу, не имея ни одного такого файла, — и подтверждение в Вебмастере
+// держалось на этой случайности.
+ok("несуществующий yandex_*.html — 404, а не 200 телом главной",
+  await statusOf("/yandex_0000000000000000.html") === 404, "");
+const verifyFile = path.join(PUZZLE_DIR, "yandex_e2etestfile.html");
+fs.writeFileSync(verifyFile, "verification");
+try {
+  const res = await fetch(PUZZLE + "/yandex_e2etestfile.html");
+  ok("настоящий yandex_*.html в корне — 200 и его содержимое",
+    res.status === 200 && (await res.text()) === "verification", String(res.status));
+} finally {
+  fs.unlinkSync(verifyFile);
+}
+
+// Регрессия, найденная честным 404: manifest.json не был ни в ROOT_FILES,
+// ни в COPY Dockerfile — /manifest.json отдавал главную страницу с
+// Content-Type: text/html, то есть PWA-манифеста у сервиса не было никогда
+// (а без него браузер не присылает beforeinstallprompt, и кнопка
+// «Установить как приложение» не появлялась). Проверено на живом сайте.
+const manifestRes = await fetch(PUZZLE + "/manifest.json");
+ok("/manifest.json — 200 и именно JSON, а не HTML главной страницы",
+  manifestRes.status === 200 && (manifestRes.headers.get("content-type") || "").includes("application/json"),
+  `${manifestRes.status} ${manifestRes.headers.get("content-type")}`);
+ok("/manifest.json разбирается как JSON и несёт имя сервиса",
+  (await manifestRes.json()).short_name === "Что собираем?", "");
+
+// Корневые файлы и sitemap честный 404 задеть не должен.
+for (const pathname of ["/robots.txt", "/llms.txt", "/sitemap.xml", "/favicon.ico", "/assets/app.js"]) {
+  ok(`${pathname} — по-прежнему 200`, await statusOf(pathname) === 200, pathname);
+}
 
 ir = await internalCall(ADMIN_KEY, "/internal/puzzles", {
   method: "POST", body: { title: "С неверной категорией", imageBase64: fakePng.toString("base64"), width: 300, height: 400, categoryId: "no-such-category" },

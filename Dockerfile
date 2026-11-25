@@ -27,6 +27,10 @@ COPY *.js ./
 COPY index.html ./
 COPY robots.txt ./
 COPY llms.txt ./
+# manifest.json — PWA-манифест. В образ не попадал вовсе (и в ROOT_FILES
+# server.js тоже не был прописан), из-за чего /manifest.json отдавал главную
+# страницу с кодом 200 — см. комментарий у ROOT_FILES. Найдено честным 404.
+COPY manifest.json ./
 # sitemap.xml больше НЕ копируется — теперь генерируется на лету
 # (GET /sitemap.xml в server.js, см. план «Прямые ссылки вместо #/ +
 # страница категорий»), статичный файл был бы просто мёртвым грузом.
@@ -47,7 +51,7 @@ COPY scripts/ ./scripts/
 # сервере. Запускать сервер нельзя — он бы занял порт и повис, поэтому только
 # наличие файлов и разбор синтаксиса.
 RUN set -e; \
-    for f in server.js auth-client.js admin-internal.js index.html lib/mailer.js lib/emailTemplates.js lib/thumbs.js; do \
+    for f in server.js auth-client.js admin-internal.js index.html manifest.json robots.txt llms.txt lib/mailer.js lib/emailTemplates.js lib/thumbs.js; do \
       test -f "$f" || { echo "В образе нет $f — проверьте COPY в Dockerfile"; exit 1; }; \
     done; \
     for f in server.js auth-client.js admin-internal.js lib/mailer.js lib/emailTemplates.js lib/thumbs.js; do node --check "$f"; done; \
