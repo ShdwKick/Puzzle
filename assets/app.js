@@ -599,6 +599,7 @@ const EN = {
   "Страница не найдена": "Page not found",
   "Такой страницы на сайте нет — возможно, ссылка устарела или в адресе опечатка.": "There's no such page — the link may be outdated or mistyped.",
   "Вернуться в библиотеку пазлов": "Back to the puzzle library",
+  "Скрыть подсказку": "Hide this note",
   // EN_END — новые пары словаря добавляются строго перед этой строкой.
 };
 // Первый вызов applyTheme() — тут, ПОСЛЕ словаря EN, а не сразу после её
@@ -2136,6 +2137,55 @@ const IN_PROGRESS_PAGE_SIZE = 5;
  *  тем же приёмом наведения/фокуса, что у .puzzle-card>.menu-wrap
  *  (см. CSS, .progress-card-delete). onDeleted вызывается ПОСЛЕ того, как
  *  прогресс реально стёрт — рендер страницы сам решает, что дальше. */
+/** Гостевая подсказка с крестиком (см. .guest-note в styles.css).
+ *
+ *  Таких подсказок на сайте две — на главной («прогресс хранится только в
+ *  этом браузере») и в списке комнат («комната видна только с этого
+ *  устройства»). Раньше обе собирались отдельно одинаковым кодом; теперь
+ *  один строитель, иначе третья правка оформления разошлась бы по двум
+ *  местам, как уже случилось с кнопкой.
+ *
+ *  Крестик — потому что это подсказка, а не предупреждение: человек её
+ *  прочитал, понял и больше в ней не нуждается, а показывалась она на
+ *  КАЖДОМ заходе гостя, вечно. Вошедшему её и так не видно (оба вызова под
+ *  !auth.isAuthenticated()), так что «закрыл» значит «я понял, не
+ *  напоминай» — состояние живёт в localStorage этого браузера, ровно там
+ *  же, где и сам гостевой прогресс, о котором подсказка и говорит.
+ *
+ *  Ключ на каждую подсказку свой: тексты разные, и закрыв одну, человек не
+ *  давал согласия спрятать другую.
+ *
+ *  Возвращает элемент или null, если подсказку уже закрывали. */
+function buildGuestNote({ text, action, onAction, storageKey }) {
+  if (localStorage.getItem(storageKey) === "1") return null;
+  const note = document.createElement("div");
+  note.className = "guest-note";
+  const span = document.createElement("span");
+  span.textContent = text;
+  // outlined, а не tonal: на спокойном фоне подсказки приглушённый tonal
+  // читался как неактивная кнопка (см. комментарий у .guest-note).
+  const btn = document.createElement("button");
+  btn.className = "btn outlined sm"; btn.type = "button";
+  btn.textContent = action;
+  btn.addEventListener("click", onAction);
+  const close = document.createElement("button");
+  close.className = "icon-btn guest-note-close"; close.type = "button";
+  close.title = t("Скрыть подсказку");
+  close.setAttribute("aria-label", close.title);
+  close.innerHTML = `<svg class="icon" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>`;
+  close.addEventListener("click", () => {
+    // Сначала убираем с экрана, потом запоминаем: в приватном режиме
+    // localStorage умеет бросать на запись, и тогда подсказка осталась бы
+    // висеть после нажатия на крестик — то есть кнопка выглядела бы
+    // сломанной. Не запомнить и показать снова в следующий раз — меньшее
+    // зло, чем не закрыться сейчас.
+    note.remove();
+    try { localStorage.setItem(storageKey, "1"); } catch { /* приватный режим — просто не запомним */ }
+  });
+  note.append(span, btn, close);
+  return note;
+}
+
 function buildInProgressCard(ip, signal, onDeleted) {
   const card = document.createElement("article");
   card.className = "puzzle-card";
@@ -3051,16 +3101,13 @@ async function renderLibrary(root, signal) {
   });
 
   if (!auth.isAuthenticated()) {
-    const note = document.createElement("div");
-    note.className = "guest-note";
-    const span = document.createElement("span");
-    span.textContent = t("Играть можно без входа — прогресс тогда хранится только в этом браузере.");
-    const btn = document.createElement("button");
-    btn.className = "btn tonal sm"; btn.type = "button";
-    btn.textContent = t("Войти и сохранять прогресс");
-    btn.addEventListener("click", () => auth.login());
-    note.append(span, btn);
-    $(root, "#guestNoteWrap").appendChild(note);
+    const note = buildGuestNote({
+      text: t("Играть можно без входа — прогресс тогда хранится только в этом браузере."),
+      action: t("Войти и сохранять прогресс"),
+      onAction: () => auth.login(),
+      storageKey: "puzzle.guestNoteHidden.library",
+    });
+    if (note) $(root, "#guestNoteWrap").appendChild(note);
   }
 
   // Подсказка «сделай пазл из своего фото» (см. правку «Обозначить на
@@ -5560,16 +5607,13 @@ async function mountRoomsSection(container, signal, opts = {}) {
   // комнат виден только на ЭТОМ устройстве (cookie не переносится), для
   // этого мягкая подсказка ниже, не блокирующая экран.
   if (!auth.isAuthenticated()) {
-    const note = document.createElement("div");
-    note.className = "guest-note";
-    const span = document.createElement("span");
-    span.textContent = t("Войдите, чтобы комната была видна и с других устройств.");
-    const btn = document.createElement("button");
-    btn.className = "btn tonal sm"; btn.type = "button";
-    btn.textContent = t("Войти");
-    btn.addEventListener("click", () => auth.login());
-    note.append(span, btn);
-    $(container, "#roomList").before(note);
+    const note = buildGuestNote({
+      text: t("Войдите, чтобы комната была видна и с других устройств."),
+      action: t("Войти"),
+      onAction: () => auth.login(),
+      storageKey: "puzzle.guestNoteHidden.rooms",
+    });
+    if (note) $(container, "#roomList").before(note);
   }
 
   // Пагинация — целиком на фронте, список уже загружен целиком (см.

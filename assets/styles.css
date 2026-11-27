@@ -46,6 +46,16 @@ a{color:inherit}
   background:color-mix(in srgb, var(--md-sys-color-surface) 78%, transparent);
   border-bottom:1px solid var(--md-sys-color-outline-variant)}
 .appbar-inner{max-width:76rem;height:100%;margin:0 auto;padding:0 1.1rem;display:flex;align-items:center;gap:1rem}
+/* Ссылка с названием сервиса в локапе — 16px в высоту при зазоре 7px до
+   соседней ссылки на burninghouse.ru, то есть мимо WCAG 2.2 2.5.8 (AA:
+   24×24 либо 24px свободного места). Шапка фиксированной высоты 64px и
+   выравнивает содержимое по центру, так что добавленные 8px уходят внутрь
+   неё и ничего не двигают.
+   Правило живёт ЗДЕСЬ, а не в brand.css: тот раскладывается из Shared/
+   (см. Shared/sync.mjs — «в assets/ сервиса эти файлы НЕ редактируют»), и
+   правка в копии уехала бы при следующей раскладке. Чинить это на всю
+   семью — отдельное решение: ссылка одинаковая у всех шести сервисов. */
+.bh-lockup-service{padding-block:.25rem}
 .spacer{flex:1}
 /* Кнопка публикации в шапке (см. index.html) — текстовая, а не иконка:
    единственное действие в шапке, которое иначе терялось бы среди одинаковых
@@ -292,15 +302,31 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .bh-footer-links{flex:1 1 11rem;min-width:9rem;display:flex;flex-direction:column;gap:.55rem}
 .bh-footer-links h3{font-size:.78rem;font-weight:650;text-transform:uppercase;letter-spacing:.04em;
   color:var(--md-sys-color-on-surface-variant);margin-bottom:.2rem}
-.bh-footer-links a{color:var(--md-sys-color-on-surface);text-decoration:none;font-size:.92rem;width:fit-content}
+/* padding-block — не отступ ради воздуха, а размер цели (WCAG 2.2, 2.5.8
+   Target Size (Minimum), уровень AA: минимум 24×24px, либо 24px свободного
+   места вокруг). Строки футера — 17px текста при зазоре в колонке 8.8px, то
+   есть не проходили ни по размеру, ни по расстоянию: десять таких целей на
+   странице, и это единственное место, где нарушался именно уровень AA.
+   С .3rem сверху и снизу высота становится ~27px — цель проходит по размеру,
+   и зазор между строками уже не важен.
+   Ссылки тут — флекс-элементы колонки (.bh-footer-links выше), поэтому
+   вертикальный padding честно увеличивает их высоту и раздвигает соседей; на
+   строчном элементе он бы только расширил область попадания, не разведя
+   строки. */
+.bh-footer-links a{color:var(--md-sys-color-on-surface);text-decoration:none;font-size:.92rem;width:fit-content;padding-block:.3rem}
 .bh-footer-links a:hover{color:var(--md-sys-color-primary);text-decoration:underline}
 /* Кнопка «Обратная связь» (см. правку «Форма обратной связи») сидит в том
    же списке, что и обычные ссылки-<a> выше — открывает модалку, а не
    ведёт на URL, поэтому это <button>, но должна выглядеть неотличимо:
    сброс браузерных стилей кнопки + повтор правил .bh-footer-links a. */
 .bh-footer-links button{
-  background:none;border:0;padding:0;font:inherit;cursor:pointer;text-align:left;
+  background:none;border:0;font:inherit;cursor:pointer;text-align:left;
   color:var(--md-sys-color-on-surface);width:fit-content;
+  /* padding:0 сбрасывал бы и вертикальный — а он тут несёт размер цели,
+     ровно как у соседних ссылок выше (WCAG 2.5.8). Поэтому обнуляем
+     только горизонтальный, иначе кнопка «Обратная связь» осталась бы
+     единственной строкой футера ниже 24px. */
+  padding:.3rem 0;
 }
 .bh-footer-links button:hover{color:var(--md-sys-color-primary);text-decoration:underline}
 .bh-footer .faq{margin-top:0;padding-top:1.8rem;border-top:1px solid var(--md-sys-color-outline-variant)}
@@ -648,12 +674,52 @@ a.notification-item:hover{background:var(--md-sys-color-surface-container-high)}
 .upload-consent-check{display:flex;align-items:flex-start;gap:.6rem;font-size:.85rem;font-weight:600;cursor:pointer}
 .upload-consent-check input{margin-top:.1rem;flex:none;width:1.3rem;height:1.3rem;accent-color:var(--flame-tip);cursor:pointer}
 
-/* ===================== ГОСТЕВАЯ ПОДСКАЗКА ===================== */
+/* ===================== ГОСТЕВАЯ ПОДСКАЗКА =====================
+   Было: сплошная заливка --tertiary-container во всю ширину контента, прямо
+   под h1. Получалось самое яркое пятно на странице — ярче и заголовка, и
+   самой библиотеки, ради которой человек пришёл. При том что это ПОДСКАЗКА:
+   ничего не случилось, ничего не требуется, можно играть дальше. Форма
+   кричала громче смысла, и это первое, что бросалось в глаза на главной.
+
+   Вдобавок кнопка внутри была .btn.tonal — то есть --secondary-container,
+   приглушённый сиреневато-серый. На фиолетовой заливке он почти сливался с
+   фоном и читался как неактивный: единственное действие блока выглядело
+   отключённым.
+
+   Стало: тихая поверхность и тонкая линия слева. Линия, а не заливка —
+   она отделяет заметку от карточек вокруг (у тех своя форма: крупный
+   радиус и сплошной фон), но не претендует на внимание. Цвет линии —
+   --primary, то есть обычный интерфейсный акцент семьи, а не пламя: по
+   Design/palette.md у пламени ровно три места, и подсказка не одно из них.
+
+   Кнопка стала .btn.outlined — у неё есть контур, поэтому на спокойном
+   фоне она очевидно кнопка, но не перетягивает внимание на себя.
+
+   Кнопка идёт сразу за текстом, а НЕ прижата к правому краю. Сначала было
+   margin-left:auto, и на широком экране это выглядело как обычная строка
+   уведомления. Но строка тянется на всю ширину контента (1181px при окне
+   1280), текст короткий — между ними оставалась дыра в пол-экрана; а после
+   переноса на узком экране auto уводил кнопку вправо, оставляя пустое
+   место слева под текстом. Без него текст и действие читаются одной
+   фразой, и на любой ширине одинаково. */
 .guest-note{
-  margin-bottom:1.2rem;padding:.8rem 1rem;border-radius:var(--md-sys-shape-corner-m);
-  background:var(--md-sys-color-tertiary-container);color:var(--md-sys-color-on-tertiary-container);
-  font-size:.9rem;display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;
+  position:relative;
+  margin-bottom:1.2rem;padding:.85rem 1.1rem;
+  /* Справа — место под крестик (44px кнопка + воздух), чтобы длинный текст
+     не подлезал под него ни на какой ширине. */
+  padding-right:3.6rem;
+  border-radius:var(--md-sys-shape-corner-m);
+  background:var(--md-sys-color-surface-container-high);
+  color:var(--md-sys-color-on-surface-variant);
+  border-left:3px solid var(--md-sys-color-primary);
+  font-size:.9rem;display:flex;align-items:center;gap:.9rem;flex-wrap:wrap;
 }
+/* Крестик — абсолютом в правом верхнем углу, а не последним флекс-элементом
+   с margin-left:auto. Во флексе он вёл бы себя как кнопка действия до
+   правки: на одной строке стоял бы справа, а после переноса уезжал на свою
+   строку. Угол же предсказуем на любой ширине и это привычное место для
+   «закрыть» у полосы-уведомления. */
+.guest-note-close{position:absolute;top:.3rem;right:.3rem}
 
 /* ===================== СТОЛ ===================== */
 /* Стол растягивается на всю ширину окна, а не только до max-width родителя
@@ -1980,3 +2046,34 @@ select.text-input{
 /* Раньше тут .table-progress{display:none} — счётчик прятали на узком
    экране, потому что он не влезал в шапку. Шапки больше нет, в углу он
    помещается и на телефоне, поэтому правило убрано. */
+
+/* ───────────────── размер цели на сенсорных экранах ─────────────────
+   WCAG 2.2 различает два порога: 2.5.8 Target Size (Minimum) — 24×24px,
+   уровень AA, и 2.5.5 Target Size (Enhanced) — 44×44px, уровень AAA.
+   Основные кнопки и чипы категорий проходят первый (27–31px), но до
+   второго не дотягивают, а это как раз рекомендация Apple (44pt) и
+   Material (48dp) — то есть то, что чувствуется пальцем.
+
+   Поэтому поднимаем до 44 не везде, а только там, где указатель грубый:
+   @media (pointer: coarse) — это телефон и планшет, но не мышь. Поднять
+   глобально значило бы раздуть плотную десктопную сетку ради экрана, на
+   котором палец и так не промахивается.
+
+   min-height, а не height: кнопка с переносом текста должна расти дальше,
+   а не обрезать содержимое. */
+@media (pointer: coarse){
+  .btn, .category-chip{min-height:44px}
+}
+/* .icon-btn и так 44×44 (см. выше), трогать нечего. Вариант .xs — кружок
+   меню поверх карточки, 27×27: порог AA (24px) он проходит, до AAA не
+   дотягивает.
+   Здесь стояло правило, расширявшее область попадания невидимой подложкой
+   (.icon-btn.xs::before{inset:-9px}) — оно НЕ работало и убрано. У .icon-btn
+   стоит overflow:hidden, который держит рябь нажатия в круге, и он же
+   обрезает подложку: проверка elementFromPoint в 7px от края кнопки
+   попадала в <img> карточки, а не в кнопку. Оставлять мёртвый CSS, который
+   выглядит как решение, хуже, чем не чинить вовсе.
+   Рабочие варианты, если понадобится AAA: растянуть сам .xs до 44 (на
+   обложке пазла появится крупная кнопка) или увести рябь с overflow на
+   clip-path и вернуть подложку. Оба — отдельное решение про вид карточки,
+   а не про размер цели. */
